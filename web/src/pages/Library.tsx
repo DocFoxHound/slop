@@ -19,6 +19,7 @@ import { DonateButton } from "../components/Donate";
 import { downloading, DownloadsStatus, useDownloads } from "../components/Downloads";
 import { GEAR_ICON, INFO_ICON, InstallControls, Popover } from "../components/InstallControls";
 import { GameMods } from "../components/ModControls";
+import { DedicatedServers } from "../components/DedicatedServers";
 import { RatePrompt, RatingBadge } from "../components/RatingPanel";
 import { Reviews } from "../components/Reviews";
 import { isOn, useSandboxStatus } from "../components/Sandbox";
@@ -252,7 +253,7 @@ export function Library() {
                         <li key={e.slug}>
                           <Link
                             to={`/library/${encodeURIComponent(e.slug)}`}
-                            className={`lib-row${on ? " on" : ""}${dimmed(e) ? " dim" : ""}${e.buildOf ? " nested" : ""}`}
+                            className={`lib-row${on ? " on" : ""}${dimmed(e) ? " dim" : ""}${e.buildOf || e.serverFor ? " nested" : ""}`}
                             aria-current={on ? "page" : undefined}
                             tabIndex={tabbable ? 0 : -1}
                             data-slug={e.slug}
@@ -283,6 +284,7 @@ export function Library() {
         <Details
           key={selected.slug}
           entry={selected}
+          inLibrary={entries.filter((e) => e.inLibrary).map((e) => e.slug)}
           live={live}
           signedIn={Boolean(me)}
           headingRef={heading}
@@ -333,17 +335,20 @@ function useRunning(): string[] {
   return running;
 }
 
-type Tab = "activity" | "community" | "saves" | "bugs" | "reviews";
+type Tab = "activity" | "community" | "servers" | "saves" | "bugs" | "reviews";
 
 /** The selected app: banner, action bar, a rating prompt after playing, tabs and their content. */
 function Details({
   entry,
+  inLibrary,
   live,
   signedIn,
   headingRef,
   onInterestRemoved,
 }: {
   entry: Entry;
+  /** Slugs in the account's library (a game's dedicated servers are their own entries). */
+  inLibrary: string[];
   live: Live;
   signedIn: boolean;
   headingRef: RefObject<HTMLHeadingElement | null>;
@@ -374,13 +379,20 @@ function Details({
   const hasCommunity =
     (d?.community.length ?? 0) > 0 ||
     (installedHere && ((entry.update?.builds.length ?? 0) > 1 || (entry.update?.mods?.length ?? 0) > 0));
+  // A dedicated server: no votes, reviews or donations of its own (they're its game's).
+  const isServer = Boolean(entry.app?.server_for || d?.server_game);
+  // A game's dedicated servers players can get: added here too, later than the game.
+  const servers = (d?.servers ?? []).filter((s) => s.release && !s.status);
 
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: "activity", label: "Activity" },
     ...(hasCommunity ? [{ id: "community" as const, label: "Community builds & mods" }] : []),
+    ...(servers.length > 0
+      ? [{ id: "servers" as const, label: servers.length === 1 ? "Dedicated server" : "Dedicated servers" }]
+      : []),
     ...(installedHere && entry.installed?.kind !== "installer" ? [{ id: "saves" as const, label: "Saves" }] : []),
     ...(signedIn && !upcoming && d?.bug_reports !== false ? [{ id: "bugs" as const, label: "Bug reports" }] : []),
-    ...(!isPrivate && !upcoming ? [{ id: "reviews" as const, label: "Reviews" }] : []),
+    ...(!isPrivate && !upcoming && !isServer ? [{ id: "reviews" as const, label: "Reviews" }] : []),
   ];
   const current = tabs.some((t) => t.id === tab) ? tab : "activity";
   const onTabKey = (e: KeyboardEvent) => {
@@ -405,7 +417,7 @@ function Details({
   const waiting = entry.interested && !entry.installed && !entry.inLibrary && entry.app?.stage !== "released";
   const info = <AppInfo entry={entry} detail={d} latest={latest} inBrowser={inBrowser} />;
   // Donate next to Play, as on the store page (not for Coming soon or Private).
-  const donate = !isPrivate && !upcoming && (
+  const donate = !isPrivate && !upcoming && !isServer && (
     <DonateButton key={entry.slug} slug={entry.slug} title={entry.title} isMine={Boolean(d?.is_mine)} />
   );
 
@@ -437,14 +449,16 @@ function Details({
             <div className="lib-hero-sub">
               {entry.app && <StageBadge app={entry.app} />}
               {entry.buildOf && <span className="badge neutral">COMMUNITY</span>}
+              {isServer && <span className="badge neutral">DEDICATED SERVER</span>}
               {isPrivate && <span className="badge neutral">PRIVATE</span>}
               {installedHere && <span className="badge official">INSTALLED</span>}
               {installedHere && sandbox.data?.available && isOn(sandbox.data, entry.slug) && (
                 <span className="badge neutral">SANDBOX</span>
               )}
-              {!isPrivate && !upcoming && <RatingBadge slug={entry.slug} signedIn={signedIn} />}
+              {!isPrivate && !upcoming && !isServer && <RatingBadge slug={entry.slug} signedIn={signedIn} />}
               <span>
                 {entry.buildOf ? `Community build of ${entry.buildOf} · ` : ""}
+                {isServer ? `For ${d?.server_game?.title ?? entry.serverFor ?? entry.app?.server_for} · ` : ""}
                 {entry.owner ? `by ${entry.owner}` : maker ? `by ${maker}` : ""}
               </span>
             </div>
@@ -484,10 +498,11 @@ function Details({
               onShowSaves: () => setTab("saves"),
             }}
             donate={donate}
+            servers={servers.map((s) => ({ slug: s.slug, title: s.title }))}
           />
         )}
 
-        {!isPrivate && !upcoming && (
+        {!isPrivate && !upcoming && !isServer && (
           <RatePrompt slug={entry.slug} title={entry.title} signedIn={signedIn} isMine={Boolean(d?.is_mine)} browser={inBrowser} />
         )}
 
@@ -532,6 +547,7 @@ function Details({
             </div>
           )}
           {current === "community" && <CommunityTab entry={entry} detail={d} />}
+          {current === "servers" && <DedicatedServers servers={servers} isMine={Boolean(d?.is_mine)} library={inLibrary} />}
           {current === "saves" && <Saves slug={entry.slug} />}
           {current === "bugs" && (
             <>

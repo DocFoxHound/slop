@@ -40,20 +40,28 @@ pub const KINDS: &[(&str, &str)] = &[
     ("translation", "Translation"),
     ("port", "Port"),
     ("other", "Other"),
+    ("server", "Dedicated server"),
 ];
 
+/// SQL: app `a` is a dedicated server linked to its game (docs/DEDICATED-SERVERS.md), which isn't
+/// a community build or a mod: it's listed on its game's page and players run it themselves.
+pub(crate) const IS_SERVER: &str = "a.branch_kind is not distinct from 'server'";
+
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/apps/{slug}/branches", post(register))
+    Router::new()
+        .route("/apps/{slug}/branches", post(register))
+        .route("/apps/{slug}/servers", post(add_server))
 }
 
 /// Whether this is a community build of a game whose original counts players with Slop Pulse.
 /// Such builds must include Pulse too (DESIGN §9), so player counts and playtime-weighted votes
 /// mean the same on both; a reviewer can't list one before its first Pulse handshake. Never for
-/// a browser game, which can't send one (and has no community builds yet, `register`).
+/// a browser game, which can't send one (and has no community builds yet, `register`), and never
+/// for a mod or a dedicated server, which players don't play.
 pub async fn needs_pulse(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(
         "select exists (select 1 from apps b join apps p on p.id = b.parent_app_id
-                        where b.id = $1 and p.kind = 'game' and b.branch_kind <> 'addon'
+                        where b.id = $1 and p.kind = 'game' and b.branch_kind not in ('addon', 'server')
                           and not ('browser' = any(b.platforms))
                           and exists (select 1 from pulse_sessions s where s.app_id = p.id and s.started_at is not null))",
     )
@@ -83,11 +91,12 @@ pub struct BranchInfo {
     note: Option<String>,
 }
 
-/// For a branch's own page: what it branches from.
+/// For a branch's own page: what it branches from. A dedicated server isn't a branch (`server_for`).
 pub async fn info(db: &PgPool, app_id: Uuid) -> sqlx::Result<Option<BranchInfo>> {
     let row: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
         "select p.slug, p.title, u.display_name, a.branch_kind, a.branch_note
-         from apps a join apps p on p.id = a.parent_app_id join users u on u.id = p.maker_id where a.id = $1",
+         from apps a join apps p on p.id = a.parent_app_id join users u on u.id = p.maker_id
+         where a.id = $1 and a.branch_kind <> 'server'",
     )
     .bind(app_id)
     .fetch_optional(db)
@@ -105,6 +114,103 @@ pub async fn info(db: &PgPool, app_id: Uuid) -> sqlx::Result<Option<BranchInfo>>
             note,
         },
     ))
+}
+
+/// The game a dedicated server is for.
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ServerFor {
+    slug: String,
+    title: String,
+}
+
+/// For a dedicated server's own data: its game (its store address shows the game's page).
+pub async fn server_for(db: &PgPool, app_id: Uuid) -> sqlx::Result<Option<ServerFor>> {
+    sqlx::query_as(
+        "select p.slug, p.title from apps a join apps p on p.id = a.parent_app_id
+         where a.id = $1 and a.branch_kind = 'server'",
+    )
+    .bind(app_id)
+    .fetch_optional(db)
+    .await
+}
+
+/// A dedicated server, for its game's page.
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Server {
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    app: AppSummary,
+    #[serde(skip)]
+    app_id: Uuid,
+    platforms: Vec<String>,
+    /// The release players get, when it has one.
+    #[sqlx(skip)]
+    release: Option<ServerRelease>,
+}
+
+#[derive(Serialize)]
+pub struct ServerRelease {
+    id: Uuid,
+    version: String,
+    files: Vec<ServerFile>,
+}
+
+/// A server's file, for downloading it without the desktop app (a host that can't run it):
+/// its size and SHA-256 to check it with.
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ServerFile {
+    platform: String,
+    file_name: String,
+    size_bytes: Option<i64>,
+    sha256: Option<String>,
+    /// How many parts it's split into (0: one file).
+    parts: i32,
+}
+
+/// For a game's page: its dedicated servers that this viewer can see. Everyone sees the ones in
+/// the store, or shared with them with a private game; the game's maker also sees drafts, with
+/// their status.
+pub async fn servers(
+    state: &AppState,
+    game_id: Uuid,
+    viewer: Option<Uuid>,
+    policy: ViewerPolicy,
+) -> sqlx::Result<Vec<Server>> {
+    let mut qb = QueryBuilder::new("");
+    catalog::push_summary_columns_with(&mut qb, &state.config, ", a.id as app_id, a.platforms");
+    qb.push(" where a.parent_app_id = ")
+        .push_bind(game_id)
+        .push(" and ")
+        .push(IS_SERVER)
+        .push(" and ((");
+    catalog::push_store_visible(&mut qb, state.config.catalog, policy);
+    qb.push(") or ");
+    catalog::push_shared_with(&mut qb, viewer);
+    qb.push(" or a.maker_id = ")
+        .push_bind(viewer)
+        .push(") order by a.title limit 20");
+    let mut servers: Vec<Server> = qb.build_query_as().fetch_all(&state.db).await?;
+    for server in &mut servers {
+        let release: Option<(Uuid, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select r.id, r.version {} limit 1",
+            crate::releases::SERVING_SIGNED
+        )))
+        .bind(server.app_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some((id, version)) = release {
+            let files = sqlx::query_as(
+                "select platform, file_name, size_bytes, sha256,
+                        coalesce(jsonb_array_length(parts), 0)::int as parts
+                 from release_files where release_id = $1 order by platform",
+            )
+            .bind(id)
+            .fetch_all(&state.db)
+            .await?;
+            server.release = Some(ServerRelease { id, version, files });
+        }
+    }
+    Ok(servers)
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -143,6 +249,8 @@ pub async fn community(
     );
     qb.push(" where a.parent_app_id = ")
         .push_bind(app_id)
+        .push(" and not ")
+        .push(IS_SERVER)
         .push(" and ");
     catalog::push_store_visible(&mut qb, state.config.catalog, policy);
     qb.push(" order by a.title limit 50");
@@ -227,6 +335,9 @@ struct Register {
     repo_url: String,
     license_spdx: String,
     kind: String,
+    /// What it changes from the original. A dedicated server (`server`) changes nothing, so it
+    /// needs none.
+    #[serde(default)]
     note: String,
     /// Not needed for a mod (`addon`): its releases are one .zip for every platform.
     #[serde(default)]
@@ -245,6 +356,55 @@ struct Register {
     sandbox_ready: bool,
 }
 
+/// A dedicated server for the maker's own game (docs/DEDICATED-SERVERS.md): `Register` without
+/// the kind, which is `server`, or a note, since it changes nothing in the game.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewServer {
+    slug: String,
+    title: String,
+    summary: String,
+    repo_url: String,
+    license_spdx: String,
+    platforms: Vec<String>,
+    #[serde(default)]
+    description_md: String,
+    min_age: Option<i16>,
+    content_labels: Option<Vec<String>>,
+    online: Option<Vec<String>>,
+    online_hosts: Option<Vec<String>>,
+    #[serde(default)]
+    sandbox_ready: bool,
+}
+
+/// Adds a dedicated server to the maker's game. Like a branch, it starts as a draft with its own
+/// repository: the maker submits a release, which is checked and reviewed like any other.
+async fn add_server(
+    state: State<AppState>,
+    user: CurrentUser,
+    headers: HeaderMap,
+    parent_slug: Path<String>,
+    Json(s): Json<NewServer>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let b = Register {
+        slug: s.slug,
+        title: s.title,
+        summary: s.summary,
+        repo_url: s.repo_url,
+        license_spdx: s.license_spdx,
+        kind: "server".into(),
+        note: String::new(),
+        platforms: s.platforms,
+        description_md: s.description_md,
+        min_age: s.min_age,
+        content_labels: s.content_labels,
+        online: s.online,
+        online_hosts: s.online_hosts,
+        sandbox_ready: s.sandbox_ready,
+    };
+    register(state, user, headers, parent_slug, Json(b)).await
+}
+
 /// Registers a branch of an app the author can see. It starts as a draft: the author submits a
 /// release, which is checked and reviewed like any other, and SLAPorSLOP lists it.
 async fn register(
@@ -257,40 +417,56 @@ async fn register(
     // A branch is a new app: the same limit applies.
     crate::limits::check(&state, user.id, crate::limits::Action::NewApp)?;
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
-    let (parent, _) = catalog::visible_app(&state, &parent_slug, Some(&user), policy).await?;
+    let (parent, is_mine) = catalog::visible_app(&state, &parent_slug, Some(&user), policy).await?;
+    let server = b.kind == "server";
     let is_branch: bool =
         sqlx::query_scalar("select parent_app_id is not null from apps where id = $1")
             .bind(parent)
             .fetch_one(&state.db)
             .await?;
     if is_branch {
-        return Err(ApiError::Conflict(
-            "branch the original app, not a branch of it".into(),
+        return Err(ApiError::Conflict(if server {
+            "add a dedicated server to the game itself, not to a community build or mod of it"
+                .into()
+        } else {
+            "branch the original app, not a branch of it".into()
+        }));
+    }
+    // A dedicated server comes from the game's own maker, who decides what players host
+    // (docs/DEDICATED-SERVERS.md); anyone else publishes theirs as an app of its own.
+    if server && !is_mine {
+        return Err(ApiError::invalid(
+            "kind",
+            "only the game's maker can add its dedicated servers",
         ));
     }
-    if catalog::is_private(&state.db, parent).await? {
+    // Private apps have no community builds or mods. A private game can have a dedicated server,
+    // shared with the same people (catalog.rs `push_shared_with`).
+    if !server && catalog::is_private(&state.db, parent).await? {
         return Err(ApiError::NotFound);
     }
     // A browser game runs on its maker's website: there's no game to install a mod into, or a
-    // build of it to change (not yet, DESIGN §9).
+    // build of it to change (not yet, DESIGN §9), or a server to host.
     if catalog::plays_in_browser(&state.db, parent).await? {
-        return Err(ApiError::Conflict(
+        return Err(ApiError::Conflict(if server {
+            "a browser game can't have a dedicated server: it plays on its maker's website".into()
+        } else {
             "a browser game can't have community builds or mods yet: it plays on its maker's website"
-                .into(),
-        ));
+                .into()
+        }));
     }
     crate::legal::require(&state.db, user.id, "publisher").await?;
     catalog::validate_slug(&b.slug)?;
     let title = catalog::validate_text("title", &b.title, 80, false)?;
     let summary = catalog::validate_text("summary", &b.summary, 200, false)?;
-    let note = catalog::validate_text("note", &b.note, 500, false)?;
+    let note = catalog::validate_text("note", &b.note, 500, server)?;
     let description = catalog::validate_text("description_md", &b.description_md, 20_000, true)?;
     let repo_url = catalog::validate_repo_url_in(&state, &b.repo_url)?;
     let license = catalog::validate_license(&b.license_spdx)?;
     if !KINDS.iter().any(|(k, _)| *k == b.kind) {
         return Err(ApiError::invalid(
             "kind",
-            "addon, mod, fix, translation, port or other",
+            "addon, mod, fix, translation, port, other or server",
         ));
     }
     // A mod is one .zip for every platform; other branches are builds of the app.
@@ -302,7 +478,11 @@ async fn register(
     if platforms == ["browser"] {
         return Err(ApiError::invalid(
             "platforms",
-            "a community build can't play in the browser yet: choose Windows, Linux or both",
+            if server {
+                "a dedicated server is a download players run: choose Windows, Linux or both"
+            } else {
+                "a community build can't play in the browser yet: choose Windows, Linux or both"
+            },
         ));
     }
     let same_repo: bool =
@@ -314,7 +494,11 @@ async fn register(
     if same_repo {
         return Err(ApiError::invalid(
             "repo_url",
-            "a branch or mod builds from your own repository, not the original one",
+            if server {
+                "a dedicated server lives in its own repository, not the game's"
+            } else {
+                "a branch or mod builds from your own repository, not the original one"
+            },
         ));
     }
     let (parent_age, parent_labels, parent_online, parent_hosts): (
@@ -348,13 +532,17 @@ async fn register(
     let id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
     // The branch takes the original's kind, tags and mods folder (a fork reads mods the same way); it's Released from the start, and can be
-    // listed once it has an approved release, checked and reviewed like any other.
+    // listed once it has an approved release, checked and reviewed like any other. A dedicated
+    // server is an app (not a game players play), with no mods folder and the game's visibility:
+    // a private game's server is shared with the game's testers.
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx,
                            min_age, platforms, parent_app_id, branch_kind, branch_note,
-                           content_labels, online, online_hosts, sandbox_ready, mods_folder)
-         select $1, $2, $3, $4, coalesce(nullif($12, ''), $5), p.kind, 'released', $6, $7, $8, $13, $9, p.id, $10,
-                nullif($5, ''), $14, $15, $16, $17, case when $10 = 'addon' then null else p.mods_folder end
+                           content_labels, online, online_hosts, sandbox_ready, mods_folder, visibility)
+         select $1, $2, $3, $4, coalesce(nullif($12, ''), nullif($5, ''), $4),
+                case when $10 = 'server' then 'app'::app_kind else p.kind end, 'released', $6, $7, $8, $13, $9, p.id, $10,
+                nullif($5, ''), $14, $15, $16, $17, case when $10 in ('addon', 'server') then null else p.mods_folder end,
+                case when $10 = 'server' then p.visibility else 'public' end
          from apps p where p.id = $11",
     )
     .bind(id)
@@ -383,9 +571,12 @@ async fn register(
             err.into()
         }
     })?;
-    sqlx::query(
-        "insert into app_tags (app_id, tag_id) select $1, tag_id from app_tags where app_id = $2",
-    )
+    // A dedicated server carries the Dedicated Server tag, not its game's: it isn't the game.
+    sqlx::query(if server {
+        "insert into app_tags (app_id, tag_id) select $1, id from tags where slug = 'dedicated-server' and $2::uuid is not null"
+    } else {
+        "insert into app_tags (app_id, tag_id) select $1, tag_id from app_tags where app_id = $2"
+    })
     .bind(id)
     .bind(parent)
     .execute(&mut *tx)

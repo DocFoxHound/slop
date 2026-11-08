@@ -61,6 +61,8 @@ export function Manage() {
   if (!app.data || !overview.data) return <Loading />;
   const m = overview.data;
   const browser = playsInBrowser(app.data);
+  // A dedicated server (docs/DEDICATED-SERVERS.md): no votes, donations or demos of its own.
+  const server = Boolean(app.data.server_game);
   const changed = () => {
     overview.reload();
     setSettingsNonce((n) => n + 1);
@@ -82,18 +84,23 @@ export function Manage() {
       <div className="maker-cols">
         <div className="maker-main">
           {browser ? <WherePlayGoes slug={slug} overview={m} /> : <ReleaseChoice slug={slug} overview={m} onChanged={changed} />}
-          {!app.data.private && app.data.stage !== "coming_soon" && <RatingBreakdown slug={slug} />}
+          {!app.data.private && !server && app.data.stage !== "coming_soon" && <RatingBreakdown slug={slug} />}
           <BugReportsPanel slug={slug} repoUrl={app.data.repo_url} accepting={app.data.bug_reports} />
           {!app.data.private && <ReleaseFeedbackPanel slug={slug} />}
           <Requests slug={slug} changes={m.changes} onChanged={changed} />
         </div>
         <div className="maker-side">
           <UpdatesPanel key={settingsNonce} slug={slug} browser={browser} onChanged={overview.reload} />
-          {app.data.private ? <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} /> : <DonationsPanel slug={slug} />}
+          {/* A dedicated server goes public with its game, and has no donations of its own. */}
+          {server ? null : app.data.private ? (
+            <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} />
+          ) : (
+            <DonationsPanel slug={slug} />
+          )}
           <RepoMove slug={slug} overview={m} browser={browser} onChanged={changed} />
           {app.data.private && <RepoAccessPanel slug={slug} repoUrl={app.data.repo_url} />}
           {/* A browser game already plays in the browser: a demo is for downloads. */}
-          {!browser && <DemoPanel slug={slug} />}
+          {!browser && !server && <DemoPanel slug={slug} />}
           <OffersPanel slug={slug} originalSlug={app.data.branch_of} />
         </div>
       </div>

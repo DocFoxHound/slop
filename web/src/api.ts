@@ -112,6 +112,8 @@ export interface AppSummary {
   interested: number;
   /** A community branch of this app (DESIGN §9). */
   branch_of: string | null;
+  /** A dedicated server for this game (docs/DEDICATED-SERVERS.md): the game's store address. */
+  server_for?: string;
   /**
    * A game that plays in the browser, on its maker's website: nothing to download or install.
    * Where Play goes is only on the store page (`AppDetail.play_address`).
@@ -701,6 +703,31 @@ export interface AppDetail extends AppSummary {
       mod_online: boolean;
     }
   >;
+  /** For a dedicated server: the game it's for. Its store address shows the game's page. */
+  server_game: { slug: string; title: string } | null;
+  /** For a game: its dedicated servers this viewer can see (its maker sees drafts too). */
+  servers: DedicatedServer[];
+}
+
+/**
+ * A dedicated server, on its game's page: a program players run on their own computer or a host
+ * so others can play. Its own app, with its own releases.
+ */
+export interface DedicatedServer extends AppSummary {
+  platforms: AppPlatform[];
+  /** The release players get, with each file's size and SHA-256 for downloading it by hand. */
+  release: {
+    id: string;
+    version: string;
+    files: Array<{
+      platform: string;
+      file_name: string;
+      size_bytes: number | null;
+      sha256: string | null;
+      /** How many parts it's split into (0: one file). */
+      parts: number;
+    }>;
+  } | null;
 }
 
 export interface AppPage {
@@ -3848,6 +3875,30 @@ export const api = {
       "POST",
       `/v1/apps/${encodeURIComponent(parent)}/branches`,
       body,
+    ),
+  /** Adds a dedicated server to the maker's game: a draft app of its own, from its own repository. */
+  addServer: (
+    game: string,
+    body: {
+      slug: string;
+      title: string;
+      summary: string;
+      repo_url: string;
+      license_spdx: string;
+      platforms: string[];
+      description_md?: string;
+    },
+  ) =>
+    request<{ slug: string }>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(game)}/servers`,
+      body,
+    ),
+  /** A link to download one file of an approved release (a dedicated server, by hand). */
+  downloadLink: (slug: string, release: string, platform: string, part?: number) =>
+    request<{ url: string }>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(release)}/download/${encodeURIComponent(platform)}${part ? `?part=${part}` : ""}`,
     ),
   profile: (id: string) =>
     request<UserProfile>("GET", `/v1/users/${encodeURIComponent(id)}`),

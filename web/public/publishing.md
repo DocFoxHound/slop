@@ -158,8 +158,8 @@ who it's for, how it plays (Co-op, Turn-based, Keyboard Only…) and how it feel
 **Kids & Family** (Kids, Family, All Ages, Educational) lists only apps rated **7+ or under**,
 without suggestive themes, horror, strong language or gambling themes. Saving an older app with
 those tags still works, but it won't show there; the editor and `get_fixes` say so.
-**Servers** (Dedicated Server) is for dedicated servers people run on their own computer or host,
-for games in the store: see [Dedicated servers](#dedicated-servers).
+**Servers** lists games with a dedicated server people run on their own computer or a host: add
+one to your game rather than tagging an app (see [Dedicated servers](#dedicated-servers)).
 
 ### Pictures and videos
 
@@ -882,16 +882,39 @@ browser games or dedicated servers (see [Dedicated servers](#dedicated-servers))
 ### Dedicated servers
 
 A **dedicated server** is a program people run on their own computer, or on a host they rent, so
-others can play a game together. Publish it as a store page of its own: a download for Windows
-and/or Linux, built and checked like any other app (Slop Build works as usual), with the tag
-**Dedicated Server**, which puts it in the **Servers** category. Name the game it's for in its
-summary and description: SLAPorSLOP doesn't link a server to its game.
+others can play a game together. SLAPorSLOP only hands out the program: players host servers
+themselves, and SLAPorSLOP doesn't run them, list the ones running or match players to them.
+
+Add it to your game: on the game's **Edit store page**, under **Dedicated server (optional)**,
+choose **Add a dedicated server** and give its repository (an AI agent uses
+`add_dedicated_server`). It lives in **its own repository**, never the game's: split a repository
+that holds both first. It's an app of its own: a download for Windows and/or Linux, with its own
+releases, built and checked like any other app (Slop Build works as usual) and reviewed, then
+listed by a reviewer once a release is approved. A game can have several (a world server and a
+lobby server, say), each from its own repository.
+
+It has **no store page of its own**. It's shown on the game's page, in a **Dedicated server**
+section with **Get the server** and, on the website, the file to download with its SHA-256 for
+hosts without the SLAPorSLOP app. Its own address opens the game's page, it's never listed in
+search or the categories on its own, and the **Servers** category lists your game. Players who
+get the game get the client only, unless they tick **Also get the dedicated server**. It's in the
+store only while the game is: delisting or freezing the game takes its servers out with it. A
+private game's server is shared with the same people, and goes public with the game.
+
+Its versions are its own, like any app's: SLAPorSLOP doesn't check which server versions work
+with which game versions. Running it isn't playtime, and it has no votes, reviews or donations of
+its own (they're the game's). Its age rating is at least the game's.
+
+Not for servers only you run: for those, choose **Connects to the maker's servers or database**
+under the game's Online answers instead. A server-like program with no game on SLAPorSLOP is a
+tool: publish it as an ordinary app.
 
 It has to really be a dedicated server: a server or headless program people run so others can
-play, for a game its summary and description name. A reviewer checks. Anything else with the tag
-(a playable game, a launcher, a tool) is reviewed as an ordinary download, rules 1 and 2
-included, and turned down as a misleading store page until the tag comes off. When the tag is
-added to an app that already has an approved release, its next release waits for a person.
+play your game. A reviewer checks. Anything else added as a server (a playable game, a launcher, a
+tool) is reviewed as an ordinary download, rules 1 and 2 included, and turned down as misleading.
+Servers published on their own before servers could be added to games keep the tag
+**Dedicated Server** and stay in the Servers category until you add them to your game; nothing
+else changes for them.
 
 What's different for a server:
 

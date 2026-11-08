@@ -279,6 +279,10 @@ pub async fn approve(
 
     let now = OffsetDateTime::now_utc().replace_nanosecond(0)?;
     let is_mod = release.branch_kind.as_deref() == Some("addon");
+    // A dedicated server installs and runs as an app of its own: neither a mod of its game nor
+    // a build of it to play instead (docs/DEDICATED-SERVERS.md §7: the link stays out of the
+    // manifest, which installed desktop apps couldn't read yet).
+    let is_server = release.branch_kind.as_deref() == Some("server");
     let original = match (release.game_id, release.game_slug, release.game_title) {
         (Some(id), Some(slug), Some(title)) => Some(slop_manifest::ModFor {
             app_id: id.to_string(),
@@ -300,7 +304,7 @@ pub async fn approve(
         files,
         approved_at: now.format(&Rfc3339)?,
         mod_for: original.clone().filter(|_| is_mod),
-        build_of: original.filter(|_| !is_mod),
+        build_of: original.filter(|_| !is_mod && !is_server),
         mods_folder: release
             .mods_folder
             .and_then(|f| serde_json::from_value(f).ok())
@@ -747,6 +751,36 @@ async fn list_app_as(
         json!({ "from": status }),
     )
     .await?;
+    if going_public {
+        // Its dedicated servers were shared with the same people: they go public with it, and
+        // the ones ready for the store go in with it (docs/DEDICATED-SERVERS.md §8).
+        let servers: Vec<(Uuid, AppStage, String)> = sqlx::query_as(
+            "update apps set visibility = 'public', updated_at = now()
+             where parent_app_id = $1 and branch_kind = 'server' and visibility = 'private'
+             returning id, stage, slug",
+        )
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+        for (server, stage, server_slug) in servers {
+            if not_listable(&mut tx, server, stage).await?.is_none() {
+                sqlx::query(
+                    "update apps set status = 'listed' where id = $1 and status <> 'listed'",
+                )
+                .bind(server)
+                .execute(&mut *tx)
+                .await?;
+                audit(
+                    &mut tx,
+                    reviewer,
+                    "app.list",
+                    &server_slug,
+                    json!({ "with": slug }),
+                )
+                .await?;
+            }
+        }
+    }
     if going_public {
         let (maker, title): (Uuid, String) =
             sqlx::query_as("select maker_id, title from apps where id = $1")

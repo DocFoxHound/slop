@@ -130,8 +130,16 @@ export function Publish() {
                   <Link to={`/app/${app.slug}`}>
                     <b>{app.title}</b>
                   </Link>
-                  {!app.icon_url && <span className="muted small">No icon yet</span>}
-                  <span className="badge neutral">{STAGE_LABEL[app.stage]}</span>
+                  {app.server_for ? (
+                    <span className="muted small">
+                      Dedicated server for {mine.data?.find((m) => m.app.slug === app.server_for)?.app.title ?? app.server_for}
+                    </span>
+                  ) : (
+                    <>
+                      {!app.icon_url && <span className="muted small">No icon yet</span>}
+                      <span className="badge neutral">{STAGE_LABEL[app.stage]}</span>
+                    </>
+                  )}
                   {latest && <span className="muted small">v{latest.version}</span>}
                 </div>
                 <div className="small">
@@ -139,7 +147,7 @@ export function Publish() {
                 </div>
                 <div className="muted small">{current.detail}</div>
                 {current.more && <div className="muted small step-more">{current.more}</div>}
-                {donationsOff(donations.data?.[app.slug]) && (
+                {!app.server_for && donationsOff(donations.data?.[app.slug]) && (
                   <div className="small donations-off">
                     Donations: off ·{" "}
                     <Link to={`/publish/${app.slug}#donations`} aria-label={`Set up donations for ${app.title}`}>
@@ -364,8 +372,9 @@ function EditorForm({
   const terms = useTermsGate();
 
   const set = <K extends keyof NewApp>(key: K, value: NewApp[K]) => setForm((f) => ({ ...f, [key]: value }));
-  // A mod's own page has no mods folder.
-  const isMod = existing?.branch?.kind === "addon";
+  // A mod's own page has no mods folder, and neither has a dedicated server (SLAPorSLOP's mods go
+  // into the game players play).
+  const isMod = existing?.branch?.kind === "addon" || Boolean(existing?.server_game);
   const inBrowser = form.platforms.includes("browser");
   // A browser game is a public game of its own: not an app, not private, not a community build.
   const isPrivate = existing ? existing.private : form.visibility === "private";
@@ -715,7 +724,7 @@ function EditorForm({
                 value={form.platforms}
                 onChange={(p) => set("platforms", p)}
                 error={error?.field === "platforms" ? error.message : undefined}
-                allowBrowser={!existing?.branch}
+                allowBrowser={!existing?.branch && !existing?.server_game}
                 browserUnavailable={noBrowser}
                 locked={
                   hasReleases
@@ -844,12 +853,19 @@ function EditorForm({
           </p>
         )}
       </form>
-      {existing && (
+      {existing?.server_game && (
+        <p className="notice">
+          A dedicated server for <Link to={`/publish/${encodeURIComponent(existing.server_game.slug)}`}>{existing.server_game.title}</Link>
+          : it has no store page of its own, and shows on {existing.server_game.title}'s, with its own releases.
+        </p>
+      )}
+      {existing && !existing.server_game && (
         <div className="maker-cols">
           <div className="maker-main">
             <MediaEditor app={existing} />
           </div>
           <div className="maker-side">
+            {!existing.branch && !playsInBrowser(existing) && <ServersPanel game={existing} />}
             {/* Getting paid is part of the page (owner decision 2026-10-25): its state and every
                 step to set it up, right here. */}
             {!existing.private && (
@@ -1304,5 +1320,135 @@ function RepoOwnership({ repoUrl, token }: { repoUrl: string; token?: RepoTokenI
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * "Dedicated server (optional)" on a game's Edit store page (docs/DEDICATED-SERVERS.md §6): the
+ * programs players run on their own computer or a host so others can play, each its own app from
+ * its own repository, shown on the game's store page.
+ */
+export function ServersPanel({ game }: { game: AppDetail }) {
+  const navigate = useNavigate();
+  const terms = useTermsGate();
+  const servers = game.servers ?? [];
+  const taken = new Set([game.slug, ...servers.map((s) => s.slug)]);
+  let freeSlug = `${game.slug}-server`;
+  for (let n = 2; taken.has(freeSlug); n++) freeSlug = `${game.slug}-server-${n}`;
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    title: `${game.title} Dedicated server`.slice(0, 80),
+    slug: freeSlug,
+    repo_url: "",
+    license_spdx: game.license_spdx,
+    summary: `Run your own ${game.title} server, so others can play.`.slice(0, 200),
+    platforms: (game.platforms.filter((p) => p !== "browser" && p !== "any") as AppPlatform[]) || [],
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ApiError>();
+  const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm((f) => ({ ...f, [key]: value }));
+  const fieldError = (field: string) => (error?.field === field ? error.message : undefined);
+
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      const res = await terms.guard(() => api.addServer(game.slug, form));
+      navigate(`/publish/${encodeURIComponent(res.slug)}/releases`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err : new ApiError(0, "error", String(err)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel panel-pad form servers-panel" id="servers" aria-labelledby="servers-panel-title">
+      <h2 id="servers-panel-title">Dedicated server (optional)</h2>
+      <p className="muted small">
+        A program players run on their own computer or a host so others can play your game. It lives in its own repository and is
+        built, checked and reviewed like any release. Not for servers only you run: for those, pick{" "}
+        <b>{ONLINE_LABEL.own_servers}</b> under Online instead.
+      </p>
+      {servers.length > 0 && (
+        <ul className="server-list">
+          {servers.map((s) => (
+            <li key={s.slug} className="server-row">
+              <div className="server-head">
+                <b>{s.title}</b> {s.status === "draft" && <span className="badge neutral">DRAFT</span>}
+              </div>
+              <p className="small">
+                <Link to={`/publish/${encodeURIComponent(s.slug)}/releases`}>Releases &amp; progress</Link> ·{" "}
+                <Link to={`/publish/${encodeURIComponent(s.slug)}`}>Edit</Link>
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!open ? (
+        <button type="button" className="btn" onClick={() => setOpen(true)}>
+          {servers.length > 0 ? "Add another dedicated server" : "Add a dedicated server"}
+        </button>
+      ) : (
+        <form className="form" onSubmit={(e) => void add(e)} aria-label="Add a dedicated server">
+          <label>
+            Its repository
+            <input
+              type="url"
+              required
+              value={form.repo_url}
+              placeholder="https://github.com/you/your-game-server"
+              onChange={(e) => set("repo_url", e.target.value)}
+              aria-invalid={Boolean(fieldError("repo_url"))}
+            />
+            <span className="muted small">Its own, not the game's: a repository with both has to be split first.</span>
+          </label>
+          {fieldError("repo_url") && <p className="form-error">{fieldError("repo_url")}</p>}
+          <label>
+            Name
+            <input required maxLength={80} value={form.title} onChange={(e) => set("title", e.target.value)} />
+          </label>
+          {fieldError("title") && <p className="form-error">{fieldError("title")}</p>}
+          <label>
+            Address
+            <input required value={form.slug} onChange={(e) => set("slug", e.target.value)} aria-invalid={Boolean(fieldError("slug"))} />
+            <span className="muted small">It shows {game.title}'s store page.</span>
+          </label>
+          {fieldError("slug") && <p className="form-error">{fieldError("slug")}</p>}
+          <label>
+            One line for players
+            <input required maxLength={200} value={form.summary} onChange={(e) => set("summary", e.target.value)} />
+          </label>
+          {fieldError("summary") && <p className="form-error">{fieldError("summary")}</p>}
+          <LicensePicker
+            repoUrl={form.repo_url}
+            value={form.license_spdx}
+            onChange={(spdx) => set("license_spdx", spdx)}
+            error={fieldError("license_spdx")}
+          />
+          <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={fieldError("platforms")} />
+          {error && !error.field && (
+            <p className="form-error" role="alert">
+              {error.message}
+            </p>
+          )}
+          {error?.field && (
+            <p className="form-error" role="alert">
+              Check the fields above.
+            </p>
+          )}
+          <div className="actions">
+            <button type="button" className="btn ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+            <button className="btn slime" disabled={busy}>
+              {busy ? "Adding…" : "Add the server"}
+            </button>
+          </div>
+        </form>
+      )}
+      {terms.prompt}
+    </section>
   );
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
-import { Link, useParams } from "react-router";
+import { Link, Navigate, useParams } from "react-router";
 
 import { api, type AppDetail, type AppPlatform, type Credit } from "../api";
 import { engines } from "../components/Checks";
@@ -22,6 +22,7 @@ import { BrowserPlayLink, InstallControls } from "../components/InstallControls"
 import { StoreNav } from "../components/StoreNav";
 import { InlineIcon, StoreIcon } from "../components/StoreIcons";
 import { ModControls } from "../components/ModControls";
+import { DedicatedServers } from "../components/DedicatedServers";
 import { DonateButton } from "../components/Donate";
 import { InterestedButton } from "../components/Interested";
 import { workflowName } from "./Releases";
@@ -43,6 +44,8 @@ export function AppPage() {
     );
   }
   if (!app.data) return <Loading />;
+  // A dedicated server has no store page of its own: it's on its game's (docs/DEDICATED-SERVERS.md §3).
+  if (app.data.server_game) return <Navigate replace to={`/app/${encodeURIComponent(app.data.server_game.slug)}`} />;
   return <AppView app={app.data} />;
 }
 
@@ -54,6 +57,8 @@ function AppView({ app }: { app: AppDetail }) {
   const library = useLoad(() => (me && (!isDesktop || inBrowser) ? api.library() : Promise.resolve([])), [me?.id, inBrowser]);
   const inLibrary = library.data?.some((e) => e.slug === app.slug);
   const sandboxHint = { suggested: app.sandbox_suggested, offline: !app.sandbox_suggested };
+  // Its dedicated servers players can get now, offered (unticked) with the game.
+  const servers = (app.servers ?? []).filter((s) => s.release && !s.status).map((s) => ({ slug: s.slug, title: s.title }));
   const players = useLoad(() => (app.kind === "game" ? api.players(app.slug) : Promise.resolve(undefined)), [app.slug]);
   const counted = players.data && (players.data.playing_now > 0 || players.data.peak_this_month > 0);
   const releases = useLoad(() => (app.stage === "coming_soon" ? Promise.resolve([]) : api.releases(app.slug)), [app.slug]);
@@ -87,7 +92,7 @@ function AppView({ app }: { app: AppDetail }) {
         <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} donate={donate} />
       </CommunityGate>
     ) : (
-      <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} donate={donate} />
+      <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} donate={donate} servers={servers} />
     );
   const getIt = getItWith(donate);
   // Coming soon: Interested goes with "Ratings open when it's playable" at the top; in Beta it's
@@ -393,6 +398,11 @@ function AppView({ app }: { app: AppDetail }) {
               </div>
             )}
           </div>
+          <DedicatedServers
+            servers={app.servers ?? []}
+            isMine={app.is_mine}
+            library={(library.data ?? []).map((e) => e.slug)}
+          />
           {/* Mods and community builds are installed beside a game: a browser game can't have them yet. */}
           {!app.branch && !app.private && !inBrowser && <CommunityBuilds app={app} />}
           {!app.is_mine && (

@@ -127,6 +127,7 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("GET", "/apps/{slug}/offers", false, Slug::Own),
     ("POST", "/apps", true, Slug::Any),
     ("POST", "/apps/{slug}/branches", true, Slug::Any),
+    ("POST", "/apps/{slug}/servers", true, Slug::Own),
     ("PATCH", "/apps/{slug}", true, Slug::Own),
     ("POST", "/apps/{slug}/changes", true, Slug::Own),
     ("POST", "/apps/{slug}/changes/*/cancel", true, Slug::Own),
@@ -1255,6 +1256,38 @@ pub(crate) const TOOLS: &[Tool] = &[
         ],
     },
     Tool {
+        name: "add_dedicated_server",
+        description: "Adds a dedicated server to one of your games: a program players run on their own computer or a host so others can play. It's shown on the game's store page, not listed on its own, and lives in its own repository (never the game's). It starts as a draft: submit a release for it like any app, and it's checked and reviewed the same way. Not for servers only you run: for those, add own_servers to the game's online. A game can have several. Read the guide section \"Dedicated servers\" first.",
+        method: Method::POST,
+        path: "/v1/apps/{game}/servers",
+        properties: || {
+            json!({
+                "game": s("Your game's store address"),
+                "slug": s("The server's own address (it shows its game's page), e.g. the game's plus -server"),
+                "title": s("Its name, e.g. the game's name plus Dedicated server, or Lobby server"),
+                "summary": s("One line for players: what it is and what it hosts"),
+                "repo_url": s("The server's own public repository"),
+                "license_spdx": s("Its licence, as an SPDX ID"),
+                "platforms": { "type": "array", "items": { "type": "string" }, "description": "windows and/or linux (with linux-deb and/or linux-rpm), as for any app" },
+                "description_md": s("More for the people hosting it, Markdown: what it loads and from where, ports, settings"),
+                "min_age": { "type": "integer", "description": "At least the game's; the game's when left out" },
+                "content_labels": { "type": "array", "items": { "type": "string" } },
+                "online": { "type": "array", "items": { "type": "string" } },
+                "online_hosts": { "type": "array", "items": { "type": "string" } },
+                "sandbox_ready": { "type": "boolean" },
+            })
+        },
+        required: &[
+            "game",
+            "slug",
+            "title",
+            "summary",
+            "repo_url",
+            "license_spdx",
+            "platforms",
+        ],
+    },
+    Tool {
         name: "offer_fix_to_original",
         description: "Offers your community build's changes back to the original app: open the pull request on the original's repository yourself (e.g. with gh pr create), then register it here so the original's maker is told on SLAPorSLOP.",
         method: Method::POST,
@@ -1629,7 +1662,7 @@ mod tests {
     #[test]
     fn every_tool_is_an_allowed_route() {
         for t in TOOLS {
-            let path = ["{section}", "{id}", "{slug}", "{original}"]
+            let path = ["{section}", "{id}", "{slug}", "{original}", "{game}"]
                 .iter()
                 .fold(t.path.to_string(), |p, v| p.replace(v, "x"));
             assert!(

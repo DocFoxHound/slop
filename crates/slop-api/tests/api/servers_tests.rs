@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Dedicated servers (DESIGN §5, migration 0093): the Servers category right after Utilities, with
-//! the Dedicated Server tag. An app in it is a dedicated server, which the Content Policy's rule
-//! on code from outside SLAPorSLOP doesn't cover ("Browser games and dedicated servers"): its
-//! fixes, label and report reasons say so, and everything else is as for any download.
+//! Dedicated servers (DESIGN §5, migrations 0093 and 0094, docs/DEDICATED-SERVERS.md): the
+//! Servers category right after Utilities, with the Dedicated Server tag. A dedicated server is
+//! linked to its game by the game's maker and shown on the game's page, or (from before that) an
+//! app in the Servers category. The Content Policy's rule on code from outside SLAPorSLOP doesn't
+//! cover dedicated servers ("Browser games and dedicated servers"): their fixes, label and report
+//! reasons say so, and everything else is as for any download.
 
 use crate::*;
 
@@ -41,7 +43,7 @@ async fn servers_is_a_category_after_utilities_with_the_dedicated_server_tag(db:
     assert_eq!(servers["name"], "Servers");
     assert_eq!(
         servers["description"],
-        "Dedicated servers you run on your own computer or host, for games in the store"
+        "Games with a dedicated server you run on your own computer or a host"
     );
     assert_eq!(
         servers["tags"],
@@ -420,4 +422,465 @@ async fn an_app_that_becomes_a_dedicated_server_waits_for_a_person(db: PgPool) {
     approve(&server).await.unwrap();
     let next = submit_and_fetch(&app, &maker, "1.3.0").await;
     assert_eq!(release_status(&app, &next).await.0, "approved");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dedicated servers linked to their games (migration 0094, docs/DEDICATED-SERVERS.md)
+
+fn new_server(slug: &str, repo: &str, platforms: Value) -> Value {
+    json!({
+        "slug": slug, "title": format!("{slug} title"), "summary": "Run your own server so others can play.",
+        "repo_url": repo, "license_spdx": "MIT", "platforms": platforms
+    })
+}
+
+/// The game's maker adds dedicated servers to it, each from its own repository; they're shown on
+/// the game's page, with the file to download and its SHA-256, and are never listed on their own,
+/// treated as community builds, or signed as a build of the game.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_games_maker_adds_dedicated_servers_shown_on_its_page(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (_, other) = app.user("Bo Brancher", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "castle",
+        "released",
+        "platforms = '{windows}', repo_url = 'https://github.com/mia/castle', min_age = 12,
+         content_labels = '{violence}', online = '{player_servers}'",
+    )
+    .await;
+    let add = |who: &str, body: Value| {
+        req(Method::POST, "/v1/apps/castle/servers")
+            .cookie(who)
+            .json(body)
+    };
+    let server_repo = format!("{}octo/game", app.fake_base);
+    let windows = json!(["windows"]);
+
+    // Only the game's maker, never from the game's repository, and a download.
+    let res = app
+        .send(add(
+            &other,
+            new_server("castle-server", &server_repo, windows.clone()),
+        ))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "kind");
+    let res = app
+        .send(add(
+            &maker,
+            new_server(
+                "castle-server",
+                "https://github.com/mia/castle",
+                windows.clone(),
+            ),
+        ))
+        .await;
+    let err = body_json(res).await;
+    assert_eq!(err["error"]["field"], "repo_url");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("its own repository")
+    );
+    let res = app
+        .send(add(
+            &maker,
+            new_server("castle-server", &server_repo, json!(["browser"])),
+        ))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "platforms");
+    // Through the branches route too: kind server is the maker's alone.
+    let res = app
+        .send(req(Method::POST, "/v1/apps/castle/branches").cookie(&other).json(json!({
+            "slug": "bo-server", "title": "Bo's server", "summary": "A server.", "repo_url": "https://github.com/bo/srv",
+            "license_spdx": "MIT", "kind": "server", "platforms": ["windows"]
+        })))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "kind");
+
+    // Several, each its own app.
+    for (slug, repo, platforms) in [
+        ("castle-server", server_repo.as_str(), windows.clone()),
+        (
+            "castle-lobby",
+            "https://github.com/mia/castle-lobby",
+            json!(["linux", "linux-deb"]),
+        ),
+    ] {
+        let res = app
+            .send(add(&maker, new_server(slug, repo, platforms)))
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED, "{slug}");
+    }
+    let own = body_json(
+        app.send(req(Method::GET, "/v1/apps/castle-server").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        own["server_game"],
+        json!({ "slug": "castle", "title": "castle" })
+    );
+    assert_eq!(own["server_for"], "castle");
+    assert!(own["branch"].is_null(), "not a community build");
+    assert!(own["branch_of"].is_null());
+    assert_eq!(own["kind"], "app");
+    assert_eq!(
+        own["tags"],
+        json!(["dedicated-server"]),
+        "its own tag, not the game's"
+    );
+    assert_eq!(own["min_age"], 12, "the game's rating, as for a mod");
+    assert_eq!(own["content_labels"], json!(["violence"]));
+    assert!(own["mods_folder"].is_null());
+    assert_eq!(own["status"], "draft");
+    let server_id = app_id(&app, "castle-server").await;
+    assert!(
+        slop_api::catalog::is_dedicated_server(&app.db, server_id)
+            .await
+            .unwrap(),
+        "a dedicated server everywhere one is told apart"
+    );
+
+    // The maker sees both drafts on the game's page; nobody else sees any yet.
+    let page = |who: Option<&str>| {
+        let r = req(Method::GET, "/v1/apps/castle").header("x-country", "US");
+        match who {
+            Some(c) => r.cookie(c),
+            None => r,
+        }
+    };
+    let mine = body_json(app.send(page(Some(&maker))).await).await;
+    let slugs = |p: &Value| -> Vec<String> {
+        p["servers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["slug"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(slugs(&mine), ["castle-lobby", "castle-server"]);
+    assert_eq!(mine["servers"][1]["status"], "draft");
+    assert!(mine["servers"][1]["release"].is_null());
+    assert!(slugs(&body_json(app.send(page(None)).await).await).is_empty());
+
+    // Released, approved and signed as an app of its own, then listed by a reviewer.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/castle-server/releases")
+                .cookie(&maker)
+                .json(release_body(&app, "1.0.0", "server-windows.zip")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let release: Uuid = body_json(res).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    admin::approve(&app.db, Some(&app.signing_key), lax(), release, "rev")
+        .await
+        .unwrap();
+    admin::list_app(&app.db, "castle-server", "rev")
+        .await
+        .unwrap();
+    let signed: slop_manifest::Signed = serde_json::from_value(
+        body_json(
+            app.send(req(Method::GET, "/v1/apps/castle-server/manifest").header("x-country", "US"))
+                .await,
+        )
+        .await,
+    )
+    .unwrap();
+    let manifest: slop_manifest::ReleaseManifest = slop_manifest::verify(
+        &signed,
+        slop_manifest::Purpose::ReleaseManifest,
+        &[app.signing_key.verifying_key()],
+    )
+    .unwrap();
+    assert!(
+        manifest.build_of.is_none(),
+        "not a build of the game to play instead"
+    );
+    assert!(manifest.mod_for.is_none());
+
+    // Everyone sees it on the game's page, with what to download and check it with.
+    let page = body_json(app.send(page(None)).await).await;
+    assert_eq!(
+        slugs(&page),
+        ["castle-server"],
+        "the lobby is still a draft"
+    );
+    let server = &page["servers"][0];
+    assert_eq!(server["title"], "castle-server title");
+    assert_eq!(server["platforms"], json!(["windows"]));
+    assert!(server.get("status").is_none(), "listed");
+    assert_eq!(server["release"]["version"], "1.0.0");
+    assert_eq!(server["release"]["id"], release.to_string());
+    let file = &server["release"]["files"][0];
+    assert_eq!(file["platform"], "windows");
+    assert_eq!(file["file_name"], "server-windows.zip");
+    assert_eq!(file["size_bytes"], BUILD_BYTES.len());
+    assert_eq!(
+        file["sha256"],
+        hex::encode(<sha2::Sha256 as sha2::Digest>::digest(BUILD_BYTES))
+    );
+    assert_eq!(file["parts"], 0);
+    let res = app
+        .send(
+            req(
+                Method::GET,
+                format!("/v1/apps/castle-server/releases/{release}/download/windows"),
+            )
+            .header("x-country", "US"),
+        )
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "downloadable without the desktop app"
+    );
+    assert!(
+        page["community"].as_array().unwrap().is_empty(),
+        "not a community build"
+    );
+
+    // Not in the store on its own, nor in Community. The Servers category (and its tag) lists
+    // the game; a server's platforms don't make the game match them.
+    let get =
+        |q: &str| req(Method::GET, format!("/v1/apps?sort=title&{q}")).header("x-country", "US");
+    assert_eq!(list_slugs(&app, get("")).await, ["castle"]);
+    assert!(list_slugs(&app, get("community=true")).await.is_empty());
+    assert_eq!(list_slugs(&app, get("category=servers")).await, ["castle"]);
+    assert_eq!(
+        list_slugs(&app, get("tag=dedicated-server")).await,
+        ["castle"]
+    );
+    sqlx::query(
+        "update apps set platforms = '{windows,linux,linux-deb}' where slug = 'castle-server'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert!(list_slugs(&app, get("platform=linux")).await.is_empty());
+    let reel = |page: &Value, slug: &str| -> Vec<String> {
+        page["reels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["slug"] == slug)
+            .unwrap()["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["slug"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let browse = body_json(
+        app.send(req(Method::GET, "/v1/browse").header("x-country", "US"))
+            .await,
+    )
+    .await;
+    assert_eq!(reel(&browse, "servers"), ["castle"]);
+    let browse = body_json(
+        app.send(req(Method::GET, "/v1/browse?category=servers").header("x-country", "US"))
+            .await,
+    )
+    .await;
+    assert_eq!(reel(&browse, "dedicated-server"), ["castle"]);
+
+    // Not another version of the game to play, and running it isn't playtime.
+    let updates = body_json(
+        app.send(req(Method::GET, "/v1/library/updates?apps=castle").header("x-country", "US"))
+            .await,
+    )
+    .await;
+    assert!(
+        updates["castle"]["builds"]
+            .as_array()
+            .is_none_or(|b| b.is_empty()),
+        "{updates}"
+    );
+    let (player_id, player) = app.user("Pat Player", "US").await;
+    let launched = body_json(
+        app.send(
+            req(
+                Method::POST,
+                "/v1/apps/castle-server/launch?platform=windows",
+            )
+            .cookie(&player),
+        )
+        .await,
+    )
+    .await;
+    assert!(launched["token"].is_null(), "{launched}");
+    let used: i64 = sqlx::query_scalar("select count(*) from user_app_usage where user_id = $1")
+        .bind(player_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(used, 0, "starting a server isn't playing");
+
+    // Taking the game out of the store takes its servers with it.
+    sqlx::query("update apps set status = 'delisted' where slug = 'castle'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for path in ["/v1/apps/castle-server", "/v1/apps/castle-server/manifest"] {
+        assert_eq!(
+            app.send(req(Method::GET, path).header("x-country", "US"))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+    assert!(list_slugs(&app, get("category=servers")).await.is_empty());
+}
+
+/// A private game's dedicated server is shared with whoever the game is, and goes public (and in
+/// the store, once ready) with it. Community builds and mods still can't be made of a private game.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_private_games_server_is_shared_and_goes_public_with_it(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (tester_id, tester) = app.user("Tess Tester", "US").await;
+    let (_, stranger) = app.user("Sam Stranger", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "secret",
+        "released",
+        "status = 'draft', visibility = 'private', repo_url = 'https://github.com/mia/secret', platforms = '{windows}'",
+    )
+    .await;
+    approved_release(&app, "secret", maker_id).await;
+    sqlx::query(
+        "insert into app_shares (app_id, user_id) select id, $1 from apps where slug = 'secret'",
+    )
+    .bind(tester_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/secret/servers")
+                .cookie(&maker)
+                .json(new_server(
+                    "secret-server",
+                    "https://github.com/mia/secret-server",
+                    json!(["windows"]),
+                )),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let visibility: String =
+        sqlx::query_scalar("select visibility from apps where slug = 'secret-server'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(visibility, "private");
+    let see = |who: &str| {
+        req(Method::GET, "/v1/apps/secret-server")
+            .cookie(who)
+            .header("x-country", "US")
+    };
+    // Shared once it has an approved release, like any private app.
+    assert_eq!(app.send(see(&tester)).await.status(), StatusCode::NOT_FOUND);
+    approved_release(&app, "secret-server", maker_id).await;
+    assert_eq!(app.send(see(&tester)).await.status(), StatusCode::OK);
+    assert_eq!(
+        app.send(see(&stranger)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let page = body_json(
+        app.send(
+            req(Method::GET, "/v1/apps/secret")
+                .cookie(&tester)
+                .header("x-country", "US"),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(page["servers"][0]["slug"], "secret-server");
+    // Others still can't branch or mod it.
+    let res = app
+        .send(req(Method::POST, "/v1/apps/secret/branches").cookie(&tester).json(json!({
+            "slug": "secret-fix", "title": "Fix", "summary": "A fix.", "repo_url": "https://github.com/t/f",
+            "license_spdx": "MIT", "kind": "fix", "note": "Fixes it.", "platforms": ["windows"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Public: the server too, and in the store with the game.
+    sqlx::query("update apps set public_requested_at = now() where slug = 'secret'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    admin::make_public(&app.db, "secret", "rev").await.unwrap();
+    let (visibility, status): (String, String) =
+        sqlx::query_as("select visibility, status::text from apps where slug = 'secret-server'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((visibility.as_str(), status.as_str()), ("public", "listed"));
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/secret").header("x-country", "US"))
+            .await,
+    )
+    .await;
+    assert_eq!(page["servers"][0]["slug"], "secret-server");
+}
+
+/// A browser game has nothing to host, and a server belongs to the game itself, not to one of
+/// its community builds.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn browser_games_and_community_builds_have_no_dedicated_servers(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "web-game",
+        "released",
+        "platforms = '{browser}'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker_id,
+        "castle",
+        "released",
+        "platforms = '{windows}'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker_id,
+        "castle-port",
+        "released",
+        "parent_app_id = (select id from apps where slug = 'castle'), branch_kind = 'port', branch_note = 'Linux'",
+    )
+    .await;
+    for (game, want) in [
+        ("web-game", StatusCode::CONFLICT),
+        ("castle-port", StatusCode::CONFLICT),
+    ] {
+        let res = app
+            .send(
+                req(Method::POST, format!("/v1/apps/{game}/servers"))
+                    .cookie(&maker)
+                    .json(new_server(
+                        "a-server",
+                        "https://github.com/mia/a-server",
+                        json!(["windows"]),
+                    )),
+            )
+            .await;
+        assert_eq!(res.status(), want, "{game}");
+    }
 }

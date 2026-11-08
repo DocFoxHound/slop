@@ -26,6 +26,8 @@ export interface Entry {
   available: boolean;
   /** A community build installed beside its original: the original's title (DESIGN §9). */
   buildOf?: string;
+  /** A dedicated server, listed under its game when the game is listed too: the game's title. */
+  serverFor?: string;
   /** Private: "you", or who shared it. */
   owner?: string;
   inLibrary: boolean;
@@ -54,7 +56,8 @@ export function unknownInstalled(s: Omit<Sources, "store">): string[] {
 const byTitle = (a: { title: string }, b: { title: string }) =>
   a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
 
-/** Every app once: installed first (community builds under their original), then the rest. */
+/** Every app once: installed first (community builds and dedicated servers under their game),
+ *  then the rest (servers under their game there too). */
 export function buildEntries(s: Sources): Entry[] {
   const out: Entry[] = [];
   const seen = new Set<string>();
@@ -72,12 +75,23 @@ export function buildEntries(s: Sources): Entry[] {
 
   const all = s.installed;
   const originalOf = (app: InstalledApp) => all.find((o) => o.installed.slug === app.build_of)?.installed;
-  const originals = all.filter(({ installed }) => !originalOf(installed)).sort((a, b) => byTitle(a.installed, b.installed));
+  // A dedicated server's game, when that's installed too (servers aren't linked in the manifest,
+  // so the store's data says which game it's for).
+  const gameOf = (app: InstalledApp) => {
+    const game = known(app.slug)?.server_for;
+    return game ? all.find((o) => o.installed.slug === game)?.installed : undefined;
+  };
+  const originals = all
+    .filter(({ installed }) => !originalOf(installed) && !gameOf(installed))
+    .sort((a, b) => byTitle(a.installed, b.installed));
   for (const entry of originals) {
     const builds = all
       .filter(({ installed }) => installed.build_of === entry.installed.slug && installed.slug !== entry.installed.slug)
       .sort((a, b) => byTitle(a.installed, b.installed));
-    for (const { installed, update, available } of [entry, ...builds]) {
+    const servers = all
+      .filter(({ installed }) => gameOf(installed)?.slug === entry.installed.slug)
+      .sort((a, b) => byTitle(a.installed, b.installed));
+    for (const { installed, update, available } of [entry, ...builds, ...servers]) {
       if (seen.has(installed.slug)) continue;
       seen.add(installed.slug);
       const original = originalOf(installed);
@@ -90,6 +104,7 @@ export function buildEntries(s: Sources): Entry[] {
         update,
         available,
         buildOf: original?.title,
+        serverFor: gameOf(installed)?.title,
         owner: privates.find((p) => p.slug === installed.slug)?.owner,
         inLibrary: inLibrary.has(installed.slug),
         interested: interested.has(installed.slug),
@@ -97,8 +112,11 @@ export function buildEntries(s: Sources): Entry[] {
     }
   }
   const rest = (list: AppSummary[], group: Group) => {
-    for (const app of [...list].sort(byTitle)) {
-      if (seen.has(app.slug)) continue;
+    const sorted = [...list].sort(byTitle);
+    // A server whose game is in the same list goes right under it.
+    const gameIn = (app: AppSummary) => (app.server_for ? sorted.find((g) => g.slug === app.server_for) : undefined);
+    const push = (app: AppSummary, game?: AppSummary) => {
+      if (seen.has(app.slug)) return;
       seen.add(app.slug);
       out.push({
         slug: app.slug,
@@ -107,10 +125,16 @@ export function buildEntries(s: Sources): Entry[] {
         group: group === "library" && app.plays_in_browser ? "browser" : group,
         app,
         available: false,
+        serverFor: game?.title,
         owner: (app as { owner?: string }).owner,
         inLibrary: inLibrary.has(app.slug),
         interested: interested.has(app.slug),
       });
+    };
+    for (const app of sorted) {
+      if (gameIn(app)) continue;
+      push(app);
+      for (const server of sorted.filter((a) => a.server_for === app.slug)) push(server, app);
     }
   };
   rest(privates, "private");
