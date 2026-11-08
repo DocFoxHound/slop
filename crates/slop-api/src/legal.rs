@@ -33,6 +33,7 @@ use crate::{
     AppState,
     auth::session::CurrentUser,
     error::{ApiError, ApiResult},
+    notify::clip,
 };
 
 /// How long before a changed document takes effect.
@@ -171,7 +172,11 @@ pub async fn sync(db: &PgPool) -> anyhow::Result<()> {
             "published a legal document"
         );
     }
-    announce(db).await
+    // A notification that can't be sent mustn't keep the server down: it's retried next start.
+    if let Err(e) = announce(db).await {
+        tracing::error!(error = ?e, "couldn't announce legal document changes");
+    }
+    Ok(())
 }
 
 /// Tells everyone a published change concerns, once: one notification in the bell (and so an
@@ -301,28 +306,45 @@ fn announcement(
                 title(kind),
                 when(*effective, accepted_kind(kind))
             ),
-            summary.clone(),
+            clip(summary, BODY_MAX),
             link,
         );
     }
-    let body = list
+    let line = |i: usize, with_summary: bool| {
+        let (kind, _, summary, _, effective, _) = &pending[i];
+        let what = format!(
+            "The {} {}.",
+            title(kind),
+            when(*effective, accepted_kind(kind))
+        );
+        if with_summary {
+            format!("{what} {summary}")
+        } else {
+            what
+        }
+    };
+    // Several summaries together can outgrow a notification; then just say what changed and when.
+    let mut body = list
         .iter()
-        .map(|&i| {
-            let (kind, _, summary, _, effective, _) = &pending[i];
-            format!(
-                "The {} {}. {summary}",
-                title(kind),
-                when(*effective, accepted_kind(kind))
-            )
-        })
+        .map(|&i| line(i, true))
         .collect::<Vec<_>>()
         .join("\n");
+    if body.chars().count() > BODY_MAX {
+        body = list
+            .iter()
+            .map(|&i| line(i, false))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     (
         "SLAPorSLOP's terms and policies changed".into(),
-        body,
+        clip(&body, BODY_MAX),
         "/legal".into(),
     )
 }
+
+/// The longest notification body the database takes (`notifications.body`).
+const BODY_MAX: usize = 1000;
 
 fn accepted_kind(kind: &str) -> bool {
     DOCUMENTS.iter().any(|(k, _, a)| *k == kind && *a)
@@ -966,6 +988,41 @@ mod tests {
             assert!(doc.body.len() > 500, "{kind} has a body");
             assert!(!doc.body.contains("---\n"), "{kind}: one header only");
         }
+    }
+
+    #[test]
+    fn announcements_fit_in_a_notification() {
+        let now = OffsetDateTime::now_utc();
+        let long = "word ".repeat(150);
+        let pending: Vec<Pending> = ["terms", "privacy", "content", "publisher"]
+            .iter()
+            .map(|k| {
+                (
+                    k.to_string(),
+                    "2026-11-07".into(),
+                    long.clone(),
+                    now,
+                    now + NOTICE,
+                    false,
+                )
+            })
+            .collect();
+        let (_, body, link) = announcement(&pending, &[0, 1, 2, 3], now);
+        assert!(body.chars().count() <= BODY_MAX, "{}", body.chars().count());
+        assert!(body.contains("The Privacy Policy changes on") && !body.contains("word"));
+        assert_eq!(link, "/legal");
+        let (_, body, _) = announcement(&pending[..1], &[0], now);
+        assert_eq!(body.chars().count(), 750);
+        let huge = vec![(
+            "terms".into(),
+            "v".into(),
+            "x".repeat(5000),
+            now,
+            now,
+            false,
+        )];
+        let (_, body, _) = announcement(&huge, &[0], now);
+        assert_eq!(body.chars().count(), BODY_MAX);
     }
 
     #[test]

@@ -144,7 +144,7 @@ pub(crate) async fn send(conn: &mut sqlx::PgConnection, n: Notice<'_>) -> sqlx::
     Ok(())
 }
 
-fn clip(s: &str, max: usize) -> String {
+pub(crate) fn clip(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
