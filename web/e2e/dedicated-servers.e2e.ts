@@ -100,7 +100,7 @@ test("on the desktop app, Install can bring the server, and uninstalling the gam
   await page.goto(`/app/${GAME}`);
   const box = page.locator(".install-box");
   await box.getByRole("checkbox", { name: "Also get the dedicated server" }).check();
-  await box.getByRole("button", { name: "Install" }).click();
+  await box.getByRole("button", { name: "Install", exact: true }).click();
   await expect(box.getByRole("button", { name: "▶ Play" })).toBeVisible();
   const installs = await page.evaluate(() =>
     (window as unknown as { __desktopCalls: Array<{ cmd: string; args: { slug?: string } }> }).__desktopCalls
@@ -109,11 +109,12 @@ test("on the desktop app, Install can bring the server, and uninstalling the gam
   );
   expect(installs).toEqual([GAME, SERVER]);
 
-  await box.getByRole("button", { name: "Uninstall" }).click();
+  await box.getByRole("button", { name: "Uninstall", exact: true }).click();
   const remove = box.getByRole("checkbox", { name: "Uninstall its dedicated server too" });
   await expect(remove).not.toBeChecked();
-  await box.getByRole("button", { name: "Uninstall" }).last().click();
-  await expect(box.getByRole("button", { name: "Install" })).toBeVisible();
+  // The confirm's own Uninstall, after the one that opened it.
+  await box.locator(".notice").getByRole("button", { name: "Uninstall", exact: true }).click();
+  await expect(box.getByRole("button", { name: "Install", exact: true })).toBeVisible();
   const uninstalls = await page.evaluate(() =>
     (window as unknown as { __desktopCalls: Array<{ cmd: string; args: { slug?: string } }> }).__desktopCalls
       .filter((c) => c.cmd === "uninstall_app")
