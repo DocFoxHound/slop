@@ -47,7 +47,7 @@ test("visitors get the intro and the test-server note; signed-in players get For
   await expect(visitor.getByRole("note").filter({ hasText: "Test server." })).toContainText("uploads are not scanned");
   await expect(visitor.getByRole("heading", { name: "For you" })).toHaveCount(0);
   // The categories, each to its page.
-  await expect(visitor.locator(".cat-grid").getByRole("link", { name: /Games/ })).toHaveAttribute("href", "/browse/games");
+  await expect(visitor.locator(".cat-grid").getByRole("link", { name: /^Games / })).toHaveAttribute("href", "/browse/games");
   await expect(section(visitor, "New and barely seen")).toBeVisible();
 
   // Where SLAPorSLOP scans, only downloads are said to be scanned.

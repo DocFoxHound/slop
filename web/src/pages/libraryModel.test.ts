@@ -353,3 +353,40 @@ describe("downloads", () => {
     ).toEqual({ a: 40 });
   });
 });
+
+describe("dedicated servers in the library (docs/DEDICATED-SERVERS.md §4)", () => {
+  const empty = { interested: [], privateMine: [], privateShared: [] };
+  const castle = app("castle", "Castle");
+  const server = app("castle-server", "Castle Dedicated server", { kind: "app", server_for: "castle", tags: ["dedicated-server"] });
+  const lobby = app("castle-lobby", "Castle Lobby server", { kind: "app", server_for: "castle" });
+
+  it("lists each server right under its game, installed or not", () => {
+    const notInstalled = buildEntries({ ...empty, library: [server, app("zebra", "Zebra"), lobby, castle], installed: [] });
+    expect(notInstalled.map((e) => [e.slug, e.serverFor])).toEqual([
+      ["castle", undefined],
+      ["castle-server", "Castle"],
+      ["castle-lobby", "Castle"],
+      ["zebra", undefined],
+    ]);
+    const installed = buildEntries({
+      ...empty,
+      library: [castle, server],
+      installed: [
+        { installed: inst("castle-server", "Castle Dedicated server"), available: false },
+        { installed: inst("aardvark", "Aardvark"), available: false },
+        { installed: inst("castle", "Castle"), available: false },
+      ],
+    });
+    expect(installed.map((e) => [e.slug, e.group, e.serverFor])).toEqual([
+      ["aardvark", "installed", undefined],
+      ["castle", "installed", undefined],
+      ["castle-server", "installed", "Castle"],
+    ]);
+  });
+
+  it("lists a server on its own when its game isn't there, and never as a community build", () => {
+    const entries = buildEntries({ ...empty, library: [server], installed: [] });
+    expect(entries.map((e) => [e.slug, e.serverFor])).toEqual([["castle-server", undefined]]);
+    expect(matchesFilter(entries[0], "community")).toBe(false);
+  });
+});

@@ -31,7 +31,7 @@ import {
 import { useSession } from "../session";
 import { InlineIcon } from "./StoreIcons";
 
-function formatBytes(n: number): string {
+export function formatBytes(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
   return `${Math.max(1, Math.round(n / 1e3))} KB`;
@@ -62,6 +62,12 @@ export interface BrowserPlay {
   loading?: boolean;
 }
 
+/** A game's dedicated server, for "Also get the dedicated server" and uninstalling the game. */
+export interface ServerRef {
+  slug: string;
+  title: string;
+}
+
 export function InstallControls({
   slug,
   title,
@@ -70,6 +76,7 @@ export function InstallControls({
   bar,
   donate,
   browser,
+  servers,
 }: {
   slug: string;
   title: string;
@@ -82,12 +89,47 @@ export function InstallControls({
   donate?: ReactNode;
   /** A game that plays in the browser: Play opens this, on the website and in the desktop app alike. */
   browser?: BrowserPlay;
+  /**
+   * The game's dedicated servers (docs/DEDICATED-SERVERS.md §4): getting the game gets the client
+   * only, with an unticked box to get each server too, and uninstalling it asks about them.
+   */
+  servers?: ServerRef[];
 }) {
   if (browser) return <BrowserControls slug={slug} inLibrary={inLibrary} play={browser} bar={bar} donate={donate} />;
   return isDesktop ? (
-    <DesktopControls slug={slug} title={title} sandbox={sandbox} bar={bar} donate={donate} />
+    <DesktopControls slug={slug} title={title} sandbox={sandbox} bar={bar} donate={donate} servers={servers ?? []} />
   ) : (
-    <WebControls slug={slug} inLibrary={inLibrary} bar={bar} donate={donate} />
+    <WebControls slug={slug} inLibrary={inLibrary} bar={bar} donate={donate} servers={servers ?? []} />
+  );
+}
+
+/** Unticked boxes to get a game's dedicated servers along with it: the client is the default. */
+function AlsoGetServers({
+  servers,
+  picked,
+  onChange,
+}: {
+  servers: ServerRef[];
+  picked: string[];
+  onChange: (picked: string[]) => void;
+}) {
+  if (servers.length === 0) return null;
+  return (
+    <div className="also-get">
+      {servers.map((s) => (
+        <label className="check" key={s.slug}>
+          <input
+            type="checkbox"
+            checked={picked.includes(s.slug)}
+            onChange={(e) => onChange(e.target.checked ? [...picked, s.slug] : picked.filter((p) => p !== s.slug))}
+          />{" "}
+          {servers.length === 1 ? "Also get the dedicated server" : `Also get ${s.title}`}
+        </label>
+      ))}
+      <p className="muted small">
+        {servers.length === 1 ? "A program" : "Programs"} you run on your own computer or a host, so others can play.
+      </p>
+    </div>
   );
 }
 
@@ -165,8 +207,12 @@ export function Popover({
   );
 }
 
-/** Add to library and take it out again, for apps nothing installs yet (the website, browser games). */
-function useLibraryToggle(slug: string, inLibrary?: boolean) {
+/**
+ * Add to library and take it out again, for apps nothing installs yet (the website, browser
+ * games). Adding also adds the dedicated servers in `also` (their library entries are their own:
+ * taking the game out leaves them).
+ */
+function useLibraryToggle(slug: string, inLibrary?: boolean, also: string[] = []) {
   const [added, setAdded] = useState(inLibrary ?? false);
   const [error, setError] = useState<string>();
   useEffect(() => setAdded(inLibrary ?? false), [inLibrary]);
@@ -174,7 +220,10 @@ function useLibraryToggle(slug: string, inLibrary?: boolean) {
     setError(undefined);
     try {
       if (added) await api.removeFromLibrary(slug);
-      else await api.addToLibrary(slug);
+      else {
+        await api.addToLibrary(slug);
+        for (const server of also) await api.addToLibrary(server);
+      }
       setAdded(!added);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -476,10 +525,23 @@ function BrowserControls({
   );
 }
 
-function WebControls({ slug, inLibrary, bar, donate }: { slug: string; inLibrary?: boolean; bar?: BarInfo; donate?: ReactNode }) {
+function WebControls({
+  slug,
+  inLibrary,
+  bar,
+  donate,
+  servers = [],
+}: {
+  slug: string;
+  inLibrary?: boolean;
+  bar?: BarInfo;
+  donate?: ReactNode;
+  servers?: ServerRef[];
+}) {
   const { me } = useSession();
   const location = useLocation();
-  const { added, error, toggle } = useLibraryToggle(slug, inLibrary);
+  const [also, setAlso] = useState<string[]>([]);
+  const { added, error, toggle } = useLibraryToggle(slug, inLibrary, also);
 
   if (bar) {
     return (
@@ -529,6 +591,7 @@ function WebControls({ slug, inLibrary, bar, donate }: { slug: string; inLibrary
         )}
         {donate}
       </div>
+      {me && !added && <AlsoGetServers servers={servers} picked={also} onChange={setAlso} />}
       <p className="muted small">Install it with the SLAPorSLOP desktop app. It checks every file against SLAPorSLOP's signature first.</p>
       {error && (
         <p className="form-error" role="alert">
@@ -545,12 +608,14 @@ function DesktopControls({
   sandbox: given,
   bar,
   donate,
+  servers = [],
 }: {
   slug: string;
   title: string;
   sandbox?: SandboxHint;
   bar?: BarInfo;
   donate?: ReactNode;
+  servers?: ServerRef[];
 }) {
   const build = useLoad(() => api.hasBuild(slug), [slug]);
   const sandboxStatus = useSandboxStatus();
@@ -558,6 +623,12 @@ function DesktopControls({
   const [launched, setLaunched] = useState<Launched>();
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   const [deleteSaves, setDeleteSaves] = useState(false);
+  // The game's dedicated servers: ticked to install with it, and the installed ones, which
+  // uninstalling the game asks about (never removed on their own: a server is useful alone).
+  const [alsoGet, setAlsoGet] = useState<string[]>([]);
+  const [installedServers, setInstalledServers] = useState<InstalledApp[]>([]);
+  const [alsoUninstall, setAlsoUninstall] = useState<string[]>([]);
+  const serverSlugs = servers.map((s) => s.slug).join(" ");
   const [installed, setInstalled] = useState<InstalledApp | null>();
   // Installed community builds of this app, and the one its Play button starts (DESIGN §9).
   const [builds, setBuilds] = useState<InstalledApp[]>([]);
@@ -572,8 +643,14 @@ function DesktopControls({
     const [apps, choices] = await Promise.all([desktop.installed(), desktop.playChoices()]);
     setInstalled(apps.find((a) => a.slug === slug) ?? null);
     setBuilds(apps.filter((a) => a.build_of === slug));
+    setInstalledServers(apps.filter((a) => serverSlugs.split(" ").includes(a.slug)));
     setChoice(choices[slug]);
-  }, [slug]);
+  }, [slug, serverSlugs]);
+  // Installing the game, and the servers ticked to come with it.
+  const installWithServers = async () => {
+    await desktop.install(slug);
+    for (const server of alsoGet) await desktop.install(server);
+  };
 
   // What Play starts: the picked community build while it's installed, else this app.
   const target = (choice && builds.find((b) => b.slug === choice)) || installed || undefined;
@@ -758,6 +835,18 @@ function DesktopControls({
         <input type="checkbox" checked={deleteSaves} onChange={(e) => setDeleteSaves(e.target.checked)} /> Delete my saves
         too
       </label>
+      {installedServers.map((server) => (
+        <label className="check" key={server.slug}>
+          <input
+            type="checkbox"
+            checked={alsoUninstall.includes(server.slug)}
+            onChange={(e) =>
+              setAlsoUninstall(e.target.checked ? [...alsoUninstall, server.slug] : alsoUninstall.filter((s) => s !== server.slug))
+            }
+          />{" "}
+          {installedServers.length === 1 ? "Uninstall its dedicated server too" : `Uninstall ${server.title} too`}
+        </label>
+      ))}
       <div className="actions">
         <button className="btn small ghost" onClick={() => setConfirmUninstall(false)}>
           Cancel
@@ -766,7 +855,11 @@ function DesktopControls({
           className="btn small danger"
           onClick={() => {
             setConfirmUninstall(false);
-            void run("uninstall", () => desktop.uninstall(slug, deleteSaves));
+            void run("uninstall", async () => {
+              await desktop.uninstall(slug, deleteSaves);
+              for (const server of alsoUninstall) await desktop.uninstall(server, false);
+              setAlsoUninstall([]);
+            });
           }}
         >
           Uninstall
@@ -1032,11 +1125,12 @@ function DesktopControls({
       ) : build.data ? (
         <>
           <div className="get-row">
-            <button className="btn big slime" disabled={busy !== null} onClick={() => void run("install", () => desktop.install(slug))}>
+            <button className="btn big slime" disabled={busy !== null} onClick={() => void run("install", installWithServers)}>
               {installing ? (progress ? `Installing… ${pct}%` : "Starting download…") : "Install"}
             </button>
             {donate}
           </div>
+          {!installing && <AlsoGetServers servers={servers} picked={alsoGet} onChange={setAlsoGet} />}
           {installing && progress && (
             <>
               <progress max={progress.total} value={progress.got} aria-label="Download progress" />

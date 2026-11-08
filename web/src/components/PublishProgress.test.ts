@@ -618,6 +618,16 @@ describe("progressSteps", () => {
         "1 note about the licence or selling in the app, for you and the reviewer: see the release below. See what to fix (with \"Copy for your AI\"), or ask your AI agent to run get_fixes.",
       );
     });
+
+    it("linked to its game, says it's shown on the game's page, with no store page of its own", () => {
+      // Linked servers count as servers whatever their tags.
+      expect(detail({ tags: [], server_for: "castle" })).toContain("A dedicated server may load mods, maps and plugins");
+      const draft = progressSteps(app({ status: "draft", server_for: "castle" }), [], testServer);
+      expect(draft[0]).toMatchObject({ title: "Dedicated server", state: "done" });
+      expect(draft[0].detail).toBe("Saved as a draft. Once it's in the store, players get it on its game's store page.");
+      const listed = progressSteps(app({ status: undefined, server_for: "castle" }), [release({ status: "approved" })], testServer);
+      expect(listed.at(-1)).toMatchObject({ title: "In the store", detail: "Players can get it on its game's store page." });
+    });
   });
 
   it("words times and files plainly", () => {

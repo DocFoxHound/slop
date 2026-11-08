@@ -115,8 +115,47 @@ pub(crate) fn push_store_visible(
     push_store_visible_as(qb, rules, policy, "a");
 }
 
-/// `push_store_visible` for an `apps` row under another alias (static SQL).
+/// `push_store_visible` for an `apps` row under another alias (static SQL). A dedicated server is
+/// in the store only while its game is too: delisting or freezing the game takes its servers
+/// out with it (docs/DEDICATED-SERVERS.md §8).
 pub(crate) fn push_store_visible_as(
+    qb: &mut QueryBuilder<Postgres>,
+    rules: CatalogRules,
+    policy: ViewerPolicy,
+    t: &'static str,
+) {
+    push_listed_as(qb, rules, policy, t);
+    qb.push(format!(
+        " and ({t}.branch_kind is distinct from 'server' or exists (select 1 from apps server_game
+            where server_game.id = {t}.parent_app_id and "
+    ));
+    push_listed_as(qb, rules, policy, "server_game");
+    qb.push("))");
+}
+
+/// SQL: a game in the store for this viewer that has a dedicated server in it too: what the
+/// Servers category lists (docs/DEDICATED-SERVERS.md §3). `a` is the game.
+fn push_has_server(qb: &mut QueryBuilder<Postgres>, rules: CatalogRules, policy: ViewerPolicy) {
+    push_has_server_for(qb, rules, policy, "a.id");
+}
+
+/// `push_has_server` for the game whose id is `game` (static SQL).
+fn push_has_server_for(
+    qb: &mut QueryBuilder<Postgres>,
+    rules: CatalogRules,
+    policy: ViewerPolicy,
+    game: &'static str,
+) {
+    qb.push(format!(
+        "exists (select 1 from apps listed_server where listed_server.parent_app_id = {game}
+                 and listed_server.branch_kind = 'server' and "
+    ));
+    push_listed_as(qb, rules, policy, "listed_server");
+    qb.push(")");
+}
+
+/// The app's own conditions for being in the store, whatever it belongs to.
+fn push_listed_as(
     qb: &mut QueryBuilder<Postgres>,
     rules: CatalogRules,
     policy: ViewerPolicy,
@@ -179,7 +218,8 @@ pub(crate) fn push_summary_columns_with(
                  from votes v where v.app_id = a.id) as not_slop_percent,
                 exists (select 1 from jobs j where j.app_id = a.id and j.credited_at is not null) as made_with_people,
                 (select count(*) from interests i where i.app_id = a.id) as interested,
-                (select p.slug from apps p where p.id = a.parent_app_id) as branch_of,
+                (select p.slug from apps p where p.id = a.parent_app_id and a.branch_kind <> 'server') as branch_of,
+                (select p.slug from apps p where p.id = a.parent_app_id and a.branch_kind = 'server') as server_for,
                 'browser' = any(a.platforms) as plays_in_browser,
                 (a.stage <> 'released' and a.last_commit_at is not null
                  and a.last_commit_at < now() - make_interval(days => ",
@@ -228,6 +268,9 @@ pub struct AppSummary {
     pub interested: i64,
     /// A community branch of this app (DESIGN §9).
     pub branch_of: Option<String>,
+    /// A dedicated server for this game (docs/DEDICATED-SERVERS.md): the game's store address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_for: Option<String>,
     /// A browser game: it plays on its maker's website, with nothing to download. Where Play
     /// goes is only in the store page (`AppDetail.play_address`), for who may play it.
     pub plays_in_browser: bool,
@@ -368,8 +411,8 @@ async fn list_apps(
     qb.push(" where ");
     push_store_visible(&mut qb, rules, policy);
     qb.push(if query.community {
-        // Community builds you can run; mods show on their game's page.
-        " and a.parent_app_id is not null and a.branch_kind <> 'addon'"
+        // Community builds you can run; mods and dedicated servers show on their game's page.
+        " and a.parent_app_id is not null and a.branch_kind not in ('addon', 'server')"
     } else {
         " and a.parent_app_id is null"
     });
@@ -379,9 +422,15 @@ async fn list_apps(
             .push(")");
     }
     if let Some(tag) = &query.tag {
-        qb.push(" and exists (select 1 from app_tags at join tags t on t.id = at.tag_id where at.app_id = a.id and t.slug = ")
+        qb.push(" and (exists (select 1 from app_tags at join tags t on t.id = at.tag_id where at.app_id = a.id and t.slug = ")
             .push_bind(tag)
             .push(")");
+        // Dedicated Server lists the games that have one, and servers not linked to a game yet.
+        if tag == SERVER_TAG {
+            qb.push(" or ");
+            push_has_server(&mut qb, rules, policy);
+        }
+        qb.push(")");
         push_category_limits(
             &mut qb,
             "join tags t on t.category_id = c.id where t.slug = ",
@@ -390,11 +439,16 @@ async fn list_apps(
     }
     if let Some(category) = &query.category {
         qb.push(
-            " and exists (select 1 from app_tags at join tags t on t.id = at.tag_id
+            " and (exists (select 1 from app_tags at join tags t on t.id = at.tag_id
                           join categories c on c.id = t.category_id where at.app_id = a.id and c.slug = ",
         )
         .push_bind(category)
         .push(")");
+        if category == SERVERS_CATEGORY {
+            qb.push(" or ");
+            push_has_server(&mut qb, rules, policy);
+        }
+        qb.push(")");
         push_category_limits(&mut qb, "where c.slug = ", category);
     }
     if let Some(stage) = query.stage {
@@ -415,7 +469,7 @@ async fn list_apps(
         // matches "browser".
         qb.push(" and (")
             .push_bind(platform)
-            .push(" = any(a.platforms) or exists (select 1 from apps b where b.parent_app_id = a.id and ")
+            .push(" = any(a.platforms) or exists (select 1 from apps b where b.parent_app_id = a.id and b.branch_kind <> 'server' and ")
             .push_bind(platform)
             .push(" = any(b.platforms) and ");
         push_store_visible_as(&mut qb, rules, policy, "b");
@@ -661,6 +715,20 @@ async fn browse(
     if let Some(category) = &query.category {
         qb.push(" and c.slug = ").push_bind(category);
     }
+    // Servers, and its Dedicated Server reel, also have the games with a dedicated server.
+    match query.category.as_deref() {
+        None => {
+            qb.push(format!(
+                " union select '{SERVERS_CATEGORY}', v.id from v where "
+            ));
+            push_has_server_for(&mut qb, rules, policy, "v.id");
+        }
+        Some(SERVERS_CATEGORY) => {
+            qb.push(format!(" union select '{SERVER_TAG}', v.id from v where "));
+            push_has_server_for(&mut qb, rules, policy, "v.id");
+        }
+        Some(_) => {}
+    }
     qb.push(") m join v on v.id = m.id) ");
     push_summary_columns_with(&mut qb, &state.config, ", r.reel");
     qb.push(" join r on r.id = a.id where r.n <= ")
@@ -819,6 +887,11 @@ struct AppDetail {
     branch: Option<crate::branches::BranchInfo>,
     /// For an app: its community builds in the store.
     community: Vec<crate::branches::CommunityBuild>,
+    /// For a dedicated server: the game it's for, whose page it's shown on (`server_for` in the
+    /// summary is its address).
+    server_game: Option<crate::branches::ServerFor>,
+    /// For a game: its dedicated servers this viewer can see (docs/DEDICATED-SERVERS.md).
+    servers: Vec<crate::branches::Server>,
     /// A private app (DESIGN §13): only its owner and the people it's shared with see it.
     private: bool,
     /// The verified official team that publishes it (DESIGN §14): (slug, name).
@@ -893,20 +966,26 @@ pub async fn visible_app(
 }
 
 /// SQL condition: app `a` is a private app shared with the viewer, and has an approved release
-/// (DESIGN §13: same requirements as public apps). Checked on every request (SECURITY §12).
+/// (DESIGN §13: same requirements as public apps). Checked on every request (SECURITY §12). A
+/// private game's dedicated server is shared with whoever its game is, while the game is.
 pub(crate) fn push_shared_with(qb: &mut QueryBuilder<Postgres>, viewer: Option<Uuid>) {
     qb.push(
         "(a.visibility = 'private'
           and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved')
           and (a.frozen_at is null or a.frozen_by is not null or a.frozen_at > now() - interval '14 days')
-          and (exists (select 1 from app_shares s where s.app_id = a.id and s.user_id = ",
+          and (a.branch_kind is distinct from 'server' or exists (select 1 from apps g
+               where g.id = a.parent_app_id and g.visibility = 'private'
+                 and exists (select 1 from releases r where r.app_id = g.id and r.status = 'approved')
+                 and (g.frozen_at is null or g.frozen_by is not null or g.frozen_at > now() - interval '14 days')))
+          and (exists (select 1 from app_shares s where s.app_id = coalesce(case when a.branch_kind = 'server' then a.parent_app_id end, a.id) and s.user_id = ",
     )
     .push_bind(viewer)
     .push(
         ")
                or exists (select 1 from app_team_shares ts join teams t on t.id = ts.team_id
                           join team_members m on m.team_id = t.id
-                          where ts.app_id = a.id and t.kind = 'player' and m.user_id = ",
+                          where ts.app_id = coalesce(case when a.branch_kind = 'server' then a.parent_app_id end, a.id)
+                            and t.kind = 'player' and m.user_id = ",
     )
     .push_bind(viewer)
     .push(")))");
@@ -933,14 +1012,20 @@ pub async fn plays_in_browser<'c>(
         .await
 }
 
-/// Whether app `a` (`apps`) is a dedicated server: one of its tags is in the Servers category
-/// (today that's Dedicated Server, migration 0093). The Content Policy's rule on code from
-/// outside SLAPorSLOP doesn't cover dedicated servers, which may load mods, maps and plugins from
-/// other places ("Browser games and dedicated servers"); every other rule does. The one
-/// definition of what a dedicated server is.
-pub(crate) const IS_DEDICATED_SERVER: &str = "exists (select 1 from app_tags st
+/// Whether app `a` (`apps`) is a dedicated server: linked to its game as one (migration 0094,
+/// docs/DEDICATED-SERVERS.md), or, from before that, one of its tags is in the Servers category
+/// (Dedicated Server, migration 0093). The Content Policy's rule on code from outside SLAPorSLOP
+/// doesn't cover dedicated servers, which may load mods, maps and plugins from other places
+/// ("Browser games and dedicated servers"); every other rule does. The one definition of what a
+/// dedicated server is.
+pub(crate) const IS_DEDICATED_SERVER: &str =
+    "(a.branch_kind is not distinct from 'server' or exists (select 1 from app_tags st
      join tags t on t.id = st.tag_id join categories c on c.id = t.category_id
-     where st.app_id = a.id and c.slug = 'servers')";
+     where st.app_id = a.id and c.slug = 'servers'))";
+
+/// The Servers category and its tag (migration 0093), which list games with a dedicated server.
+pub(crate) const SERVERS_CATEGORY: &str = "servers";
+pub(crate) const SERVER_TAG: &str = "dedicated-server";
 
 /// `IS_DEDICATED_SERVER` for one app.
 pub async fn is_dedicated_server<'c>(
@@ -1053,6 +1138,8 @@ async fn load_detail(
             .map(|(slug, name)| OfficialTeam { slug, name }),
         branch: crate::branches::info(&state.db, extra.id).await?,
         community,
+        server_game: crate::branches::server_for(&state.db, extra.id).await?,
+        servers: crate::branches::servers(state, extra.id, user.map(|u| u.id), policy).await?,
         is_interested: match user {
             Some(u) => {
                 sqlx::query_scalar(

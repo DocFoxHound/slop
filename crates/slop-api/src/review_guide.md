@@ -106,19 +106,21 @@ Also read SLAPorSLOP's source check, `repo_scan` (`status` is `checked`, `not_ch
     is fine. In a dedicated server (next point) it's a `concern` note asking the maker to replace
     it, not a rejection on its own: the rule doesn't cover servers, and the maker's fix list
     shows it as a suggestion;
-  - the rule doesn't cover **dedicated servers**, and the maker chooses the tag, so check the app
-    really is one. A dedicated server is in the Servers category (`dedicated-server` in
-    `app.tags`) **and** is a server or headless program people run on their own computer or a
-    host so others can play a game, with a summary and description that name the game it serves.
-    A real server may download and run mods, maps and plugins from other places: don't reject it
-    for that, since its store page tells players it may. If its description doesn't say what it
-    loads and from where, ask the maker to add it. Anything else tagged Dedicated Server (a
-    playable game, a launcher, a tool) isn't one: review it as an ordinary download, this rule
-    included, and reject it as a misleading store page until the tag comes off. A release whose
-    app has become a server since its last approved release always waits for a person
-    (`status_reason`: "it's now in the Servers category, so a person checks it really is a
-    dedicated server"; `repo_scan.dedicated_server` says whether it was one when it was checked):
-    that's when to look. The rule doesn't cover browser games either (below).
+  - the rule doesn't cover **dedicated servers**, and the maker chooses, so check the app
+    really is one. A dedicated server is linked to its game by the game's maker (`branch_kind`
+    `server`, with the game it's for: it's shown on that game's page), or, from before that, in
+    the Servers category (`dedicated-server` in `app.tags`, with a summary and description
+    naming the game it serves), **and** is a server or headless program people run on their own
+    computer or a host so others can play that game. A real server may download and run mods,
+    maps and plugins from other places: don't reject it for that, since its game's page tells
+    players it may. If its description doesn't say what it loads and from where, ask the maker
+    to add it. Anything else linked or tagged as a server (a playable game, a launcher, a tool)
+    isn't one: review it as an ordinary download, this rule included, and reject it as
+    misleading until the tag comes off or, for a linked one, it's published as an app of its
+    own. A release whose app has become a server since its last approved release always waits
+    for a person (`status_reason`: "it's now in the Servers category, so a person checks it
+    really is a dedicated server"; `repo_scan.dedicated_server` says whether it was one when it
+    was checked): that's when to look. The rule doesn't cover browser games either (below).
 - `network`: networking code (multiplayer, sockets, HTTP and WebSocket clients, online
   services). `online_undeclared: true` means the store page didn't say the app goes online when
   the release was checked. Players are shown a notice for apps that do, so ask the maker to tick

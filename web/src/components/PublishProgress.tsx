@@ -63,7 +63,13 @@ const STAGE_LABEL: Record<FileCheckStage, string> = {
 const LONGEST_SCAN_MINUTES = 30;
 
 type Server = { scanning: boolean; maker_signatures_required: boolean };
-type ProgressApp = Pick<AppSummary, "stage" | "status"> & { slug?: string; plays_in_browser?: boolean; tags?: string[] };
+type ProgressApp = Pick<AppSummary, "stage" | "status"> & {
+  slug?: string;
+  plays_in_browser?: boolean;
+  tags?: string[];
+  /** A dedicated server: its game's address. It has no store page of its own. */
+  server_for?: string;
+};
 
 /**
  * A browser game's release whose address Play opens (`plays`), and, when Play opens none because
@@ -273,11 +279,17 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
   // The API leaves `status` out once an app is listed.
   const listed = app.status === undefined || app.status === "listed";
   const steps: Step[] = [
-    {
-      title: "Store page",
-      state: "done",
-      detail: "Your store page is saved as a draft.",
-    },
+    app.server_for
+      ? {
+          title: "Dedicated server",
+          state: "done",
+          detail: "Saved as a draft. Once it's in the store, players get it on its game's store page.",
+        }
+      : {
+          title: "Store page",
+          state: "done",
+          detail: "Your store page is saved as a draft.",
+        },
   ];
 
   if (app.plays_in_browser) {
@@ -514,7 +526,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
     steps.push({
       title: "In the store",
       state: "done",
-      detail: "Players can find it.",
+      detail: app.server_for ? "Players can get it on its game's store page." : "Players can find it.",
     });
   } else if (app.status === "delisted") {
     steps.push({

@@ -977,6 +977,21 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .community-builds li { margin-bottom: 8px; }
 .community-badge { align-self: flex-start; }
 
+/* ---- Dedicated servers (components/DedicatedServers.tsx) --------------- */
+.dedicated-servers { margin-top: 14px; }
+.dedicated-servers h3 { margin: 0 0 4px; }
+.server-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.server-row { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.server-row p { margin: 0; }
+.server-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.download-yourself summary { cursor: pointer; font-size: 13px; }
+.download-yourself[open] { display: flex; flex-direction: column; gap: 6px; }
+.server-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.server-files .btn { margin: 0 6px 4px 0; }
+.sha code { overflow-wrap: anywhere; word-break: break-all; }
+.also-get { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.also-get p { margin: 0; }
+
 /* ---- Private ----------------------------------------------------------- */
 .visibility-choice { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
 .share-panel { margin-bottom: 14px; }

@@ -1,7 +1,7 @@
 ---
 title: Content Policy
-version: 2026-11-07
-summary: Browser games (which play on their maker's website) and dedicated servers (apps in the new Servers category) aren't covered by the rule on code from outside SLAPorSLOP; browser games, which have no build, aren't covered by the rule on builds either. Every other rule applies to them.
+version: 2026-11-08
+summary: Dedicated servers are now published with the game they're for, and shown on its store page. As before, the rule on code from outside SLAPorSLOP doesn't cover them or browser games, browser games (which have no build) aren't covered by the rule on builds, and every other rule applies to both.
 ---
 > **Draft for legal review.** This policy hasn't been reviewed by a lawyer yet.
 
@@ -32,7 +32,7 @@ An app may only run code that came in a release or mod SLAPorSLOP checked. It mu
 
 ### Browser games and dedicated servers
 - **Browser games** play on their maker's own website instead of being downloaded. SLAPorSLOP checks the address before players see it and again whenever it changes, but not what the site serves. The rules on builds and on code from outside SLAPorSLOP don't apply to them. Every other rule does: the site must match its store page, mustn't sell anything in the game, and mustn't carry malware, scams, phishing or anything else this policy bans.
-- **Dedicated servers** are apps in the Servers category that people run on their own computer or host so others can play a game. A server may download and run mods, maps and plugins from other places, so the rule on code from outside SLAPorSLOP doesn't cover it. It's still built from its source and checked like any other release, and every other rule applies.
+- **Dedicated servers** are programs people run on their own computer or a host so others can play a game. Each is published by the game's maker with the game it's for, and shown on that game's store page (some from before then are apps in the Servers category). A server may download and run mods, maps and plugins from other places, so the rule on code from outside SLAPorSLOP doesn't cover it. It's still built from its source and checked like any other release, and every other rule applies.
 
 ### Scams and fraud
 No scams, phishing, impersonation or fake offers.

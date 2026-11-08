@@ -89,14 +89,25 @@ async fn launch(
     // A browser game is played at the address a person approved. With none (yet, or since it
     // was withdrawn), or while it's Coming soon for anyone but its maker, there's nothing to play
     // and nothing is recorded (as on its store page, catalog.rs).
-    let (in_browser, play_address, stage): (bool, Option<String>, catalog::AppStage) =
+    let (in_browser, play_address, stage, server): (bool, Option<String>, catalog::AppStage, bool) =
         sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "select 'browser' = any(a.platforms), {}, a.stage from apps a where a.id = $1",
+            "select 'browser' = any(a.platforms), {}, a.stage, a.branch_kind is not distinct from 'server'
+             from apps a where a.id = $1",
             catalog::PLAY_ADDRESS
         )))
         .bind(app_id)
         .fetch_one(&state.db)
         .await?;
+    // A dedicated server runs for others to play on: its running time isn't anyone's playtime,
+    // and starting it isn't playing (docs/DEDICATED-SERVERS.md §4). Nothing is recorded.
+    if server {
+        return Ok(Json(Launched {
+            token: None,
+            pulse_url,
+            heartbeat_seconds: HEARTBEAT_SECONDS,
+            play_address: None,
+        }));
+    }
     let play_address = match play_address {
         _ if !in_browser => None,
         Some(address) if is_mine || stage != catalog::AppStage::ComingSoon => Some(address),

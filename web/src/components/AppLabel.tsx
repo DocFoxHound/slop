@@ -85,7 +85,7 @@ export function AppLabel({ slug }: { slug: string }) {
 
 /** The label's notes, for the install box: what to know before installing (or, for a game that
  * plays in the browser, before playing). */
-export function LabelNotes({ slug, browser = false }: { slug: string; browser?: boolean }) {
+export function LabelNotes({ slug, browser = false, link = true }: { slug: string; browser?: boolean; link?: boolean }) {
   const label = useLoad(() => api.label(slug), [slug]);
   const notes = label.data?.items.filter((i) => i.tone === "note") ?? [];
   if (!label.data) return null;
@@ -101,7 +101,7 @@ export function LabelNotes({ slug, browser = false }: { slug: string; browser?: 
           </ul>
         </>
       )}
-      <a href="#what-it-does">What this app does</a>
+      {link && <a href="#what-it-does">What this app does</a>}
     </div>
   );
 }
