@@ -10,8 +10,9 @@
 //!   names one, and carry no output: nothing of it runs in the SLAPorSLOP app.
 //!   Makers mark reports fixed, won't fix or duplicate, and the player is told. Makers can turn
 //!   reports off on the store page.
-//! - **Issues stay the maker's:** SLAPorSLOP doesn't write to repositories. The website offers a
-//!   prefilled GitHub issue, and a maker's AI agent can read reports and file them itself.
+//! - **Issues stay the maker's:** SLAPorSLOP doesn't write issues, code or releases to
+//!   repositories. The website offers a prefilled GitHub issue, and a maker's AI agent can read
+//!   reports and file them itself.
 //! - **Feedback per release** (`GET /v1/apps/{slug}/release-feedback`): for each recent release,
 //!   its % Slaps from votes cast on it, the reviews written while it was current with their
 //!   most common phrases (counted, no AI), and its bug reports.

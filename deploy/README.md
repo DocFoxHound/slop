@@ -263,7 +263,9 @@ polls on the shared `GITHUB_TOKEN`, which runs out at around 800 watched apps.
    - **Homepage URL:** the site, e.g. `https://slop.example`.
    - **Webhook URL:** `https://slop.example/v1/github/webhook`, **Active**. **Webhook secret:** a
      long random string (`openssl rand -hex 32`).
-   - **Repository permissions:** Contents **Read-only**, Metadata **Read-only**.
+   - **Repository permissions:** Contents **Read-only**, Metadata **Read-only**. Only if you want
+     results on GitHub ("Results on GitHub" below): Commit statuses **Read and write**, the one
+     thing the App can ever write.
    - **Organization permissions** (for official teams, `teams.rs`): Members **Read-only**, and
      Administration **Read-only** (to see whether the organization requires 2FA). Nothing else.
    - **Subscribe to events:** **Release**. (Installation events are always sent.)
@@ -284,6 +286,40 @@ polls on the shared `GITHUB_TOKEN`, which runs out at around 800 watched apps.
    webhook delivery and SLAPorSLOP's answer (204 means handled).
 
 Makers see an **Install on GitHub** link in their app's **Updates** box once it's configured.
+
+### Results on GitHub (optional)
+
+Makers can have SLAPorSLOP put each release's result on its commit on GitHub (a commit status
+named SLAPorSLOP). It's off until you do all of this, in this order:
+
+1. On GitHub: **Settings → Developer settings → GitHub Apps →** SLAPorSLOP's App **→ Permissions &
+   events → Repository permissions → Commit statuses: Read and write → Save changes**. Do this
+   first: with the server switched on before the App asks for the permission, makers would be
+   told to accept a request that doesn't exist.
+2. What makers who already installed the App see: GitHub emails them that the App asks for a new
+   permission, and shows **Review request** on the App's page in their GitHub settings. Until
+   they accept, everything they have today keeps working (webhooks, the repository's own API
+   allowance); only results on GitHub wait. New installs see "Read and write access to commit
+   statuses" on GitHub's install page.
+3. Wait until the Privacy Policy version that names Results on GitHub is in effect, which is 15
+   days after it is published. Set the variable below only then.
+4. On the server, add to `slop.env`:
+
+       SLOP_GITHUB_STATUSES=1
+
+   then `systemctl --user restart slop-api`.
+5. Check: the admin page shows no alert about results on GitHub. On an app of yours whose
+   repository has the App installed, **Manage** now has **Results on GitHub**: switch it on, send a
+   release, and the commit on GitHub shows a SLAPorSLOP status (first "SLAPorSLOP is checking this
+   release") within a minute, linking to the app's page.
+6. What makers see from now on: the **Results on GitHub** panel on Manage, for public apps on
+   GitHub. Nothing is posted for an app until its maker switches it on, and never for private
+   apps. Nothing is posted for apps outside the store or after the maker switches it off, with
+   one exception: a "Passed" status is corrected if SLAPorSLOP later withdraws that release.
+
+To switch it off: remove the line and restart. The panel disappears and nothing more is posted;
+statuses already on GitHub stay (GitHub keeps them). Each maker's choice is kept for when you
+switch it back on.
 
 ## People payments (Stripe Connect)
 

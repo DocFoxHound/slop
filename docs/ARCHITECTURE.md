@@ -135,10 +135,10 @@ production (`slaporslop.games`, its own server set up the same way) runs only co
 **Goal:** a maker only has to **verify their account and link their repo**. They shouldn't need to understand CI pipelines.
 
 **How it works:** SLAPorSLOP doesn't compile on its own servers by default. It **writes the build pipeline for the maker**, and the pipeline runs on the free build machines of the maker's own Git host.
-1. The maker signs in (a passkey is optional) and links their repo by installing the SLAPorSLOP GitHub App (read-only).
+1. The maker signs in (a passkey is optional) and links their repo by installing the SLAPorSLOP GitHub App (it reads; the one thing it can write is a commit status, and only if the maker switches that on).
 2. SLAPorSLOP looks at the repo and detects the project type: Godot, web/HTML5, Electron, Tauri, Python, Rust, Go, .NET, Unity…
 3. SLAPorSLOP shows a **one-click "Add Slop Build"** button. It opens GitHub's own "create file" page, pre-filled with a short file (`.github/workflows/slop.yml`, about 5 lines) that calls **SLAPorSLOP's shared build recipe**. The maker clicks **Commit**. That's their only step.
-   - Because the maker commits the file themselves, the SLAPorSLOP GitHub App can stay **read-only**.
+   - Because the maker commits the file themselves, the SLAPorSLOP GitHub App never needs to write to the repository's code.
 4. From then on, whenever the maker pushes to the tracked branch (or presses "Build now" on SLAPorSLOP), the recipe runs on **GitHub's free runners**. It:
    - builds for Windows, macOS and Linux (plus Android where the project supports it);
    - **signs** the builds (§6.3);
@@ -175,6 +175,13 @@ being released. The **Add Slop Build** button opens GitHub's create-file page wi
 filled in. The SLAPorSLOP GitHub App (`github_app.rs`: release webhooks, private repositories) is built
 but switched off until its GitHub registration is set up; without it, detection uses GitHub's
 public API.
+
+**Results on GitHub (built 2026-11-10, `commit_status.rs`):** where the owner set
+`SLOP_GITHUB_STATUSES` and a maker switched it on for a public app, SLAPorSLOP posts each
+release's state as a commit status named SLAPorSLOP on the release's commit, with the App's
+installation token. A worker reconciles: it compares each commit's speaking release (the newest
+not withdrawn) with what was last posted, so every path that changes a release's state, the
+staff command line included, is covered without a hook.
 
 ### 6.3 From build to launched app
 
@@ -227,7 +234,7 @@ public API.
 ### 6.5 Downloads of private apps without storing anything (proposed)
 A private repo's release files can't be downloaded by people it's shared with. SLAPorSLOP solves this **without storing or relaying the files**:
 1. A friend the app is shared with taps Install. SLAPorSLOP checks they're allowed (shared with them or their player team).
-2. SLAPorSLOP asks GitHub for the file, using the read-only GitHub App the owner installed. **GitHub replies with a short-lived download link** (a signed URL that expires within minutes) rather than the file.
+2. SLAPorSLOP asks GitHub for the file, using the GitHub App the owner installed (it only reads here: nothing is ever posted for a private app). **GitHub replies with a short-lived download link** (a signed URL that expires within minutes) rather than the file.
 3. SLAPorSLOP passes **only that link** to the friend's SLAPorSLOP app, which downloads directly from GitHub and checks the hash as usual.
 
 SLAPorSLOP never holds the file, and the link is useless after a few minutes.

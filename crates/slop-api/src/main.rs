@@ -563,6 +563,10 @@ async fn serve() -> anyhow::Result<()> {
     // The sandbox's repositories are invented, so checking them would freeze every app.
     if !state.config.simulation {
         tokio::spawn(slop_api::frozen::run(state.clone()));
+        // Results on GitHub (commit_status.rs): only where the owner switched them on.
+        if slop_api::commit_status::available(&state.config) {
+            tokio::spawn(slop_api::commit_status::run(state.clone()));
+        }
     }
     let app = router(state)?;
     let listener = tokio::net::TcpListener::bind(bind)

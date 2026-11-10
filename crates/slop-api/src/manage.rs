@@ -284,6 +284,10 @@ struct Overview {
     pulse_required: Option<bool>,
     /// A release has been approved, so the maker can move the app on to Beta or Released.
     can_advance: bool,
+    /// SLAPorSLOP's result on the app's GitHub commits (commit_status.rs): absent unless it can be
+    /// offered for this app.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit_status: Option<crate::commit_status::CommitStatus>,
 }
 
 async fn overview(
@@ -336,8 +340,10 @@ async fn overview(
     let can_advance = admin::has_playable_release(&mut conn, app_id)
         .await
         .map_err(ApiError::Internal)?;
+    let commit_status = crate::commit_status::for_app(&state, app_id, &repo_url).await?;
     Ok(Json(Overview {
         can_advance,
+        commit_status,
         frozen: crate::frozen::status(&state.db, app_id).await?,
         public_requested,
         pulse_required,
@@ -598,6 +604,8 @@ async fn apply(tx: &mut PgConnection, id: Uuid, reviewer: &str) -> anyhow::Resul
             .await?;
             // The new repository's IDs are recorded on first use (repo_identity.rs).
             crate::repo_identity::forget(&mut *tx, app_id).await?;
+            // Results on GitHub were agreed for the old repository: they end (commit_status.rs).
+            crate::commit_status::forget(&mut *tx, app_id, &slug, reviewer).await?;
             json!({ "change": id, "repo_url": repo_url })
         }
     };

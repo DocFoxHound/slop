@@ -250,12 +250,15 @@ instead: see [Browser games](#browser-games).)
 the **Updates** box), SLAPorSLOP checks your repository every 10 minutes if you've released something
 in the last week, and less often (up to every two hours) for quieter apps. For pickup within a
 minute, install **SLAPorSLOP's GitHub App** on the repository (the link is in the **Updates** box): GitHub
-then tells SLAPorSLOP the moment you publish a release. The App only reads releases and code. When you publish a new
-release (not a draft or pre-release), SLAPorSLOP submits it using your previous release as the pattern:
-the same platforms and programs, with files whose names are the old ones with the new version in
-place of the old (`game-1.0.0-windows.zip` → `game-1.1.0-windows.zip`), or exactly the same
-names. If a file is missing, SLAPorSLOP waits up to two hours for it to be uploaded, then shows what it
-couldn't find so you can pick the release by hand.
+then tells SLAPorSLOP the moment you publish a release. The App reads your releases and code and
+never changes them. If your **Manage** page has **Results on GitHub** and you switch it on, the
+App also puts SLAPorSLOP's result on each release's commit as a commit status: nothing else, and
+nothing until you switch it on. When you publish a new release (not a draft or pre-release),
+SLAPorSLOP submits it using your previous release as the pattern: the same platforms and
+programs, with files whose names are the old ones with the new version in place of the old
+(`game-1.0.0-windows.zip` → `game-1.1.0-windows.zip`), or exactly the same names. If a file is
+missing, SLAPorSLOP waits up to two hours for it to be uploaded, then shows what it couldn't find
+so you can pick the release by hand.
 
 #### Option B: Slop Build
 
@@ -513,6 +516,17 @@ Each app has a **Manage** page (Publish → **Manage**):
   settings as on Releases & progress.
 - **Requests.** Every change you asked for, with its decision and any reason. You can cancel
   one that's still waiting.
+- **Results on GitHub.** If your app is public, its repository is on GitHub and SLAPorSLOP's
+  GitHub App is installed on it, you can have SLAPorSLOP put each release's result on its commit
+  on GitHub, as a status named SLAPorSLOP: being checked, waiting for review, passed, not
+  approved, couldn't be checked, or withdrawn. A pass means the release passed SLAPorSLOP's
+  checks; scanning can't catch everything. Anyone who can see the commit on GitHub sees it, also
+  when a release isn't approved; it never says why. It's off until you switch it on, covers only
+  releases you send after that, and nothing new is posted while the app isn't in the store.
+  GitHub asks you to accept one more permission for the App (Commit statuses); the panel tells you
+  where. Switching it off stops new ones; those on GitHub stay, except that a passed one is
+  corrected if SLAPorSLOP later withdraws that release. Changing the app's repository address
+  switches it off. If you don't see the panel, this SLAPorSLOP doesn't offer it yet.
 
 Changes that would have players download something different are checked before they happen.
 Switching to another approved release follows the same rule as updates: it goes through straight

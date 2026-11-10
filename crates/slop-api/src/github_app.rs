@@ -9,8 +9,11 @@
 //!   installation token instead of SLAPorSLOP's shared `GITHUB_TOKEN`, so SLAPorSLOP's request budget grows
 //!   with the number of makers instead of running out.
 //!
-//! The App only needs read access to a repository's contents and metadata. Without it configured
-//! (GITHUB_APP_*), everything works as before on the shared token.
+//! The App reads a repository's contents and metadata. The one thing it can write is a commit
+//! status (`commit_status.rs`): only with SLOP_GITHUB_STATUSES set, only with the App's "Commit
+//! statuses" permission accepted by the maker on GitHub, and only for apps whose maker switched
+//! it on. Without the App configured (GITHUB_APP_*), everything works as before on the shared
+//! token, which only ever reads.
 
 use std::collections::HashMap;
 
@@ -40,8 +43,16 @@ pub fn webhook_routes() -> Router<AppState> {
     Router::new().route("/github/webhook", post(webhook))
 }
 
-/// Installation tokens by installation ID, with when they expire. GitHub's last an hour.
-pub type TokenCache = tokio::sync::Mutex<HashMap<i64, (String, OffsetDateTime)>>;
+/// Installation tokens by installation ID: the token, when it ends (GitHub's last an hour), and
+/// whether GitHub said it may write commit statuses (None: GitHub didn't say).
+pub type TokenCache = tokio::sync::Mutex<HashMap<i64, (String, OffsetDateTime, Option<bool>)>>;
+
+/// An installation token, and what GitHub said it may do. Never logged, so no `Debug`.
+pub struct InstallationToken {
+    pub token: String,
+    /// Whether the token carries "statuses: write". None: the answer had no `permissions`.
+    pub statuses_write: Option<bool>,
+}
 
 /// The repository (`owner/repo`, lower case) a GitHub API URL is about, if any.
 fn repo_of_api_url(base: &Url, url: &Url) -> Option<String> {
@@ -71,14 +82,31 @@ pub fn install_url(app: &GithubAppConfig) -> String {
     format!("https://github.com/apps/{}/installations/new", app.slug)
 }
 
+/// The installation token for this repository (`owner/repo`) and nothing else: None when the App
+/// isn't configured or isn't installed on it. Never the shared token. `fresh` asks GitHub again
+/// instead of using a cached token (permissions are fixed when a token is made).
+pub async fn installation_only(
+    state: &AppState,
+    repo_path: &str,
+    fresh: bool,
+) -> anyhow::Result<Option<InstallationToken>> {
+    let Some(app) = &state.config.releases.github_app else {
+        return Ok(None);
+    };
+    let Some(id) = installation_for(state, repo_path).await? else {
+        return Ok(None);
+    };
+    Ok(Some(installation_token(state, app, id, fresh).await?))
+}
+
 /// The token for a GitHub API request: the repository's installation token when the App is
 /// installed there, else SLAPorSLOP's shared token. The flag says whether it's the shared one.
 pub async fn auth_for(state: &AppState, url: &Url) -> Option<(String, bool)> {
     let cfg = &state.config.releases;
     if let (Some(app), Some(repo)) = (&cfg.github_app, repo_of_api_url(&cfg.github_api_base, url)) {
         match installation_for(state, &repo).await {
-            Ok(Some(id)) => match installation_token(state, app, id).await {
-                Ok(token) => return Some((token, false)),
+            Ok(Some(id)) => match installation_token(state, app, id, false).await {
+                Ok(token) => return Some((token.token, false)),
                 Err(err) => tracing::warn!(%repo, error = %err, "GitHub App token"),
             },
             Ok(None) => {}
@@ -136,19 +164,32 @@ pub(crate) async fn org_token(state: &AppState, org: &str) -> anyhow::Result<Opt
         id: i64,
     }
     let inst: Installation = res.error_for_status()?.json().await?;
-    Ok(Some(installation_token(state, app, inst.id).await?))
+    Ok(Some(
+        installation_token(state, app, inst.id, false).await?.token,
+    ))
 }
 
+/// Whether a token answer's `permissions` let it write commit statuses. None: no `permissions`.
+fn statuses_write(permissions: Option<&HashMap<String, serde_json::Value>>) -> Option<bool> {
+    permissions.map(|p| p.get("statuses").and_then(|v| v.as_str()) == Some("write"))
+}
+
+/// The installation's token, from the cache unless `fresh` or it ends within five minutes.
 async fn installation_token(
     state: &AppState,
     app: &GithubAppConfig,
     id: i64,
-) -> anyhow::Result<String> {
+    fresh: bool,
+) -> anyhow::Result<InstallationToken> {
     let now = OffsetDateTime::now_utc();
-    if let Some((token, expires)) = state.github_app_tokens.lock().await.get(&id)
+    if !fresh
+        && let Some((token, expires, statuses)) = state.github_app_tokens.lock().await.get(&id)
         && *expires - now > Duration::minutes(5)
     {
-        return Ok(token.clone());
+        return Ok(InstallationToken {
+            token: token.clone(),
+            statuses_write: *statuses,
+        });
     }
 
     let jwt = app_jwt(app)?;
@@ -174,18 +215,25 @@ async fn installation_token(
     struct Token {
         token: String,
         expires_at: String,
+        /// Permission name to "read" or "write" (GitHub).
+        #[serde(default)]
+        permissions: Option<HashMap<String, serde_json::Value>>,
     }
     let token: Token = res.error_for_status()?.json().await?;
     let expires = OffsetDateTime::parse(
         &token.expires_at,
         &time::format_description::well_known::Rfc3339,
     )?;
+    let statuses = statuses_write(token.permissions.as_ref());
     state
         .github_app_tokens
         .lock()
         .await
-        .insert(id, (token.token.clone(), expires));
-    Ok(token.token)
+        .insert(id, (token.token.clone(), expires, statuses));
+    Ok(InstallationToken {
+        token: token.token,
+        statuses_write: statuses,
+    })
 }
 
 async fn forget_installation(state: &AppState, id: i64) -> sqlx::Result<()> {
@@ -336,6 +384,20 @@ mod tests {
         );
         assert_eq!(repo("https://api.github.com/user"), None);
         assert_eq!(repo("https://example.com/repos/octo/game"), None);
+    }
+
+    #[test]
+    fn permissions_say_whether_statuses_can_be_written() {
+        let perms = |v: serde_json::Value| -> HashMap<String, serde_json::Value> {
+            serde_json::from_value(v).unwrap()
+        };
+        let write = perms(serde_json::json!({ "contents": "read", "statuses": "write" }));
+        let read = perms(serde_json::json!({ "contents": "read", "statuses": "read" }));
+        let missing = perms(serde_json::json!({ "contents": "read", "metadata": "read" }));
+        assert_eq!(statuses_write(Some(&write)), Some(true));
+        assert_eq!(statuses_write(Some(&read)), Some(false));
+        assert_eq!(statuses_write(Some(&missing)), Some(false));
+        assert_eq!(statuses_write(None), None);
     }
 
     #[test]

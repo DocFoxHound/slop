@@ -1646,6 +1646,30 @@ export interface ManageOverview {
   pulse_required: boolean | null;
   /** A release has been approved, so the maker can move the app on to Beta or Released. */
   can_advance: boolean;
+  /** Absent unless results on GitHub can be offered for this app. */
+  commit_status?: CommitStatus;
+}
+
+/** SLAPorSLOP's result on the app's GitHub commits (Manage's "Results on GitHub"). */
+export interface CommitStatus {
+  on: boolean;
+  since: string | null;
+  /** SLAPorSLOP's GitHub App covers the repository. */
+  installed: boolean;
+  /** Whether GitHub lets the App write commit statuses there; null: not known yet. */
+  permission: boolean | null;
+  /** Where to install the App or review its request on GitHub. */
+  github_url: string;
+  in_store: boolean;
+  /** GitHub's last refusal: its HTTP status (0: no answer). */
+  problem: { code: number; at: string } | null;
+  last: {
+    commit_sha: string;
+    version: string | null;
+    state: "pending" | "success" | "failure" | "error";
+    description: string;
+    posted_at: string;
+  } | null;
 }
 
 export type ChangeRequest =
@@ -3119,6 +3143,13 @@ export const api = {
     request<ManageOverview>(
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/manage`,
+    ),
+  /** Switches results on GitHub on or off; `true` again checks GitHub once more. */
+  setCommitStatus: (slug: string, on: boolean) =>
+    request<CommitStatus>(
+      "PUT",
+      `/v1/apps/${encodeURIComponent(slug)}/commit-status`,
+      { on },
     ),
   /** "Check now" for a frozen app's repository: the freeze if it's still frozen. */
   repoCheck: (slug: string) =>

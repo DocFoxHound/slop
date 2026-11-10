@@ -393,6 +393,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
             github_oidc_issuer: fake.trim_end_matches('/').to_string(),
             github_token: None,
             github_app: None,
+            github_statuses: false,
             require_repo_owner: false,
             repo_token_key: Some([9; 32]),
             osv_api_base: fake.parse()?,

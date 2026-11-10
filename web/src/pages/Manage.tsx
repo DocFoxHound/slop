@@ -14,6 +14,7 @@ import { api, ApiError, type AppChange, type ManageOverview, type RatingGroup, t
 import { OffersPanel } from "../components/Offers";
 import { DemoPanel } from "../components/Demo";
 import { BugReportsPanel, ReleaseFeedbackPanel } from "../components/BugReports";
+import { CommitStatusPanel } from "../components/CommitStatus";
 import { HistoryPanel } from "../components/MakerHistory";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, playsInBrowser } from "../format";
@@ -94,6 +95,10 @@ export function Manage() {
         </div>
         <div className="maker-side">
           <UpdatesPanel key={settingsNonce} slug={slug} browser={browser} onChanged={overview.reload} />
+          {/* Its own key: two siblings with one key would leave the old Updates panel behind. */}
+          {m.commit_status && (
+            <CommitStatusPanel key={`commit-status-${settingsNonce}`} slug={slug} status={m.commit_status} onChanged={overview.reload} />
+          )}
           {/* A dedicated server goes public with its game, and has no donations of its own. */}
           {server ? null : app.data.private ? (
             <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} />

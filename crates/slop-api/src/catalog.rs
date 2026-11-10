@@ -2108,10 +2108,12 @@ async fn update_app(
             true,
         )?);
     }
+    let mut repo_moved = false;
     if let Some(repo_url) = &changes.repo_url {
         let repo_url = validate_repo_url_in(&state, repo_url)?;
         if !crate::manage::same_repo(&repo_url, &current_repo) {
             crate::repo_owner::check(&state, user.id, &repo_url, Some(app_id)).await?;
+            repo_moved = true;
         }
         // Once players have the app, moving it is checked first (manage.rs).
         if crate::manage::repo_locked(&mut tx, app_id).await?
@@ -2278,6 +2280,12 @@ async fn update_app(
     }
     qb.push(" where id = ").push_bind(app_id);
     qb.build().execute(&mut *tx).await?;
+    if repo_moved {
+        // Results on GitHub were agreed for the old repository: they end (commit_status.rs).
+        crate::commit_status::forget(&mut tx, app_id, &slug, &user.id.to_string())
+            .await
+            .map_err(ApiError::Internal)?;
+    }
 
     if let Some(tags) = &changes.tags {
         let tag_ids = resolve_tags(&state.db, tags).await?;

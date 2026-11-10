@@ -7,9 +7,13 @@ use crate::*;
 // Helpers
 
 /// Uses up an account's whole allowance of `action` (limits.rs), so the next one is refused.
-fn exhaust(app: &TestApp, user: Uuid, action: slop_api::limits::Action) {
+fn exhaust(app: &TestApp, user: Uuid, action: slop_api::limits::Action) -> usize {
     let now = std::time::Instant::now();
-    while app.state.account_limiter.take(user, action, now).is_ok() {}
+    let mut taken = 0;
+    while app.state.account_limiter.take(user, action, now).is_ok() {
+        taken += 1;
+    }
+    taken
 }
 
 /// The `error.message` of a refusal.
@@ -2700,12 +2704,22 @@ struct Answer {
     body: String,
 }
 
+/// A request to the fake GitHub that wasn't a GET.
+#[derive(Clone)]
+struct Sent {
+    method: String,
+    path: String,
+    auth: String,
+    body: String,
+}
+
 /// A stand-in for GitHub's API (and its OIDC keys) that answers each path the way the test set
 /// it, 404 otherwise, and remembers what it was asked.
 #[derive(Clone, Default)]
 struct FakeGh {
     seen: Seen,
     answers: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Answer>>>,
+    sent: std::sync::Arc<std::sync::Mutex<Vec<Sent>>>,
 }
 
 impl FakeGh {
@@ -2747,13 +2761,27 @@ impl FakeGh {
             .map(|(_, a)| a.clone())
             .collect()
     }
+
+    /// Every request that wasn't a GET for this path: its method, Authorization and body.
+    fn sent(&self, path: &str) -> Vec<Sent> {
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.path == path)
+            .cloned()
+            .collect()
+    }
 }
 
 async fn fake_gh() -> (String, FakeGh) {
     let gh = FakeGh::default();
     let state = gh.clone();
     let router = Router::new().fallback(
-        move |uri: axum::http::Uri, headers: axum::http::HeaderMap| {
+        move |method: axum::http::Method,
+              uri: axum::http::Uri,
+              headers: axum::http::HeaderMap,
+              body: axum::body::Bytes| {
             let gh = state.clone();
             async move {
                 let auth = headers
@@ -2765,6 +2793,14 @@ async fn fake_gh() -> (String, FakeGh) {
                     .lock()
                     .unwrap()
                     .push((uri.to_string(), auth.clone()));
+                if method != axum::http::Method::GET {
+                    gh.sent.lock().unwrap().push(Sent {
+                        method: method.to_string(),
+                        path: uri.path().to_string(),
+                        auth: auth.clone(),
+                        body: String::from_utf8_lossy(&body).into_owned(),
+                    });
+                }
                 // An answer for this path with this Authorization header, else for anyone.
                 let answer = {
                     let answers = gh.answers.lock().unwrap();
@@ -4648,6 +4684,13 @@ async fn github_ownership_is_proved_by_a_linked_owner_account(db: PgPool) {
             json!({ "token": format!("ghs_{id}"), "expires_at": "2099-01-01T00:00:00Z" }),
         );
     }
+    // A token answer that also lists its permissions (commit_status.rs reads them) works as before.
+    gh.json(
+        "/app/installations/77/access_tokens",
+        201,
+        json!({ "token": "ghs_77", "expires_at": "2099-01-01T00:00:00Z",
+                "permissions": { "members": "read", "metadata": "read", "statuses": "write" } }),
+    );
     gh.json("/user/42", 200, json!({ "id": 42, "login": "octo" }));
     gh.json(
         "/orgs/acme/memberships/octo",
@@ -4672,6 +4715,11 @@ async fn github_ownership_is_proved_by_a_linked_owner_account(db: PgPool) {
     );
     let a = ask(&ann, "acme/game").await;
     assert_eq!(a["ok"], true, "an owner of the organization: {a}");
+    assert_eq!(
+        gh.auths("/orgs/acme/memberships/octo"),
+        ["Bearer ghs_77"],
+        "asked with the organization's token"
+    );
     let a = ask(&ann, "bob/game").await;
     assert_eq!(
         (a["ok"].as_bool(), a["link"].as_str()),
@@ -6872,4 +6920,1949 @@ async fn a_fetch_started_again_resets_each_files_progress(db: PgPool) {
         "started again"
     );
     assert!(checked >= started);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Results on GitHub: SLAPorSLOP's result as a commit status (commit_status.rs)
+
+/// A commit of the test repository: 40 times `c` (a hex digit).
+fn commit(c: char) -> String {
+    c.to_string().repeat(40)
+}
+
+/// Where a commit's status is posted on octo/game.
+fn statuses_path(sha: &str) -> String {
+    format!("/repos/octo/game/statuses/{sha}")
+}
+
+/// A server that offers results on GitHub: the switch on, the GitHub App configured, and a shared
+/// token that must never be used for them.
+fn statuses_config(c: &mut Config) {
+    c.releases.github_app = Some(github_app_config());
+    c.releases.github_statuses = true;
+    c.releases.github_token = Some("shared".into());
+}
+
+/// The App installed on octo/game (installation 78, whose tokens may write commit statuses), and
+/// a maker whose public app `game` there is listed in Beta. Returns the maker's ID and cookie.
+async fn statuses_setup(app: &TestApp, gh: &FakeGh) -> (Uuid, String) {
+    sqlx::query(
+        "insert into github_installations (repo_path, installation_id) values ('octo/game', 78)",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    statuses_token(
+        gh,
+        Some(json!({ "contents": "read", "metadata": "read", "statuses": "write" })),
+    );
+    let (maker_id, maker) = github_app(app).await;
+    sqlx::query("update apps set status = 'listed' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    (maker_id, maker)
+}
+
+/// Installation 78's token answer, with these permissions (None: no `permissions` at all).
+fn statuses_token(gh: &FakeGh, permissions: Option<Value>) {
+    let mut answer = json!({ "token": "ghs_install78", "expires_at": "2099-01-01T00:00:00Z" });
+    if let Some(p) = permissions {
+        answer["permissions"] = p;
+    }
+    gh.json("/app/installations/78/access_tokens", 201, answer);
+}
+
+struct Statuses {
+    app: TestApp,
+    gh: FakeGh,
+    gh_base: String,
+    maker_id: Uuid,
+    maker: String,
+}
+
+async fn statuses_app(db: PgPool) -> Statuses {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, statuses_config).await;
+    let (maker_id, maker) = statuses_setup(&app, &gh).await;
+    Statuses {
+        app,
+        gh,
+        gh_base,
+        maker_id,
+        maker,
+    }
+}
+
+/// Switches results on GitHub on or off for `slug`.
+fn switch_statuses(cookie: &str, slug: &str, on: bool) -> Req {
+    req(Method::PUT, format!("/v1/apps/{slug}/commit-status"))
+        .cookie(cookie)
+        .json(json!({ "on": on }))
+}
+
+/// The Manage answer's `commit_status`, or None when the key is absent.
+async fn managed_status(app: &TestApp, cookie: &str, slug: &str) -> Option<Value> {
+    let res = app
+        .send(req(Method::GET, format!("/v1/apps/{slug}/manage")).cookie(cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let manage = body_json(res).await;
+    assert!(manage["repo_url"].is_string(), "{manage}");
+    manage.get("commit_status").cloned()
+}
+
+/// A release of `slug` on `sha` in `status`, sent now. Returns its ID.
+async fn release_on(app: &TestApp, slug: &str, version: &str, sha: &str, status: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by)
+         select $1, id, $2, $3, $4::release_status, maker_id from apps where slug = $5",
+    )
+    .bind(id)
+    .bind(version)
+    .bind(sha)
+    .bind(status)
+    .bind(slug)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    id
+}
+
+/// Moves a release to `status` in the table, as any path that changes it does.
+async fn set_release(app: &TestApp, id: Uuid, status: &str) {
+    sqlx::query("update releases set status = $2::release_status where id = $1")
+        .bind(id)
+        .bind(status)
+        .execute(&app.db)
+        .await
+        .unwrap();
+}
+
+async fn post_round(app: &TestApp) -> usize {
+    slop_api::commit_status::run_once(&app.state).await.unwrap()
+}
+
+/// Every commit status sent to the fake GitHub, oldest first.
+fn statuses_sent(gh: &FakeGh) -> Vec<Sent> {
+    gh.sent
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|s| s.path.contains("/statuses/"))
+        .cloned()
+        .collect()
+}
+
+/// (state, description) of a status sent.
+fn said(sent: &Sent) -> (String, String) {
+    assert_eq!(sent.method, "POST");
+    let body: Value = serde_json::from_str(&sent.body).unwrap();
+    (
+        body["state"].as_str().unwrap().to_string(),
+        body["description"].as_str().unwrap().to_string(),
+    )
+}
+
+/// What the newest status sent on `sha` said.
+fn last_said(gh: &FakeGh, sha: &str) -> (String, String) {
+    said(
+        gh.sent(&statuses_path(sha))
+            .last()
+            .expect("a status was sent"),
+    )
+}
+
+fn says(state: &str, description: &str) -> (String, String) {
+    (state.to_string(), description.to_string())
+}
+
+/// The app's `commit_statuses` row for `sha`: (attempts, last code, stopped, seconds until the
+/// next try).
+async fn delivery(app: &TestApp, sha: &str) -> (i32, Option<i32>, bool, Option<f64>) {
+    sqlx::query_as(
+        "select attempts, last_code, stopped_at is not null,
+                extract(epoch from next_attempt_at - now())::float8
+         from commit_statuses where commit_sha = $1",
+    )
+    .bind(sha)
+    .fetch_one(&app.db)
+    .await
+    .unwrap()
+}
+
+/// Seconds until the app's `wait_until`, if set.
+async fn waits_for(app: &TestApp, slug: &str) -> Option<f64> {
+    sqlx::query_scalar(
+        "select extract(epoch from s.wait_until - now())::float8
+         from app_commit_status s join apps a on a.id = s.app_id where a.slug = $1",
+    )
+    .bind(slug)
+    .fetch_one(&app.db)
+    .await
+    .unwrap()
+}
+
+/// The details of every `app.commit_status` audit row, oldest first.
+async fn status_audits(app: &TestApp) -> Vec<Value> {
+    sqlx::query_scalar(
+        "select detail from audit_log where action = 'app.commit_status' order by id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap()
+}
+
+/// One JSON-RPC call to the makers' MCP endpoint.
+async fn maker_mcp(app: &TestApp, auth: &str, method: &str, params: Value) -> Value {
+    let res = app
+        .send(
+            req(Method::POST, "/v1/maker/mcp")
+                .header("authorization", auth.to_string())
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    body_json(res).await
+}
+
+/// On a server that doesn't offer results on GitHub, nothing about them shows: no Manage key, a
+/// 404 from the route either way, no agent tool, and the worker posts and records nothing.
+async fn nothing_offered(app: &TestApp, gh: &FakeGh, maker: &str, agent: &str) {
+    assert_eq!(managed_status(app, maker, "game").await, None);
+    for on in [true, false] {
+        let res = app.send(switch_statuses(maker, "game", on)).await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            body_json(res).await,
+            json!({ "error": { "code": "not_found", "message": "not found" } })
+        );
+    }
+    // The address doesn't exist there: signed out, with any body, or another method, the same 404.
+    for res in [
+        app.send(req(Method::PUT, "/v1/apps/game/commit-status").json(json!({ "on": true })))
+            .await,
+        app.send(
+            req(Method::PUT, "/v1/apps/game/commit-status")
+                .cookie(maker)
+                .json(json!({ "everywhere": true })),
+        )
+        .await,
+        app.send(req(Method::GET, "/v1/apps/game/commit-status").cookie(maker))
+            .await,
+    ] {
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            body_json(res).await,
+            json!({ "error": { "code": "not_found", "message": "not found" } })
+        );
+    }
+    let tools = maker_mcp(app, agent, "tools/list", json!({})).await;
+    let tools = tools["result"]["tools"].as_array().unwrap();
+    assert!(tools.len() >= 45);
+    assert!(!tools.iter().any(|t| t["name"] == "set_commit_status"));
+    let call = maker_mcp(
+        app,
+        agent,
+        "tools/call",
+        json!({ "name": "set_commit_status", "arguments": { "slug": "game", "on": true } }),
+    )
+    .await;
+    assert_eq!(call["error"]["message"], "unknown tool", "{call}");
+    assert_eq!(post_round(app).await, 0);
+    assert!(statuses_sent(gh).is_empty());
+    let rows: i64 = sqlx::query_scalar(
+        "select (select count(*) from app_commit_status) + (select count(*) from commit_statuses)",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(rows, 0);
+}
+
+/// Results on GitHub don't exist until the owner switches them on with the GitHub App configured,
+/// and never in the simulation sandbox.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn commit_statuses_dont_exist_until_the_server_switches_them_on(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let off = app_on(db.clone(), &gh_base, |c| {
+        statuses_config(c);
+        c.releases.github_statuses = false;
+    })
+    .await;
+    let (_, maker) = statuses_setup(&off, &gh).await;
+    release_on(&off, "game", "1.0.0", &commit('a'), "awaiting_review").await;
+    gh.json(&statuses_path(&commit('a')), 201, json!({ "id": 1 }));
+    let res = off
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&maker)
+                .json(json!({ "name": "Agent", "scope": "publish" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let agent = format!(
+        "Bearer {}",
+        body_json(res).await["secret"].as_str().unwrap()
+    );
+
+    nothing_offered(&off, &gh, &maker, &agent).await;
+    let sandbox = app_on(db.clone(), &gh_base, |c| {
+        statuses_config(c);
+        c.simulation = true;
+    })
+    .await;
+    nothing_offered(&sandbox, &gh, &maker, &agent).await;
+    let no_app = app_on(db.clone(), &gh_base, |c| {
+        statuses_config(c);
+        c.releases.github_app = None;
+    })
+    .await;
+    nothing_offered(&no_app, &gh, &maker, &agent).await;
+
+    // The same app on a server that offers it: the panel is there, so the above was the switch.
+    let on = app_on(db, &gh_base, statuses_config).await;
+    let status = managed_status(&on, &maker, "game").await.unwrap();
+    assert_eq!(status["on"], false);
+}
+
+/// The maker switches it on and off for their own public app on GitHub; Check again asks GitHub
+/// again; nobody else can; it's offered only where it can work, and switching off always works.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_switch_commit_statuses_on_for_their_app(db: PgPool) {
+    let Statuses {
+        app,
+        gh,
+        gh_base,
+        maker_id,
+        maker,
+    } = statuses_app(db.clone()).await;
+    let token_path = "/app/installations/78/access_tokens";
+
+    let status = managed_status(&app, &maker, "game").await.unwrap();
+    assert_eq!(
+        status,
+        json!({
+            "on": false, "since": null, "installed": true, "permission": null,
+            "github_url": "https://github.com/apps/slop-test/installations/new",
+            "in_store": true, "problem": null, "last": null
+        })
+    );
+    assert_eq!(gh.hits(token_path), 0, "the Manage page doesn't ask GitHub");
+
+    // On: GitHub's fresh token says the permission was accepted.
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let on = body_json(res).await;
+    assert_eq!(
+        (on["on"].as_bool(), on["permission"].as_bool()),
+        (Some(true), Some(true))
+    );
+    assert!(on["since"].is_string(), "{on}");
+    assert_eq!(managed_status(&app, &maker, "game").await.unwrap(), on);
+    assert_eq!(gh.hits(token_path), 1);
+    assert_eq!(
+        status_audits(&app).await,
+        [json!({ "app": "game", "on": true, "by_agent": false })]
+    );
+    // On again is Check again: GitHub is asked again, nothing new in the audit log.
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["since"], on["since"]);
+    assert_eq!(gh.hits(token_path), 2);
+    assert_eq!(status_audits(&app).await.len(), 1);
+    // Off: the row stays, switched off.
+    let res = app.send(switch_statuses(&maker, "game", false)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let off = body_json(res).await;
+    assert_eq!(
+        (&off["on"], &off["since"], &off["permission"]),
+        (&json!(false), &Value::Null, &Value::Null)
+    );
+    let switched_off: bool = sqlx::query_scalar(
+        "select switched_off_at is not null from app_commit_status s join apps a on a.id = s.app_id
+         where a.slug = 'game'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(switched_off);
+    assert_eq!(
+        status_audits(&app).await[1],
+        json!({ "app": "game", "on": false, "by_agent": false })
+    );
+    // Off again changes nothing.
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", false)).await,
+        StatusCode::OK
+    );
+    assert_eq!(status_audits(&app).await.len(), 2);
+
+    // Nobody else, and not signed out.
+    let (_, otto) = app.user("Otto Other", "US").await;
+    assert_eq!(
+        managed_status_status(&app, &otto, "game").await,
+        StatusCode::NOT_FOUND
+    );
+    for on in [true, false] {
+        assert_eq!(
+            status_of(&app, switch_statuses(&otto, "game", on)).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+    let res = app
+        .send(req(Method::PUT, "/v1/apps/game/commit-status").json(json!({ "on": true })))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::PUT, "/v1/apps/game/commit-status")
+                .cookie(&maker)
+                .json(json!({ "on": true, "everywhere": true }))
+        )
+        .await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "unknown fields are refused"
+    );
+
+    // Not offered for a private app or a repository outside GitHub.
+    for (slug, repo, visibility) in [
+        ("hidden", "https://github.com/octo/hidden", "private"),
+        ("elsewhere", "https://gitlab.com/octo/elsewhere", "public"),
+    ] {
+        sqlx::query(
+            "insert into apps (id, slug, title, summary, kind, stage, status, visibility, maker_id,
+                               repo_url, license_spdx, platforms)
+             values ($1, $2, $2, 'An app', 'game', 'beta', 'listed', $3, $4, $5, 'MIT', '{windows}')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(slug)
+        .bind(visibility)
+        .bind(maker_id)
+        .bind(repo)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into github_installations (repo_path, installation_id) values ($1, 78)
+             on conflict do nothing",
+        )
+        .bind(format!("octo/{slug}"))
+        .execute(&app.db)
+        .await
+        .unwrap();
+        assert_eq!(managed_status(&app, &maker, slug).await, None, "{slug}");
+        assert_eq!(
+            status_of(&app, switch_statuses(&maker, slug, true)).await,
+            StatusCode::NOT_FOUND,
+            "{slug}"
+        );
+    }
+    // Without the App installed the panel says so (and where to install it); switching on
+    // explains what to do.
+    sqlx::query("delete from github_installations where repo_path = 'octo/game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let status = managed_status(&app, &maker, "game").await.unwrap();
+    assert_eq!(
+        (&status["on"], &status["installed"]),
+        (&json!(false), &json!(false))
+    );
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        error_message(res).await,
+        "SLAPorSLOP's GitHub App isn't installed on this repository: install it on GitHub, then try again"
+    );
+    // Uninstalled after it was switched on: the same, and switching off still works.
+    sqlx::query(
+        "insert into github_installations (repo_path, installation_id) values ('octo/game', 78)",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    sqlx::query("delete from github_installations where repo_path = 'octo/game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let status = managed_status(&app, &maker, "game").await.unwrap();
+    assert_eq!(
+        (&status["on"], &status["installed"]),
+        (&json!(true), &json!(false))
+    );
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let res = app.send(switch_statuses(&maker, "game", false)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["on"], false);
+    // Switching off works after the app left the store too.
+    sqlx::query(
+        "insert into github_installations (repo_path, installation_id) values ('octo/game', 78)",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    sqlx::query("update apps set status = 'delisted' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(switch_statuses(&maker, "game", false)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let off = body_json(res).await;
+    assert_eq!(
+        (&off["on"], &off["in_store"]),
+        (&json!(false), &json!(false))
+    );
+    sqlx::query("update apps set status = 'listed' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // The 21st change in an hour waits; switching off never does. Six switch-ons above counted
+    // (those refused before the limit, as 404s, didn't).
+    assert_eq!(
+        6 + exhaust(&app, maker_id, slop_api::limits::Action::CommitStatus),
+        20,
+        "20 changes an hour"
+    );
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        error_message(res).await,
+        "too many commit status changes for now: try again in a while"
+    );
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", false)).await,
+        StatusCode::OK
+    );
+
+    // The repository must still be the maker's (repo_owner.rs): someone else's is refused with
+    // that check's own words, and nothing is switched on.
+    let strict = app_on(db, &gh_base, |c| {
+        statuses_config(c);
+        c.releases.require_repo_owner = true;
+    })
+    .await;
+    let (sue_id, sue) = strict.user("Sue Second", "US").await;
+    link_identity(&strict, sue_id, "github", "42").await;
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, status, maker_id, repo_url,
+                           license_spdx, platforms)
+         values ($1, 'bobs', 'Bobs', 'An app', 'game', 'beta', 'listed', $2,
+                 'https://github.com/bob/game', 'MIT', '{windows}')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(sue_id)
+    .execute(&strict.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into github_installations (repo_path, installation_id) values ('bob/game', 78)",
+    )
+    .execute(&strict.db)
+    .await
+    .unwrap();
+    gh.json(
+        "/repos/bob/game",
+        200,
+        json!({ "private": false, "id": 9043, "owner": { "login": "bob", "id": 43, "type": "User" } }),
+    );
+    let res = strict.send(switch_statuses(&sue, "bobs", true)).await;
+    let refused = body_json(res).await;
+    assert_eq!(refused["error"]["field"], "repo_url", "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("bob owns this one"),
+        "{refused}"
+    );
+    let rows: i64 = sqlx::query_scalar(
+        "select count(*) from app_commit_status s join apps a on a.id = s.app_id where a.slug = 'bobs'",
+    )
+    .fetch_one(&strict.db)
+    .await
+    .unwrap();
+    assert_eq!(rows, 0);
+}
+
+/// The status of the Manage page for `cookie`.
+async fn managed_status_status(app: &TestApp, cookie: &str, slug: &str) -> StatusCode {
+    status_of(
+        app,
+        req(Method::GET, format!("/v1/apps/{slug}/manage")).cookie(cookie),
+    )
+    .await
+}
+
+/// Each state of a release sent after switching on is posted once, with the installation token
+/// only, in fixed words that never carry the reason.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn each_release_state_is_posted_once_with_the_installation_token(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let sha = commit('a');
+    let id = release_on(&app, "game", "1.0.0", &sha, "fetching").await;
+    sqlx::query("update releases set status_reason = 'A private note for the maker' where id = $1")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    gh.json(&statuses_path(&sha), 201, json!({ "id": 1 }));
+
+    assert_eq!(post_round(&app).await, 1);
+    let sent = gh.sent(&statuses_path(&sha));
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].method, "POST");
+    assert_eq!(sent[0].auth, "Bearer ghs_install78");
+    assert_eq!(
+        serde_json::from_str::<Value>(&sent[0].body).unwrap(),
+        json!({
+            "state": "pending",
+            "description": "SLAPorSLOP is checking this release",
+            "context": "SLAPorSLOP",
+            "target_url": "http://localhost:8080/app/game"
+        })
+    );
+    // Nothing changed, nothing sent.
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(gh.sent(&statuses_path(&sha)).len(), 1);
+
+    for (status, state, sentence) in [
+        (
+            "awaiting_review",
+            "pending",
+            "Checked by SLAPorSLOP: waiting for a person's review",
+        ),
+        ("approved", "success", "Passed SLAPorSLOP's checks"),
+        ("rejected", "failure", "Not approved by SLAPorSLOP"),
+        ("failed", "error", "SLAPorSLOP couldn't check this release"),
+        (
+            "revoked",
+            "failure",
+            "Withdrawn by SLAPorSLOP after it was approved",
+        ),
+        ("withdrawn", "error", "Withdrawn by the maker before review"),
+    ] {
+        set_release(&app, id, status).await;
+        assert_eq!(post_round(&app).await, 1, "{status}");
+        assert_eq!(last_said(&gh, &sha), says(state, sentence), "{status}");
+        assert_eq!(post_round(&app).await, 0, "{status} once");
+    }
+    let sent = statuses_sent(&gh);
+    assert_eq!(sent.len(), 7);
+    assert!(sent.iter().all(|s| s.auth == "Bearer ghs_install78"));
+    assert!(!sent.iter().any(|s| s.body.contains("private note")));
+    let (attempts, code, stopped, next) = delivery(&app, &sha).await;
+    assert_eq!((attempts, code, stopped, next), (0, Some(201), false, None));
+    // The panel shows the last one.
+    let status = managed_status(&app, &maker, "game").await.unwrap();
+    let last = &status["last"];
+    assert_eq!(
+        (
+            &last["commit_sha"],
+            &last["version"],
+            &last["state"],
+            &last["description"]
+        ),
+        (
+            &json!(sha),
+            &json!("1.0.0"),
+            &json!("error"),
+            &json!("Withdrawn by the maker before review")
+        )
+    );
+    assert!(last["posted_at"].is_string());
+}
+
+/// Only releases sent after the maker switched it on get a status.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn releases_from_before_the_switch_get_no_status(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    let (before, after) = (commit('b'), commit('c'));
+    let old = release_on(&app, "game", "0.9.0", &before, "awaiting_review").await;
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    release_on(&app, "game", "1.0.0", &after, "fetching").await;
+    for sha in [&before, &after] {
+        gh.json(&statuses_path(sha), 201, json!({ "id": 1 }));
+    }
+    assert_eq!(post_round(&app).await, 1);
+    assert!(gh.sent(&statuses_path(&before)).is_empty());
+    assert_eq!(gh.sent(&statuses_path(&after)).len(), 1);
+    set_release(&app, old, "approved").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert!(gh.sent(&statuses_path(&before)).is_empty());
+}
+
+/// Releases sharing a commit share its one status: the newest that isn't withdrawn speaks.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn two_releases_on_one_commit_share_one_status(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let sha = commit('d');
+    gh.json(&statuses_path(&sha), 201, json!({ "id": 1 }));
+    release_on(&app, "game", "1.0.0", &sha, "approved").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(
+        last_said(&gh, &sha),
+        says("success", "Passed SLAPorSLOP's checks")
+    );
+    let second = release_on(&app, "game", "1.0.1", &sha, "fetching").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(
+        last_said(&gh, &sha),
+        says("pending", "SLAPorSLOP is checking this release")
+    );
+    set_release(&app, second, "withdrawn").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(
+        last_said(&gh, &sha),
+        says("success", "Passed SLAPorSLOP's checks")
+    );
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(gh.sent(&statuses_path(&sha)).len(), 3);
+
+    // A commit whose only release was withdrawn.
+    let alone = commit('e');
+    gh.json(&statuses_path(&alone), 201, json!({ "id": 2 }));
+    release_on(&app, "game", "1.1.0", &alone, "withdrawn").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(
+        last_said(&gh, &alone),
+        says("error", "Withdrawn by the maker before review")
+    );
+}
+
+/// The staff command line approves and revokes in its own process with only the database; the
+/// worker still posts both.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_decisions_reach_github_without_a_hook(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let sha = commit('f');
+    gh.json(&statuses_path(&sha), 201, json!({ "id": 1 }));
+    let id = release_on(&app, "game", "1.0.0", &sha, "awaiting_review").await;
+    sqlx::query(
+        "insert into release_files (release_id, platform, kind, url, file_name, exec, size_bytes,
+                                    sha256, scan_result)
+         values ($1, 'windows', 'archive',
+                 'https://github.com/octo/game/releases/download/v1.0.0/game.zip', 'game.zip',
+                 'game.exe', 10, repeat('b', 64), 'skipped')",
+    )
+    .bind(id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(
+        last_said(&gh, &sha),
+        says(
+            "pending",
+            "Checked by SLAPorSLOP: waiting for a person's review"
+        )
+    );
+
+    admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
+        .await
+        .unwrap();
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(
+        last_said(&gh, &sha),
+        says("success", "Passed SLAPorSLOP's checks")
+    );
+    admin::revoke(&app.db, id, "rev", "It phones home.")
+        .await
+        .unwrap();
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(
+        last_said(&gh, &sha),
+        says("failure", "Withdrawn by SLAPorSLOP after it was approved")
+    );
+    assert!(!statuses_sent(&gh).iter().any(|s| s.body.contains("phones")));
+}
+
+/// Nothing is posted for an app outside the store (a draft, private, delisted, a server whose game
+/// left it); once it's in, the state it has by then is posted once.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn nothing_is_posted_for_apps_outside_the_store(db: PgPool) {
+    let Statuses {
+        app,
+        gh,
+        maker_id,
+        maker,
+        ..
+    } = statuses_app(db).await;
+    let set_app = |slug: &'static str, set: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "update apps set {set} where slug = $1"
+            )))
+            .bind(slug)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    set_app("game", "status = 'draft'").await;
+    // A draft can be switched on; the panel says it isn't in the store.
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["in_store"], false);
+    let first = commit('1');
+    gh.json(&statuses_path(&first), 201, json!({ "id": 1 }));
+    let id = release_on(&app, "game", "1.0.0", &first, "fetching").await;
+    assert_eq!(post_round(&app).await, 0);
+    set_release(&app, id, "approved").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert!(statuses_sent(&gh).is_empty());
+    // Listed: only the state it has by then.
+    set_app("game", "status = 'listed'").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(gh.sent(&statuses_path(&first)).len(), 1);
+    assert_eq!(
+        last_said(&gh, &first),
+        says("success", "Passed SLAPorSLOP's checks")
+    );
+    assert_eq!(
+        managed_status(&app, &maker, "game").await.unwrap()["in_store"],
+        true
+    );
+
+    // Delisted: nothing more, and a pass whose release is still approved stays as it is, also when
+    // a newer release on its commit is being checked.
+    set_app("game", "status = 'delisted'").await;
+    release_on(&app, "game", "1.0.1", &first, "fetching").await;
+    let second = commit('2');
+    gh.json(&statuses_path(&second), 201, json!({ "id": 2 }));
+    release_on(&app, "game", "1.1.0", &second, "fetching").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(statuses_sent(&gh).len(), 1);
+    assert_eq!(
+        managed_status(&app, &maker, "game").await.unwrap()["in_store"],
+        false
+    );
+    // Made private: nothing more. While it's on, the panel stays so it can be switched off.
+    set_app("game", "status = 'listed', visibility = 'private'").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(statuses_sent(&gh).len(), 1);
+    let status = managed_status(&app, &maker, "game").await.unwrap();
+    assert_eq!(
+        (&status["on"], &status["in_store"]),
+        (&json!(true), &json!(false))
+    );
+    // Once off, a private app has no panel at all.
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", false)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(managed_status(&app, &maker, "game").await, None);
+    set_app("game", "visibility = 'public'").await;
+
+    // A dedicated server is in the store only while its game is.
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, status, maker_id, repo_url,
+                           license_spdx, platforms, parent_app_id, branch_kind)
+         select $1, 'game-server', 'Game server', 'A server', 'game', 'beta', 'listed', $2,
+                'https://github.com/octo/game-server', 'MIT', '{windows}', id, 'server'
+         from apps where slug = 'game'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into github_installations (repo_path, installation_id) values ('octo/game-server', 78)",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game-server", true)).await,
+        StatusCode::OK
+    );
+    let server_sha = commit('3');
+    let server_path = format!("/repos/octo/game-server/statuses/{server_sha}");
+    gh.json(&server_path, 201, json!({ "id": 3 }));
+    release_on(&app, "game-server", "1.0.0", &server_sha, "awaiting_review").await;
+    set_app("game", "status = 'delisted'").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert!(gh.sent(&server_path).is_empty());
+    set_app("game", "status = 'listed'").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(gh.sent(&server_path).len(), 1);
+}
+
+/// GitHub refusing a status (a 4xx, or a 3xx for a moved repository) stops that commit, and the
+/// panel says why; other commits are still tried; Check again tries it once more.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn github_refusing_a_status_stops_that_commit(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let refusals = [(403, '1'), (404, '2'), (422, '3'), (301, '4')];
+    for (code, c) in refusals {
+        let sha = commit(c);
+        gh.json(&statuses_path(&sha), code, json!({ "message": "No" }));
+        release_on(
+            &app,
+            "game",
+            &format!("1.0.{code}"),
+            &sha,
+            "awaiting_review",
+        )
+        .await;
+        assert_eq!(post_round(&app).await, 1, "{code}");
+        for _ in 0..2 {
+            assert_eq!(post_round(&app).await, 0, "{code}");
+        }
+        assert_eq!(gh.sent(&statuses_path(&sha)).len(), 1, "{code}");
+        assert_eq!(
+            delivery(&app, &sha).await,
+            (0, Some(code as i32), true, None)
+        );
+        let problem = &managed_status(&app, &maker, "game").await.unwrap()["problem"];
+        assert_eq!(problem["code"], code, "{code}");
+        assert!(problem["at"].is_string());
+    }
+    // A refused commit isn't tried again by itself, however long ago (only a correction of a
+    // "Passed" is).
+    sqlx::query("update commit_statuses set stopped_at = now() - interval '2 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(post_round(&app).await, 0);
+    // A later release on another commit is still posted, and clears the problem.
+    let fine = commit('5');
+    gh.json(&statuses_path(&fine), 201, json!({ "id": 5 }));
+    release_on(&app, "game", "1.1.0", &fine, "fetching").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(gh.sent(&statuses_path(&fine)).len(), 1);
+    assert!(managed_status(&app, &maker, "game").await.unwrap()["problem"].is_null());
+
+    // Check again: every stopped commit is tried once more.
+    let refused = commit('1');
+    gh.json(&statuses_path(&refused), 201, json!({ "id": 1 }));
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(body_json(res).await["problem"].is_null());
+    assert_eq!(post_round(&app).await, 4);
+    assert_eq!(gh.sent(&statuses_path(&refused)).len(), 2);
+    assert_eq!(delivery(&app, &refused).await, (0, Some(201), false, None));
+    for (code, c) in &refusals[1..] {
+        assert_eq!(gh.sent(&statuses_path(&commit(*c))).len(), 2, "{code}");
+    }
+    assert_eq!(post_round(&app).await, 0);
+
+    // One press tries the newest 20 stopped commits, not every one there is: here the three that
+    // GitHub refused again just now, and the 17 newest of 22 stopped earlier.
+    let stopped = || {
+        let db = app.db.clone();
+        async move {
+            let rows: Vec<String> = sqlx::query_scalar(
+                "select commit_sha from commit_statuses where stopped_at is not null
+                 order by commit_sha",
+            )
+            .fetch_all(&db)
+            .await
+            .unwrap();
+            rows
+        }
+    };
+    let mut again: Vec<String> = refusals[1..].iter().map(|(_, c)| commit(*c)).collect();
+    again.sort();
+    assert_eq!(stopped().await, again);
+    sqlx::query(
+        "insert into commit_statuses (app_id, commit_sha, stopped_at, last_code)
+         select a.id, lpad(to_hex(n), 40, '0'), now() - make_interval(mins => n), 422
+         from apps a, generate_series(1, 22) n where a.slug = 'game'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let oldest: Vec<String> = (18..=22).map(|n| format!("{n:0>40x}")).collect();
+    assert_eq!(stopped().await, oldest, "the five stopped longest ago");
+}
+
+/// GitHub's errors and no answer are tried again after 1 minute, 10 minutes, an hour and 6
+/// hours, then the commit stops; an accepted status starts the count again; a token refused twice
+/// counts as a failure.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn github_failing_is_retried_with_longer_waits_then_stops(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let due_now = |sha: String| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(
+                "update commit_statuses set next_attempt_at = now() - interval '1 second'
+                 where commit_sha = $1",
+            )
+            .bind(sha)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    let sha = commit('6');
+    gh.json(
+        &statuses_path(&sha),
+        502,
+        json!({ "message": "Server Error" }),
+    );
+    release_on(&app, "game", "1.0.0", &sha, "awaiting_review").await;
+    for (attempt, wait) in [(1, 60.0), (2, 600.0), (3, 3600.0), (4, 21600.0)] {
+        assert_eq!(post_round(&app).await, 1, "try {attempt}");
+        let (attempts, code, stopped, next) = delivery(&app, &sha).await;
+        assert_eq!((attempts, code, stopped), (attempt, Some(502), false));
+        let next = next.unwrap();
+        assert!(
+            (wait - 10.0..=wait + 1.0).contains(&next),
+            "{attempt}: {next}"
+        );
+        assert_eq!(post_round(&app).await, 0, "not due yet");
+        due_now(sha.clone()).await;
+    }
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(delivery(&app, &sha).await, (5, Some(502), true, None));
+    assert_eq!(gh.sent(&statuses_path(&sha)).len(), 5);
+    assert_eq!(
+        managed_status(&app, &maker, "game").await.unwrap()["problem"]["code"],
+        502
+    );
+    due_now(sha.clone()).await;
+    assert_eq!(post_round(&app).await, 0, "stopped");
+
+    // An accepted status before the fifth try starts the count again.
+    let flaky = commit('7');
+    gh.json(&statuses_path(&flaky), 503, json!({}));
+    release_on(&app, "game", "1.1.0", &flaky, "awaiting_review").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(delivery(&app, &flaky).await.0, 1);
+    gh.json(&statuses_path(&flaky), 201, json!({ "id": 7 }));
+    due_now(flaky.clone()).await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(delivery(&app, &flaky).await, (0, Some(201), false, None));
+    assert!(managed_status(&app, &maker, "game").await.unwrap()["problem"].is_null());
+
+    // 401: once more with a new token; refused again, it's a failed try.
+    let token_path = "/app/installations/78/access_tokens";
+    let unauthorized = commit('8');
+    gh.json(
+        &statuses_path(&unauthorized),
+        401,
+        json!({ "message": "Bad credentials" }),
+    );
+    release_on(&app, "game", "1.2.0", &unauthorized, "awaiting_review").await;
+    let tokens = gh.hits(token_path);
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(gh.sent(&statuses_path(&unauthorized)).len(), 2);
+    assert_eq!(
+        gh.hits(token_path),
+        tokens + 1,
+        "a new token for the second try"
+    );
+    let (attempts, code, stopped, next) = delivery(&app, &unauthorized).await;
+    assert_eq!((attempts, code, stopped), (1, Some(401), false));
+    assert!(next.is_some());
+
+    // The cached token ended early: the second try carries the fresh one, and is accepted.
+    let renewed = commit('9');
+    gh.json(&statuses_path(&renewed), 201, json!({ "id": 9 }));
+    gh.json(
+        &format!("{} Bearer ghs_install78", statuses_path(&renewed)),
+        401,
+        json!({ "message": "Bad credentials" }),
+    );
+    gh.json(
+        token_path,
+        201,
+        json!({ "token": "ghs_fresh78", "expires_at": "2099-01-01T00:00:00Z",
+                "permissions": { "contents": "read", "statuses": "write" } }),
+    );
+    release_on(&app, "game", "1.3.0", &renewed, "awaiting_review").await;
+    assert_eq!(post_round(&app).await, 1);
+    let auths: Vec<String> = gh
+        .sent(&statuses_path(&renewed))
+        .into_iter()
+        .map(|s| s.auth)
+        .collect();
+    assert_eq!(auths, ["Bearer ghs_install78", "Bearer ghs_fresh78"]);
+    assert_eq!(delivery(&app, &renewed).await, (0, Some(201), false, None));
+    assert_eq!(
+        last_said(&gh, &renewed),
+        says(
+            "pending",
+            "Checked by SLAPorSLOP: waiting for a person's review"
+        )
+    );
+}
+
+/// GitHub's rate-limit answers make the app wait as long as GitHub says; nothing stops and
+/// nothing counts as a try.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn rate_limit_answers_are_waited_out(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let (one, two) = (commit('9'), commit('a'));
+    for sha in [&one, &two] {
+        gh.set(
+            &statuses_path(sha),
+            403,
+            &[("x-ratelimit-remaining", "0"), ("retry-after", "120")],
+            r#"{"message":"API rate limit exceeded"}"#,
+        );
+    }
+    release_on(&app, "game", "1.0.0", &one, "awaiting_review").await;
+    release_on(&app, "game", "1.1.0", &two, "awaiting_review").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(
+        statuses_sent(&gh).len(),
+        1,
+        "no second request in the round"
+    );
+    let wait = waits_for(&app, "game").await.unwrap();
+    assert!((110.0..=121.0).contains(&wait), "{wait}");
+    for sha in [&one, &two] {
+        let (attempts, _, stopped, next) = delivery(&app, sha).await;
+        assert_eq!((attempts, stopped, next), (0, false, None));
+    }
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(statuses_sent(&gh).len(), 1);
+    assert!(managed_status(&app, &maker, "game").await.unwrap()["problem"].is_null());
+
+    // A 429 without headers: ten minutes.
+    sqlx::query("update app_commit_status set wait_until = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for sha in [&one, &two] {
+        gh.json(&statuses_path(sha), 429, json!({}));
+    }
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(statuses_sent(&gh).len(), 2);
+    let wait = waits_for(&app, "game").await.unwrap();
+    assert!((590.0..=601.0).contains(&wait), "{wait}");
+}
+
+/// Until the maker accepts the App's new permission on GitHub, nothing is sent: the app waits, the
+/// panel says what to accept, and GitHub is asked again now and then.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_missing_permission_waits_instead_of_posting(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    let token_path = "/app/installations/78/access_tokens";
+    statuses_token(&gh, Some(json!({ "contents": "read", "metadata": "read" })));
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["permission"], false);
+    let sha = commit('b');
+    gh.json(&statuses_path(&sha), 201, json!({ "id": 1 }));
+    release_on(&app, "game", "1.0.0", &sha, "fetching").await;
+    assert_eq!(gh.hits(token_path), 1);
+    assert_eq!(post_round(&app).await, 0);
+    assert!(statuses_sent(&gh).is_empty());
+    assert_eq!(
+        gh.hits(token_path),
+        2,
+        "a fresh token, in case it was accepted since"
+    );
+    let wait = waits_for(&app, "game").await.unwrap();
+    assert!((590.0..=601.0).contains(&wait), "{wait}");
+    assert_eq!(
+        managed_status(&app, &maker, "game").await.unwrap()["permission"],
+        false
+    );
+    // Waiting, GitHub isn't asked again.
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(gh.hits(token_path), 2);
+
+    // The maker accepts on GitHub and presses Check again.
+    statuses_token(
+        &gh,
+        Some(json!({ "contents": "read", "statuses": "write" })),
+    );
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert_eq!(body_json(res).await["permission"], true);
+    assert_eq!(waits_for(&app, "game").await, None);
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(gh.sent(&statuses_path(&sha)).len(), 1);
+
+    // A token answer that doesn't list permissions: GitHub hasn't said, so it's tried.
+    statuses_token(&gh, None);
+    let res = app.send(switch_statuses(&maker, "game", true)).await;
+    assert!(body_json(res).await["permission"].is_null());
+    let next = commit('c');
+    gh.json(&statuses_path(&next), 201, json!({ "id": 2 }));
+    release_on(&app, "game", "1.1.0", &next, "fetching").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(gh.sent(&statuses_path(&next)).len(), 1);
+    assert_eq!(
+        managed_status(&app, &maker, "game").await.unwrap()["permission"],
+        true,
+        "an accepted status shows the permission works"
+    );
+}
+
+/// Two API copies working at once post a status once; a claim left by a copy that stopped is
+/// taken over after five minutes, and a live one is left alone.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn two_api_copies_post_a_status_once(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let sha = commit('d');
+    gh.json(&statuses_path(&sha), 201, json!({ "id": 1 }));
+    release_on(&app, "game", "1.0.0", &sha, "fetching").await;
+    let other = AppState::new(app.db.clone(), app.config.clone()).unwrap();
+    let (a, b) = tokio::join!(
+        slop_api::commit_status::run_once(&app.state),
+        slop_api::commit_status::run_once(&other)
+    );
+    assert_eq!(a.unwrap() + b.unwrap(), 1);
+    assert_eq!(statuses_sent(&gh).len(), 1);
+
+    let claim = |sha: String, ago: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "insert into commit_statuses (app_id, commit_sha, claimed_at)
+                 select id, $1, now() - interval '{ago}' from apps where slug = 'game'"
+            )))
+            .bind(sha)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    let (stale, live) = (commit('e'), commit('f'));
+    for sha in [&stale, &live] {
+        gh.json(&statuses_path(sha), 201, json!({ "id": 2 }));
+        release_on(&app, "game", &format!("1.1.{}", &sha[..1]), sha, "fetching").await;
+    }
+    claim(stale.clone(), "6 minutes").await;
+    claim(live.clone(), "1 minute").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(gh.sent(&statuses_path(&stale)).len(), 1);
+    assert!(gh.sent(&statuses_path(&live)).is_empty());
+}
+
+/// A "Passed" is corrected once its approval is gone, also after the app left the store or the
+/// maker switched it off; nothing else is posted then, never for a private app, and nothing at
+/// all with the server's switch off.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_passed_status_is_corrected_after_the_app_left_the_store_and_after_switch_off(
+    db: PgPool,
+) {
+    let Statuses {
+        app,
+        gh,
+        gh_base,
+        maker,
+        ..
+    } = statuses_app(db.clone()).await;
+    let set_app = |set: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "update apps set {set} where slug = 'game'"
+            )))
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    let switch = |on: bool| app.send(switch_statuses(&maker, "game", on));
+    assert_eq!(switch(true).await.status(), StatusCode::OK);
+    let passed = |c: char, version: &'static str| {
+        let sha = commit(c);
+        gh.json(&statuses_path(&sha), 201, json!({ "id": 1 }));
+        let app = &app;
+        let gh = &gh;
+        async move {
+            let id = release_on(app, "game", version, &sha, "approved").await;
+            assert_eq!(post_round(app).await, 1);
+            assert_eq!(
+                last_said(gh, &sha),
+                says("success", "Passed SLAPorSLOP's checks")
+            );
+            (id, sha)
+        }
+    };
+    let withdrawn = says("failure", "Withdrawn by SLAPorSLOP after it was approved");
+
+    // (a) Staff delist the app and revoke the release.
+    let (id, sha) = passed('1', "1.0.0").await;
+    set_app("status = 'delisted'").await;
+    admin::revoke(&app.db, id, "rev", "It mines coins.")
+        .await
+        .unwrap();
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(last_said(&gh, &sha), withdrawn);
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(gh.sent(&statuses_path(&sha)).len(), 2);
+
+    // (b) The maker switched it off; the release is revoked after.
+    set_app("status = 'listed'").await;
+    let (id, sha) = passed('2', "1.1.0").await;
+    assert_eq!(switch(false).await.status(), StatusCode::OK);
+    admin::revoke(&app.db, id, "rev", "It mines coins.")
+        .await
+        .unwrap();
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(last_said(&gh, &sha), withdrawn);
+    assert_eq!(post_round(&app).await, 0);
+
+    // (c) Switched off, a "being checked" isn't corrected by a later rejection.
+    assert_eq!(switch(true).await.status(), StatusCode::OK);
+    let pending = commit('3');
+    gh.json(&statuses_path(&pending), 201, json!({ "id": 3 }));
+    let id = release_on(&app, "game", "1.2.0", &pending, "fetching").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(switch(false).await.status(), StatusCode::OK);
+    set_release(&app, id, "rejected").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(
+        last_said(&gh, &pending),
+        says("pending", "SLAPorSLOP is checking this release")
+    );
+
+    // Switched on again, the commit left at "being checked" is finished.
+    assert_eq!(switch(true).await.status(), StatusCode::OK);
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(
+        last_said(&gh, &pending),
+        says("failure", "Not approved by SLAPorSLOP")
+    );
+
+    // Never for a private app.
+    let (id, sha) = passed('4', "1.3.0").await;
+    set_app("visibility = 'private'").await;
+    admin::revoke(&app.db, id, "rev", "It mines coins.")
+        .await
+        .unwrap();
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(gh.sent(&statuses_path(&sha)).len(), 1);
+    set_app("visibility = 'public'").await;
+    // Public again and still on: the current state is posted once.
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(last_said(&gh, &sha), withdrawn);
+
+    // (e) While its approval holds, a pass isn't touched out of the store or after switch-off,
+    // even when a newer release on its commit is being checked; once the approval goes, the newer
+    // release's state replaces it, once.
+    for (c, delist) in [('6', true), ('7', false)] {
+        let (version, newer) = if delist {
+            ("1.5.0", "1.5.1")
+        } else {
+            ("1.6.0", "1.6.1")
+        };
+        let (id, sha) = passed(c, version).await;
+        if delist {
+            set_app("status = 'delisted'").await;
+        } else {
+            assert_eq!(switch(false).await.status(), StatusCode::OK);
+        }
+        release_on(&app, "game", newer, &sha, "fetching").await;
+        assert_eq!(post_round(&app).await, 0, "{c}");
+        assert_eq!(gh.sent(&statuses_path(&sha)).len(), 1, "{c}");
+        admin::revoke(&app.db, id, "rev", "It mines coins.")
+            .await
+            .unwrap();
+        assert_eq!(post_round(&app).await, 1, "{c}");
+        assert_eq!(
+            last_said(&gh, &sha),
+            says("pending", "SLAPorSLOP is checking this release"),
+            "{c}"
+        );
+        assert_eq!(post_round(&app).await, 0, "{c}");
+        assert_eq!(gh.sent(&statuses_path(&sha)).len(), 2, "{c}");
+        if delist {
+            set_app("status = 'listed'").await;
+        } else {
+            assert_eq!(switch(true).await.status(), StatusCode::OK);
+        }
+    }
+
+    // (f) GitHub refuses the correction after switch-off: it's tried again a day later, by itself.
+    let (id, sha) = passed('8', "1.7.0").await;
+    assert_eq!(switch(false).await.status(), StatusCode::OK);
+    gh.json(&statuses_path(&sha), 422, json!({ "message": "No" }));
+    admin::revoke(&app.db, id, "rev", "It mines coins.")
+        .await
+        .unwrap();
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(delivery(&app, &sha).await, (0, Some(422), true, None));
+    let stopped_ago = |hours: i32| {
+        let (db, sha) = (app.db.clone(), sha.clone());
+        async move {
+            sqlx::query(
+                "update commit_statuses set stopped_at = now() - make_interval(hours => $2)
+                 where commit_sha = $1",
+            )
+            .bind(sha)
+            .bind(hours)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    stopped_ago(23).await;
+    assert_eq!(post_round(&app).await, 0, "not a day yet");
+    stopped_ago(25).await;
+    gh.json(&statuses_path(&sha), 201, json!({ "id": 8 }));
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(last_said(&gh, &sha), withdrawn);
+    assert_eq!(delivery(&app, &sha).await, (0, Some(201), false, None));
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(switch(true).await.status(), StatusCode::OK);
+
+    // (d) Nothing at all with the server's switch off.
+    let (id, sha) = passed('5', "1.4.0").await;
+    admin::revoke(&app.db, id, "rev", "It mines coins.")
+        .await
+        .unwrap();
+    let switched_off = app_on(db, &gh_base, |c| {
+        statuses_config(c);
+        c.releases.github_statuses = false;
+    })
+    .await;
+    assert_eq!(post_round(&switched_off).await, 0);
+    assert_eq!(gh.sent(&statuses_path(&sha)).len(), 1);
+    // It was due: the server that offers it posts it.
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(last_said(&gh, &sha), withdrawn);
+}
+
+/// A maker's agent switches results on GitHub for its maker's app with the publish scope, and is
+/// refused without it exactly as for move_to_stage. The tool is marked as a change to ask about.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_switch_commit_statuses_only_with_the_publish_scope(db: PgPool) {
+    let Statuses {
+        app,
+        gh,
+        maker_id,
+        maker,
+        ..
+    } = statuses_app(db).await;
+    let (otto_id, _) = app.user("Otto Other", "US").await;
+    for (slug, owner) in [("other", maker_id), ("ottos", otto_id)] {
+        sqlx::query(
+            "insert into apps (id, slug, title, summary, kind, stage, status, maker_id, repo_url,
+                               license_spdx, platforms)
+             values ($1, $2, $2, 'A game', 'game', 'beta', 'listed', $3,
+                     'https://github.com/octo/' || $2, 'MIT', '{windows}')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(slug)
+        .bind(owner)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let publish = agent_token(&app, &maker, "publish", None).await;
+    let read = agent_token(&app, &maker, "read", None).await;
+    let other_only = agent_token(&app, &maker, "publish", Some(&["other"])).await;
+
+    let tools = maker_mcp(&app, &publish, "tools/list", json!({})).await;
+    let tool = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "set_commit_status")
+        .expect("listed where the server offers it")
+        .clone();
+    assert_eq!(
+        tool["annotations"],
+        json!({ "readOnlyHint": false, "destructiveHint": true })
+    );
+    assert_eq!(tool["inputSchema"]["required"], json!(["slug", "on"]));
+
+    // A look-only token, a token for another app, and someone else's app.
+    for (token, slug) in [(&read, "game"), (&other_only, "game"), (&publish, "ottos")] {
+        let switched = call_tool(
+            &app,
+            token,
+            "set_commit_status",
+            json!({ "slug": slug, "on": true }),
+        )
+        .await;
+        let moved = call_tool(
+            &app,
+            token,
+            "move_to_stage",
+            json!({ "slug": slug, "stage": "released" }),
+        )
+        .await;
+        assert!(switched.0, "{slug}: {}", switched.1);
+        assert_eq!(switched, moved, "{slug}");
+    }
+    assert_eq!(
+        count(&app, "select count(*) from app_commit_status").await,
+        0
+    );
+    assert!(status_audits(&app).await.is_empty());
+    assert_eq!(gh.hits("/app/installations/78/access_tokens"), 0);
+
+    // With the publish scope, for its maker's app: on (Check again too), then off.
+    let switch = |token: &str, on: bool| {
+        let (app, token) = (&app, token.to_string());
+        async move {
+            let (failed, text) = call_tool(
+                app,
+                &token,
+                "set_commit_status",
+                json!({ "slug": "game", "on": on }),
+            )
+            .await;
+            assert!(!failed, "{text}");
+            serde_json::from_str::<Value>(&text).unwrap()
+        }
+    };
+    let on = switch(&publish, true).await;
+    assert_eq!((&on["on"], &on["permission"]), (&json!(true), &json!(true)));
+    assert_eq!(switch(&publish, false).await["on"], false);
+    let game_only = agent_token(&app, &maker, "publish", Some(&["game"])).await;
+    assert_eq!(switch(&game_only, true).await["on"], true);
+    assert_eq!(
+        status_audits(&app).await,
+        [
+            json!({ "app": "game", "on": true, "by_agent": true }),
+            json!({ "app": "game", "on": false, "by_agent": true }),
+            json!({ "app": "game", "on": true, "by_agent": true }),
+        ]
+    );
+    // A look-only token reads it in app_overview.
+    let (failed, text) = call_tool(&app, &read, "app_overview", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
+    let overview: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(overview["commit_status"]["on"], true);
+}
+
+/// The export lists the maker's results on GitHub. Closing the account deletes them, and nothing
+/// more is posted for its apps, not even the correction of a passed status.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn closing_an_account_stops_commit_statuses_and_the_export_lists_them(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    let export = |cookie: &str| {
+        let (app, cookie) = (&app, cookie.to_string());
+        async move {
+            let res = app
+                .send(req(Method::GET, "/v1/me/export").cookie(&cookie))
+                .await;
+            assert_eq!(res.status(), StatusCode::OK);
+            body_json(res).await
+        }
+    };
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let sha = commit('a');
+    gh.json(&statuses_path(&sha), 201, json!({ "id": 1 }));
+    let id = release_on(&app, "game", "1.0.0", &sha, "approved").await;
+    assert_eq!(post_round(&app).await, 1);
+
+    let mine = export(&maker).await;
+    let switched = mine["app_commit_status"].as_array().unwrap();
+    assert_eq!(switched.len(), 1, "{mine}");
+    assert_eq!(switched[0]["app"], "game");
+    assert!(switched[0]["switched_on_at"].is_string());
+    assert_eq!(switched[0]["switched_off_at"], Value::Null);
+    let posted = mine["commit_statuses"].as_array().unwrap();
+    assert_eq!(posted.len(), 1, "{mine}");
+    assert_eq!(
+        (
+            &posted[0]["app"],
+            &posted[0]["commit"],
+            &posted[0]["posted_status"]
+        ),
+        (&json!("game"), &json!(sha), &json!("approved"))
+    );
+    assert!(posted[0]["posted_at"].is_string());
+    // Switched off, it's still listed, with when.
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", false)).await,
+        StatusCode::OK
+    );
+    assert!(export(&maker).await["app_commit_status"][0]["switched_off_at"].is_string());
+    // Nobody else's export has it.
+    let (_, otto) = app.user("Otto Other", "US").await;
+    let theirs = export(&otto).await;
+    assert_eq!(
+        (&theirs["app_commit_status"], &theirs["commit_statuses"]),
+        (&json!([]), &json!([]))
+    );
+
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/close")
+                .cookie(&maker)
+                .json(json!({ "confirm": "Close my account" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        count(&app, "select count(*) from app_commit_status").await,
+        0
+    );
+    assert_eq!(count(&app, "select count(*) from commit_statuses").await, 0);
+    // The approval behind the green status goes, and a new release arrives: nothing is posted.
+    admin::revoke(&app.db, id, "rev", "It mines coins.")
+        .await
+        .unwrap();
+    let later = commit('b');
+    gh.json(&statuses_path(&later), 201, json!({ "id": 2 }));
+    release_on(&app, "game", "1.0.1", &later, "awaiting_review").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(statuses_sent(&gh).len(), 1);
+}
+
+/// A new repository address ends results on GitHub for the app, whether the maker edits the store
+/// page or a move is approved: the maker agreed to statuses on one repository only.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn changing_the_repository_switches_commit_statuses_off(db: PgPool) {
+    let Statuses {
+        app,
+        gh,
+        maker_id,
+        maker,
+        ..
+    } = statuses_app(db).await;
+    for repo in ["octo/game2", "octo/game3"] {
+        sqlx::query(
+            "insert into github_installations (repo_path, installation_id) values ($1, 78)",
+        )
+        .bind(repo)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    for sha in [commit('a'), commit('b'), commit('c'), commit('d')] {
+        for repo in ["octo/game", "octo/game2", "octo/game3"] {
+            gh.json(
+                &format!("/repos/{repo}/statuses/{sha}"),
+                201,
+                json!({ "id": 1 }),
+            );
+        }
+    }
+    let rows = || {
+        let db = app.db.clone();
+        async move {
+            let n: i64 = sqlx::query_scalar(
+                "select (select count(*) from app_commit_status) + (select count(*) from commit_statuses)",
+            )
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            n
+        }
+    };
+    let ended = json!({ "app": "game", "on": false, "why": "repository changed" });
+    let last_audit = || {
+        let db = app.db.clone();
+        async move {
+            let row: (String, Value) = sqlx::query_as(
+                "select actor, detail from audit_log where action = 'app.commit_status'
+                 order by id desc limit 1",
+            )
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            row
+        }
+    };
+    let edit = |repo: &str| {
+        req(Method::PATCH, "/v1/apps/game")
+            .cookie(&maker)
+            .json(json!({ "repo_url": repo }))
+    };
+
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let first = release_on(&app, "game", "1.0.0", &commit('a'), "awaiting_review").await;
+    assert_eq!(post_round(&app).await, 1);
+    // Saving the store page with the same repository changes nothing.
+    assert_eq!(
+        status_of(&app, edit("https://github.com/octo/game")).await,
+        StatusCode::OK
+    );
+    assert_eq!(rows().await, 2);
+    assert_eq!(status_audits(&app).await.len(), 1);
+
+    // (a) The maker edits the store page to another repository (no player has the app yet).
+    assert_eq!(
+        status_of(&app, edit("https://github.com/octo/game2")).await,
+        StatusCode::OK
+    );
+    assert_eq!(rows().await, 0);
+    let status = managed_status(&app, &maker, "game").await.unwrap();
+    assert_eq!(
+        (&status["on"], &status["since"], &status["last"]),
+        (&json!(false), &Value::Null, &Value::Null)
+    );
+    assert_eq!(last_audit().await, (maker_id.to_string(), ended.clone()));
+    // A commit claimed at that very moment can't stay behind: its row needs the app's switch row.
+    let orphan = sqlx::query(
+        "insert into commit_statuses (app_id, commit_sha) select id, $1 from apps where slug = 'game'",
+    )
+    .bind(commit('e'))
+    .execute(&app.db)
+    .await;
+    assert!(
+        matches!(&orphan, Err(sqlx::Error::Database(e)) if e.is_foreign_key_violation()),
+        "{orphan:?}"
+    );
+    // Neither repository gets anything: not the old commit's new state, not a new release.
+    set_release(&app, first, "approved").await;
+    release_on(&app, "game", "1.0.1", &commit('b'), "awaiting_review").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(statuses_sent(&gh).len(), 1);
+
+    // (b) Switched on again for the new repository; players have the app now, so a move to
+    // another one waits for a person, and their approval ends it the same way.
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    release_on(&app, "game", "1.0.2", &commit('c'), "awaiting_review").await;
+    assert_eq!(post_round(&app).await, 1);
+    assert_eq!(
+        gh.sent(&format!("/repos/octo/game2/statuses/{}", commit('c')))
+            .len(),
+        1
+    );
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "repo", "repo_url": "https://github.com/octo/game3" }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let change = body_json(res).await;
+    assert_eq!(change["status"], "pending");
+    assert_eq!(
+        rows().await,
+        2,
+        "nothing changes until the move is approved"
+    );
+    slop_api::manage::approve_change(
+        &app.db,
+        change["id"].as_str().unwrap().parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows().await, 0);
+    assert_eq!(last_audit().await, ("rev".to_string(), ended));
+    assert_eq!(
+        managed_status(&app, &maker, "game").await.unwrap()["on"],
+        false
+    );
+    release_on(&app, "game", "1.0.3", &commit('d'), "awaiting_review").await;
+    assert_eq!(post_round(&app).await, 0);
+    assert_eq!(statuses_sent(&gh).len(), 2);
+}
+
+/// Without the repository's installation token nothing is posted: never the shared token, never a
+/// token the maker stored. The App missing from SLAPorSLOP's list, and GitHub saying the
+/// installation is gone (it's forgotten), both make the app wait.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn without_the_installation_token_nothing_is_posted(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    let token_path = "/app/installations/78/access_tokens";
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    sqlx::query(
+        "insert into repo_tokens (app_id, repo_url, kind, sealed)
+         select id, repo_url, 'gitea', '\\x00' from apps where slug = 'game'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let sha = commit('a');
+    gh.json(&statuses_path(&sha), 201, json!({ "id": 1 }));
+    release_on(&app, "game", "1.0.0", &sha, "awaiting_review").await;
+    let installed = |on: bool| {
+        let db = app.db.clone();
+        async move {
+            let sql = if on {
+                "insert into github_installations (repo_path, installation_id) values ('octo/game', 78)"
+            } else {
+                "delete from github_installations where repo_path = 'octo/game'"
+            };
+            sqlx::query(sql).execute(&db).await.unwrap();
+            sqlx::query("update app_commit_status set wait_until = null")
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+    };
+    // What a round asked GitHub: only the token exchange and statuses with the installation's
+    // token, never the shared one.
+    let asked_since = |from: usize| -> Vec<(String, String)> {
+        let seen = gh.seen.lock().unwrap();
+        let asked = seen[from..].to_vec();
+        for (path, auth) in &asked {
+            assert_ne!(auth, "Bearer shared", "{path}");
+            assert!(
+                path.starts_with("/app/installations/78/access_tokens")
+                    || (path.contains("/statuses/") && auth == "Bearer ghs_install78"),
+                "{path} {auth}"
+            );
+        }
+        asked
+    };
+
+    // (a) The App was removed and SLAPorSLOP missed the webhook's news: nothing is asked at all.
+    installed(false).await;
+    let from = gh.seen.lock().unwrap().len();
+    assert_eq!(post_round(&app).await, 0);
+    assert!(asked_since(from).is_empty());
+    let wait = waits_for(&app, "game").await.unwrap();
+    assert!((590.0..=601.0).contains(&wait), "{wait}");
+    let status = managed_status(&app, &maker, "game").await.unwrap();
+    assert_eq!(
+        (&status["on"], &status["installed"]),
+        (&json!(true), &json!(false))
+    );
+
+    // (b) SLAPorSLOP still lists it, but GitHub says the installation is gone: it's forgotten.
+    installed(true).await;
+    gh.json(token_path, 404, json!({ "message": "Not Found" }));
+    let fresh = AppState::new(app.db.clone(), app.config.clone()).unwrap();
+    let from = gh.seen.lock().unwrap().len();
+    assert_eq!(slop_api::commit_status::run_once(&fresh).await.unwrap(), 0);
+    assert_eq!(asked_since(from).len(), 1, "only the token exchange");
+    let wait = waits_for(&app, "game").await.unwrap();
+    assert!((590.0..=601.0).contains(&wait), "{wait}");
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from github_installations where repo_path = 'octo/game'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        managed_status(&app, &maker, "game").await.unwrap()["installed"],
+        false
+    );
+    assert!(statuses_sent(&gh).is_empty());
+
+    // (c) Installed again: the waiting status goes out, with the installation's token.
+    installed(true).await;
+    statuses_token(
+        &gh,
+        Some(json!({ "contents": "read", "statuses": "write" })),
+    );
+    let from = gh.seen.lock().unwrap().len();
+    assert_eq!(slop_api::commit_status::run_once(&fresh).await.unwrap(), 1);
+    assert_eq!(asked_since(from).len(), 2);
+    let sent = statuses_sent(&gh);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].auth, "Bearer ghs_install78");
+}
+
+/// A repository address whose owner is `.` or `..` would change where the status goes: nothing is
+/// sent and the app waits, as for a repository off GitHub.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_repository_address_with_dot_parts_gets_nothing(db: PgPool) {
+    let Statuses { app, gh, maker, .. } = statuses_app(db).await;
+    assert_eq!(
+        status_of(&app, switch_statuses(&maker, "game", true)).await,
+        StatusCode::OK
+    );
+    let sha = commit('b');
+    release_on(&app, "game", "1.0.0", &sha, "awaiting_review").await;
+    // Each address has an installation, so only the refusal of dot parts keeps GitHub unasked.
+    for path in ["../game", "./game"] {
+        sqlx::query(
+            "insert into github_installations (repo_path, installation_id) values ($1, 78)",
+        )
+        .bind(path)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    for repo in ["https://github.com/../game", "https://github.com/./game"] {
+        sqlx::query("update apps set repo_url = $1 where slug = 'game'")
+            .bind(repo)
+            .execute(&app.db)
+            .await
+            .unwrap();
+        sqlx::query("update app_commit_status set wait_until = null")
+            .execute(&app.db)
+            .await
+            .unwrap();
+        let from = gh.seen.lock().unwrap().len();
+        assert_eq!(post_round(&app).await, 0, "{repo}");
+        assert_eq!(gh.seen.lock().unwrap().len(), from, "{repo}: nothing asked");
+        let wait = waits_for(&app, "game").await.unwrap();
+        assert!((590.0..=601.0).contains(&wait), "{repo}: {wait}");
+        let (attempts, code, stopped, _) = delivery(&app, &sha).await;
+        assert_eq!((attempts, code, stopped), (0, None, false), "{repo}");
+    }
+    assert!(statuses_sent(&gh).is_empty());
+}
+
+/// The owner switched results on GitHub on without the GitHub App: the admin page says so.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn results_on_github_without_the_app_raise_an_alert(db: PgPool) {
+    let app = test_app_with(db, |c| c.releases.github_statuses = true).await;
+    let keys = |c: &Config| -> Vec<String> {
+        slop_api::ops::config_alerts(c)
+            .into_iter()
+            .map(|a| a.key)
+            .collect()
+    };
+    assert_eq!(keys(&app.state.config), ["github-statuses-without-app"]);
+    let mut config = (*app.state.config).clone();
+    config.releases.github_app = Some(github_app_config());
+    assert!(keys(&config).is_empty());
+    config.releases.github_statuses = false;
+    config.releases.github_app = None;
+    assert!(keys(&config).is_empty());
 }
