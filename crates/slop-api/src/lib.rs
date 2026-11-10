@@ -36,6 +36,7 @@ pub mod foryou;
 pub mod friends;
 pub mod frozen;
 pub mod github_app;
+pub mod history;
 pub mod interested;
 pub mod label;
 pub mod legal;
@@ -297,6 +298,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(demos::routes())
         .merge(review::routes())
         .merge(pulse::routes())
+        .merge(history::routes())
         .merge(legal_requests::routes())
         .merge(votes::routes())
         .merge(featured::routes())

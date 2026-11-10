@@ -145,21 +145,52 @@ async fn launch(
     } else {
         None
     };
-    // Apps without Pulse are weighted by the days they were launched (METRICS §2).
+    // Apps without Pulse are weighted by the days they were launched (METRICS §2). The same
+    // statement counts the launch for the maker's History (history.rs): one player per account per
+    // UTC day, and a first play the first time, only for an account with "Share my playtime" on.
+    // Only what the upsert returns is counted, so two launches at once count one. Nothing is
+    // counted for a private app or the maker's own launch. An account whose first launch was
+    // with the setting off is never a first play, and one that switches it on later the same day
+    // isn't counted that day.
     sqlx::query(
-        "insert into user_app_usage (user_id, app_id, days_launched, last_launch_day, last_platform)
-         values ($1, $2, 1, current_date, $3)
-         on conflict (user_id, app_id) do update set
-           days_launched = user_app_usage.days_launched
-             + case when user_app_usage.last_launch_day = current_date then 0 else 1 end,
-           last_launch_day = current_date,
-           last_platform = coalesce($3, user_app_usage.last_platform)",
+        "with launched as (
+             insert into user_app_usage (user_id, app_id, days_launched, last_launch_day, last_platform)
+             values ($1, $2, 1, (now() at time zone 'UTC')::date, $3)
+             on conflict (user_id, app_id) do update set
+                 days_launched = user_app_usage.days_launched + 1,
+                 last_launch_day = excluded.last_launch_day,
+                 last_platform = coalesce(excluded.last_platform, user_app_usage.last_platform)
+             where user_app_usage.last_launch_day is distinct from excluded.last_launch_day
+             returning last_launch_day as day, (first_launched_at = now()) as first_play
+         )
+         insert into app_daily_counts (app_id, day, players, first_plays)
+         select $2::uuid, l.day, 1, l.first_play::int
+         from launched l
+         where $4
+           and exists (select 1 from apps a
+                       where a.id = $2 and a.visibility = 'public' and a.maker_id <> $1)
+         on conflict (app_id, day) do update set
+             players = app_daily_counts.players + 1,
+             first_plays = app_daily_counts.first_plays + excluded.first_plays",
     )
     .bind(user.id)
     .bind(app_id)
     .bind(&platform)
+    .bind(share)
     .execute(&mut *tx)
     .await?;
+    // A later launch the same day changes nothing above, but still says which platform was last.
+    if platform.is_some() {
+        sqlx::query(
+            "update user_app_usage set last_platform = $3
+             where user_id = $1 and app_id = $2 and last_platform is distinct from $3",
+        )
+        .bind(user.id)
+        .bind(app_id)
+        .bind(&platform)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(Json(Launched {
         token,

@@ -3740,6 +3740,30 @@ async fn agents_roll_players_back_and_read_what_the_manage_page_shows(db: PgPool
     );
     // Nobody has voted, so no day has votes to show.
     assert_eq!(ratings["daily"], json!([]));
+    // Its history: every day of the range, and from when each number is real.
+    let (failed, text) = maker_tool(
+        &app,
+        &read,
+        "get_history",
+        json!({ "slug": "game", "days": 90 }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let history = parsed(&text);
+    assert_eq!(history["days"].as_array().unwrap().len(), 90, "{text}");
+    assert!(history["players_from"].is_string(), "{text}");
+    assert!(history["history_from"].is_string(), "{text}");
+    let (failed, text) = maker_tool(&app, &read, "get_history", game()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["days"].as_array().unwrap().len(), 30);
+    let (failed, text) = maker_tool(
+        &app,
+        &read,
+        "get_history",
+        json!({ "slug": "game", "days": 7 }),
+    )
+    .await;
+    assert!(failed && text.contains("30, 90 or 365"), "{text}");
     let (failed, text) = maker_tool(&app, &read, "list_pictures", game()).await;
     assert!(!failed, "{text}");
     let pictures = parsed(&text);
@@ -3753,7 +3777,12 @@ async fn agents_roll_players_back_and_read_what_the_manage_page_shows(db: PgPool
     let (failed, text) = maker_tool(&app, &read, "get_store_page", ottos()).await;
     assert!(!failed, "{text}");
     assert_eq!(parsed(&text)["is_mine"], false);
-    for name in ["app_overview", "release_settings", "list_pictures"] {
+    for name in [
+        "app_overview",
+        "release_settings",
+        "list_pictures",
+        "get_history",
+    ] {
         let (failed, text) = maker_tool(&app, &read, name, ottos()).await;
         assert!(failed && text.contains("not_found"), "{name}: {text}");
     }
@@ -3765,6 +3794,60 @@ async fn agents_roll_players_back_and_read_what_the_manage_page_shows(db: PgPool
     )
     .await;
     assert!(failed && text.contains("not_found"), "{text}");
+}
+
+/// Nothing is counted for a private app or a dedicated server (history.rs), and an agent is told
+/// so like its maker is; a token for other apps only is told there is no such app.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn history_is_refused_for_private_apps_and_servers_through_a_token(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "game", "released", "").await;
+    listed_with(
+        &app,
+        maker_id,
+        "secret",
+        "released",
+        "status = 'draft', visibility = 'private'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker_id,
+        "srv",
+        "released",
+        "parent_app_id = (select id from apps where slug = 'game'), branch_kind = 'server', platforms = '{linux}'",
+    )
+    .await;
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    for (slug, why) in [
+        ("secret", "Private apps have no history"),
+        ("srv", "Dedicated servers have no history"),
+    ] {
+        let (failed, text) = maker_tool(&app, &read, "get_history", json!({ "slug": slug })).await;
+        assert!(
+            failed && text.contains("conflict") && text.contains(why),
+            "{slug}: {text}"
+        );
+    }
+    let (failed, text) = maker_tool(&app, &read, "get_history", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
+
+    let (game_only, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Game only", "scope": "read", "apps": ["game"] }),
+    )
+    .await;
+    let (failed, text) =
+        maker_tool(&app, &game_only, "get_history", json!({ "slug": "secret" })).await;
+    assert!(
+        failed && text.contains("not_found") && !text.contains("conflict"),
+        "{text}"
+    );
+    let (failed, text) =
+        maker_tool(&app, &game_only, "get_history", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
 }
 
 // ---------------------------------------------------------------------------------------------

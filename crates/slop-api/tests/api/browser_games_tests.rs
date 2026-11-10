@@ -2369,7 +2369,7 @@ async fn playing_a_browser_game_records_the_day_and_hands_out_no_pulse_token(db:
         usage(&app, pat_id, "game").await,
         Some((1, Some("browser".into())))
     );
-    sqlx::query("update user_app_usage set last_launch_day = current_date - 1 where user_id = $1")
+    sqlx::query("update user_app_usage set last_launch_day = (now() at time zone 'UTC')::date - 1 where user_id = $1")
         .bind(pat_id)
         .execute(&app.db)
         .await

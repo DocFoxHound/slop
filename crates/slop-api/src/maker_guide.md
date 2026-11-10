@@ -189,7 +189,10 @@ your maker's app, are for the person.
 `list_bug_reports` shows what players hit, with crash output when they sent it. Fix what you
 can, file the rest as issues on the repository (never with the player's name or personal details
 from a log), and mark each report with `update_bug_report` once a release fixes it.
-`release_feedback` shows how each release landed with players.
+`release_feedback` shows how each release landed with players, and `get_history` how many
+accounts that share their playtime played the app each day and played it for the first time, and
+how many times it was added to a library: counts only, never who, and `null` means that day
+wasn't counted.
 
 ## Writing to SLAPorSLOP's admins
 

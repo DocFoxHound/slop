@@ -214,7 +214,7 @@ The client installs software, so it's a prime target:
 - **Authorization on every request, on the server.** This is the biggest web risk for private apps, chat and People messages, and payment records: every object read checks the caller's rights. Use non-guessable IDs (UUIDv7/ULID) as well, but never *instead of* checks. Postgres row-level security acts as a backstop.
 - Rate limits per account, IP and endpoint. Stricter for sign-in, voting, donations, reports and messages. *Built: per IP for every request (`ratelimit.rs`), and 20 reports per account per day (`moderation.rs`).*
 - Suspended accounts (`users.suspended_at`) can only read, appeal, accept terms, download their data, sign out or close the account: every other write is refused in the session extractor (`auth/session.rs`). Closed accounts can't sign in at all, and their sessions are revoked.
-  - **Built (2026-10-18):** per-IP token buckets for sign-in (20/min), writes (60/min) and reads (600/min), in memory per API instance (`crates/slop-api/src/ratelimit.rs`). **Per account (built 2026-10-20, `limits.rs`):** votes 60/hour, written reviews 10/hour, reports 10/hour, chat and job messages 60/minute, friend requests 40/day, donation checkouts 10/hour, shares 60/hour, Interested marks 120/hour, team invitations 50/day, new apps 10/day, releases 30/hour, hiring requests 20/day; 429 with `Retry-After`. Still to do: a shared limiter once SLAPorSLOP runs several instances.
+  - **Built (2026-10-18):** per-IP token buckets for sign-in (20/min), writes (60/min) and reads (600/min), in memory per API instance (`crates/slop-api/src/ratelimit.rs`). **Per account (built 2026-10-20, `limits.rs`):** votes 60/hour, written reviews 10/hour, reports 10/hour, chat and job messages 60/minute, friend requests 40/day, donation checkouts 10/hour, shares 60/hour, Interested marks 120/hour, team invitations 50/day, new apps 10/day, releases 30/hour, hiring requests 20/day, library adds 60 per hour and history requests 120 per hour per account, counted by each copy of the API on its own; 429 with `Retry-After`. Still to do: a shared limiter once SLAPorSLOP runs several instances.
 - Input validation and output encoding. Store pages and reviews are **Markdown rendered with a strict allowlist** (no raw HTML).
 - **Security headers:** a CSP with nonces, HSTS (preload), `frame-ancestors 'none'`, Referrer-Policy, Permissions-Policy.
 - Uploads (portfolio images, screenshots) are re-encoded, stripped of metadata and served from a **separate domain** (stops script injection through uploaded files).
@@ -343,7 +343,7 @@ More detail in `PAYMENTS.md`.
   - A clear privacy policy and a record of processing.
   - Data export and deletion, self-service.
   - Data processing agreements with every subprocessor.
-- **Data minimization:** Pulse has no device IDs or gameplay data. Analytics are aggregated and opt-in where the law requires.
+- **Data minimization:** Pulse has no device IDs or gameplay data. Analytics are aggregated and opt-in where the law requires. Makers' History is daily totals per app (no account ids, nothing for private apps). The numbers are counts, not audited figures: a maker can be shown a number other accounts inflated within the limits above (60 library adds an hour per account per copy of the API; one play per account per day).
 - **Retention:**
   - Pulse heartbeats are aggregated within 24 hours and the raw events deleted.
   - Logs are kept 30–90 days.

@@ -54,6 +54,29 @@ export interface RatingBreakdown {
   }>;
 }
 
+/** One UTC day of the maker's History (crates/slop-api/src/history.rs). null: not counted that day (not zero). */
+export interface HistoryDay {
+  /** YYYY-MM-DD (UTC). */
+  day: string;
+  /** Accounts that started the app that day. */
+  players: number | null;
+  /** Accounts that started it for the first time. */
+  first_plays: number | null;
+  /** Times it was added to a library. */
+  library_adds: number | null;
+  /** The most playing at once (Slop Pulse). */
+  peak: number | null;
+}
+
+export interface AppHistory {
+  /** The first UTC day anything was counted for this app. */
+  history_from: string;
+  /** The first UTC day players per day were counted. */
+  players_from: string;
+  /** Every UTC day in the range, oldest first, ending today. */
+  days: HistoryDay[];
+}
+
 /** Updates for an installed app (crates/slop-api/src/library.rs). */
 export interface AppUpdate {
   slug: string;
@@ -3527,6 +3550,12 @@ export const api = {
     request<RatingBreakdown>(
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/ratings/breakdown`,
+    ),
+  /** The maker's own daily totals: players, first plays, library adds, busiest moment. */
+  history: (slug: string, days: 30 | 90 | 365) =>
+    request<AppHistory>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/history${query({ days })}`,
     ),
   featured: () => request<FeaturedApp[]>("GET", "/v1/featured"),
   vote: (slug: string, vote: "not_slop" | "slop" | null) =>

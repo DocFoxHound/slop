@@ -659,6 +659,9 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 .chart .line-main circle { fill: var(--slime); }
 .chart .line-players polyline { stroke: #60a5fa; }
 .chart .line-players circle { fill: #60a5fa; }
+/* First plays (MakerHistory.tsx): dashed, so the two lines differ by more than colour. */
+.chart .line-first polyline { stroke: var(--slime); stroke-dasharray: 6 4; }
+.chart .line-first circle { fill: var(--slime); }
 .chart rect.up { fill: var(--good); }
 .chart rect.down { fill: var(--bad); }
 .chart-legend .key { font-size: 12px; color: var(--muted); margin-right: 10px; }
@@ -669,7 +672,11 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 .chart rect.marked { fill: rgba(251, 191, 36, 0.16); stroke: var(--warn); stroke-dasharray: 3 3; stroke-width: 1; }
 .chart-legend .key.marked::before { background: rgba(251, 191, 36, 0.3); outline: 1px dashed var(--warn); }
 .chart-legend .key.line-players::before { background: #60a5fa; }
+.chart-legend .key.line-first::before { background: none; height: 0; border-top: 2px dashed var(--slime); vertical-align: 3px; }
 .chart-table { margin-top: 6px; font-size: 12px; }
+/* History on Manage (MakerHistory.tsx): the totals line and the charts, under the range choice. */
+.history-numbers { display: grid; gap: 14px; margin: 14px 0; }
+.history-numbers > p { margin: 0; }
 .link-btn { background: none; border: 0; padding: 2px 0; color: var(--slime); cursor: pointer; text-decoration: underline; }
 .link-btn.muted { color: var(--muted); }
 .sim-banner { padding: 8px 16px; background: rgba(96, 165, 250, 0.14); border-bottom: 1px solid rgba(96, 165, 250, 0.4); font-size: 13px; }

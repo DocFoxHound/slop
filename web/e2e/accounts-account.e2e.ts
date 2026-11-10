@@ -24,6 +24,8 @@ test.describe("privacy", () => {
       await expect(kv).toContainText("Sue Support");
       await expect(kv).toContainText("None shared by GitHub");
       await expect(page.getByRole("link", { name: "See your profile" })).toHaveAttribute("href", /^\/u\//);
+      // What "Share my playtime" covers, the maker's daily totals included (History, amendment 9.2).
+      await expect(page.getByText(/With this on, a launch also counts you in the daily totals a game's maker sees: how many played, never who\./)).toBeVisible();
       for (const [label, field] of [
         [/Show my votes and reviews on my profile/, "profile_public"],
         [/Share my playtime/, "share_playtime"],

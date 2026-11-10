@@ -39,6 +39,10 @@ pub enum Action {
     Picture,
     /// A dry run of the source check (fixes.rs): each one downloads the repository.
     SourceCheck,
+    /// Adding an app to the library: each real add counts in its maker's History (history.rs).
+    LibraryAdd,
+    /// Reading an app's History (history.rs): up to a year of days each time.
+    History,
 }
 
 impl Action {
@@ -70,6 +74,8 @@ impl Action {
             Self::Bounty => (10, HOUR),
             Self::Picture => (20, HOUR),
             Self::SourceCheck => (20, HOUR),
+            Self::LibraryAdd => (60, HOUR),
+            Self::History => (120, HOUR),
         };
         (n, Duration::from_secs(secs))
     }
@@ -95,6 +101,8 @@ impl Action {
             Self::Bounty => "new bounties",
             Self::Picture => "picture changes",
             Self::SourceCheck => "source checks",
+            Self::LibraryAdd => "library adds",
+            Self::History => "history requests",
         }
     }
 }

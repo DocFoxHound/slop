@@ -123,6 +123,7 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("GET", "/apps/{slug}/source-check", false, Slug::Own),
     ("GET", "/apps/{slug}/reviews", false, Slug::Own),
     ("GET", "/apps/{slug}/ratings", false, Slug::Own),
+    ("GET", "/apps/{slug}/history", false, Slug::Own),
     ("GET", "/apps/{slug}/slop-build", false, Slug::Own),
     ("GET", "/apps/{slug}/github-releases", false, Slug::Own),
     ("GET", "/apps/{slug}/update-settings", false, Slug::Own),
@@ -1055,6 +1056,19 @@ pub(crate) const TOOLS: &[Tool] = &[
         required: &["slug"],
     },
     Tool {
+        name: "get_history",
+        description: "How the app did each day, for the last 30, 90 or 365 days (`days`; 30 when left out), oldest first: `players` (accounts that started it that UTC day), `first_plays` (accounts that started it for the first time), `library_adds` (times it was added to a library; an account that removes it and adds it again on a later day counts again) and `peak` (the most playing at once, from Slop Pulse; it counts the maker too while they share their playtime). Counts only, never who. `null` means not counted that day, which is not zero: players per day are counted from `players_from`, the rest from `history_from`. The maker's own plays and adds aren't counted in the other three. Plays by accounts that switched off \"Share my playtime\" aren't counted either. Don't add `players` up across days: an account counts on every day it plays. SLAPorSLOP doesn't count installs; first plays are the closest number. Not for Private apps or dedicated servers.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/history",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "days": { "type": "integer", "description": "30, 90 or 365; 30 when left out" },
+            })
+        },
+        required: &["slug"],
+    },
+    Tool {
         name: "list_reviews",
         description: "Players' reviews of the app (Slaps or Slop, with text), newest first.",
         method: Method::GET,
@@ -1890,6 +1904,10 @@ mod tests {
             Some((false, Slug::Own, Some("pong")))
         );
         assert_eq!(
+            route(&get, "/v1/apps/pong/history"),
+            Some((false, Slug::Own, Some("pong")))
+        );
+        assert_eq!(
             route(&Method::PATCH, "/v1/apps/pong"),
             Some((true, Slug::Own, Some("pong")))
         );
@@ -2035,6 +2053,11 @@ mod tests {
         assert_eq!(path, "/v1/people?limit=5&skill=pixel-art&taking_work=true");
         let (_, path, _) = call("list_releases", json!({ "slug": "pong", "limit": 1 })).unwrap();
         assert_eq!(path, "/v1/apps/pong/releases?limit=1");
+        let (m, path, body) = call("get_history", json!({ "slug": "pong", "days": 90 })).unwrap();
+        assert_eq!(
+            (m, path.as_str(), body),
+            (Method::GET, "/v1/apps/pong/history?days=90", None)
+        );
         let (_, path, _) = call("get_person", json!({ "handle": "../me/creative" })).unwrap();
         assert_eq!(path, "/v1/people/..%2Fme%2Fcreative");
     }

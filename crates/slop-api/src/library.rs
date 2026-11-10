@@ -240,10 +240,24 @@ async fn add(
     headers: HeaderMap,
     Path(slug): Path<String>,
 ) -> ApiResult<StatusCode> {
+    crate::limits::check(&state, user.id, crate::limits::Action::LibraryAdd)?;
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
+    // A real insert also counts for the maker's History (history.rs).
     sqlx::query(
-        "insert into library_entries (user_id, app_id) values ($1, $2) on conflict do nothing",
+        "with added as (
+             insert into library_entries (user_id, app_id) values ($1, $2)
+             on conflict do nothing
+             returning app_id
+         )
+         insert into app_daily_counts (app_id, day, library_adds)
+         select a.id, (now() at time zone 'UTC')::date, 1
+         from added join apps a on a.id = added.app_id
+         where a.visibility = 'public'
+           and a.branch_kind is distinct from 'server'
+           and a.maker_id <> $1
+         on conflict (app_id, day) do update set
+             library_adds = app_daily_counts.library_adds + 1",
     )
     .bind(user.id)
     .bind(app_id)
@@ -257,10 +271,26 @@ async fn remove(
     user: CurrentUser,
     Path(slug): Path<String>,
 ) -> ApiResult<StatusCode> {
-    sqlx::query("delete from library_entries l using apps a where a.id = l.app_id and l.user_id = $1 and a.slug = $2")
-        .bind(user.id)
-        .bind(&slug)
-        .execute(&state.db)
-        .await?;
+    // An add taken back the same UTC day is not an add (history.rs).
+    sqlx::query(
+        "with gone as (
+             delete from library_entries l using apps a
+             where a.id = l.app_id and l.user_id = $1 and a.slug = $2
+             returning l.app_id, l.added_at, a.visibility, a.branch_kind, a.maker_id
+         )
+         update app_daily_counts c
+         set library_adds = greatest(c.library_adds - 1, 0)
+         from gone g
+         where c.app_id = g.app_id
+           and c.day = (now() at time zone 'UTC')::date
+           and (g.added_at at time zone 'UTC')::date = (now() at time zone 'UTC')::date
+           and g.visibility = 'public'
+           and g.branch_kind is distinct from 'server'
+           and g.maker_id <> $1",
+    )
+    .bind(user.id)
+    .bind(&slug)
+    .execute(&state.db)
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }

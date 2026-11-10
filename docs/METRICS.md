@@ -39,7 +39,7 @@ Every vote action is stored as an **event**. A vote is never just overwritten.
 The current vote per account and app is kept as well. It's updated in the same database transaction.
 
 ### 1.3 Other activity
-Library adds, installs and Interested, and launches (playtime and the days an app was launched; pressing Play on a browser game counts as a launch that day, recorded with platform `browser`). These feed "Popular this month", "For you", Discover and maker dashboards. SLAPorSLOP keeps no per-account download count: a desktop install while signed in adds the app to the library, which is what Discover's "keep most in your library" reel reads.
+Library adds, installs and Interested, and launches (playtime and the days an app was launched; pressing Play on a browser game counts as a launch that day, recorded with platform `browser`). These feed "Popular this month", "For you", Discover and maker dashboards. Each launch that is an account's first that UTC day, for an account with "Share my playtime" on, and each real library add (one taken back the same UTC day is not counted), also adds one to the app's daily totals (`app_daily_counts`: players, first plays, library adds; counts only), which only the app's maker reads. SLAPorSLOP keeps no per-account download count: a desktop install while signed in adds the app to the library, which is what Discover's "keep most in your library" reel reads.
 
 ## 2. Weighted and unweighted ratings (decided)
 
@@ -65,6 +65,8 @@ Library adds, installs and Interested, and launches (playtime and the days an ap
 | **Public** | Nothing | Rating-over-time charts |
 
 **Built 2026-10-20 (votes):** the maker's Manage page shows each player's current vote grouped by the version and platform it was cast on (the desktop app reports the platform at launch; a browser game's is always `browser`, shown as "In the browser"), and "update impact" per version (👎 → 👍 and 👍 → 👎 changes, new votes). Branches are separate apps with their own ratings.
+
+**Built 2026-11-10 (history):** the maker's Manage page shows players per day, first plays per day, library adds per day and the busiest moment each day, for 30, 90 or 365 days. Totals per app and UTC day only: no names, no countries, no platforms. Players and first plays count only accounts with "Share my playtime" on. Library adds are the times the app was added to a library (an account that removes it and adds it again on a later day counts again). No minimum count: a day can show 1. Open owner decision (2026-11-10): the build ships without a floor because a public app's page already shows "1 playing now". This differs from payments, where a breakdown needs 10 people. Private apps and dedicated servers have no history, and the maker's own plays and adds aren't counted.
 
 ## 4. Architecture
 
@@ -155,6 +157,7 @@ Database permissions: the application's database role can only **insert** into `
 - **Votes:** kept for the life of the account. When an account is deleted, its votes are **anonymized** (linked to a random ID) so ratings stay honest.
 - **Export:** a user's full donation, payment and vote history can be downloaded.
 - Public votes by default are explained at sign-up (`LEGAL.md` §7).
+- **History for makers:** daily totals carry no account, so they stay when an account is closed and are kept for the life of the app. The first numbers were back-filled when migration 0095 ran, the day this shipped (`apps.players_from` of an app that was public then), from rows that still existed then (first plays from `user_app_usage.first_launched_at`, only for accounts that share their playtime; library adds from `library_entries.added_at`; nothing from the time an app was private): accounts closed before that day and library entries removed before it are not in them. Players per day could not be back-filled and start that day.
 
 ## 7. The mockup and the simulation
 The real store page shows the weighted and unweighted % Slaps and the rating over time (`web/src/components/RatingPanel.tsx`), from real votes. Invented data lives in two places only: the original mockup (`mockup/`, saved in your browser, and without the weighted figure) and the simulation sandbox (`docs/SIMULATION.md`), which checks these numbers against a known truth.
