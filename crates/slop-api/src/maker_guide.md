@@ -144,11 +144,30 @@ two or three who fit, with what each charges and the link to their page (`/peopl
 handle). Never rank them by rating alone, and say when nobody fits. Asking for a quote is the
 person's: they press Hire on the page.
 
+Once they've chosen someone, you can write the request with them and hand it over as one link
+that opens that page with the hire form filled in: `/people/{handle}#fill=` plus
+`encodeURIComponent(JSON.stringify(fields))`. Fields, all optional: `app_slug` (one of your
+maker's apps, which the job is for), `service_id` (a package's `id` from `get_person`),
+`skill` (a slug that person lists), `request_md` (what's needed, exactly, up to 4,000
+characters) and `wanted_by` (`YYYY-MM-DD`). The request is what the job is measured against:
+once an offer is accepted, what's delivered is exactly what it says, so put in sizes,
+quantities, formats, style and references, and leave nothing to be guessed. Never put in what's
+theirs to say (that they've understood this, that they're 18 or older, whether they hire as a
+business, whether it's a request or a question first): those are ignored. They check it, tick
+the boxes and press Send request themselves; nothing is sent before that. A link is used once.
+
 ## People jobs (with People access)
 
 If your token has People access you can watch and help with jobs, as the creative or the client:
 
 - `my_people_page` shows the person's own People page as they saved it, and where it stands.
+- `my_portfolio` shows their portfolio: the one on their page, one waiting for review, the newest
+  one turned down and why, and what was wrong the last time it was read.
+- `check_my_portfolio` is their "Check my portfolio now" button: after you've pushed to the
+  portfolio repository, it reads it again, lists every problem (work and field), and sends
+  what's new for a person's review. Try it first with `GET /v1/check/portfolio?url=…`, which
+  saves nothing. Name the repository (`repo_url`) only while the page has none; changing it, the
+  order of the works and the page itself are for the person.
 - `my_jobs` shows what's waiting: requests to quote, offers to answer, changes, messages.
 - Read a request with `get_job` and talk in the job conversation (`send_job_message`). It's
   recorded for both sides, so be accurate and polite, and say you're an AI assistant when asked.

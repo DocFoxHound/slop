@@ -5,8 +5,8 @@
 //! with a link to where it's done. An assistant ends a session with it, so nobody is left
 //! wondering what's next.
 //!
-//! An agent's token for some apps sees only those; its People steps only when it handles People
-//! jobs (maker_agents.rs).
+//! An agent's token for some apps sees only those; its People steps only with People access
+//! (maker_agents.rs).
 
 use axum::{Json, Router, extract::State, routing::get};
 use serde::Serialize;
@@ -316,13 +316,24 @@ async fn next_steps(
             );
         }
         let status = crate::people::page_status(&state.db, user.id).await?;
+        // A publish token with People access can have the portfolio read again itself
+        // (maker_agents.rs), so for that agent the portfolio is the assistant's to finish.
+        let checks = user
+            .agent
+            .as_ref()
+            .is_some_and(|a| a.people && a.scope == crate::maker_agents::Scope::Publish);
+        let (portfolio_who, check) = if checks {
+            (Who::Assistant, "run check_my_portfolio")
+        } else {
+            (Who::You, "press Check my portfolio now")
+        };
         match status.state {
             "draft" => step(
-                Who::You,
+                portfolio_who,
                 None,
                 match &status.problem {
-                    Some(p) => format!("Your People page needs a portfolio that can be read: {p}. Your AI assistant can fix it with the portfolio guide; then press Check my portfolio now."),
-                    None => "Add your portfolio to your People page: your AI assistant can build it with the portfolio guide (/portfolio.md); then press Check my portfolio now.".into(),
+                    Some(p) => format!("Your People page needs a portfolio that can be read: {p}. Your AI assistant can fix it with the portfolio guide; then {check}."),
+                    None => format!("Add your portfolio to your People page: your AI assistant can build it with the portfolio guide (/portfolio.md); then {check}."),
                 },
                 site("/people/me#portfolio"),
                 false,
@@ -335,10 +346,10 @@ async fn next_steps(
                 false,
             ),
             "turned_down" => step(
-                Who::You,
+                portfolio_who,
                 None,
                 format!(
-                    "Your portfolio wasn't approved: {}. Fix it (your AI assistant can help), then press Check my portfolio now.",
+                    "Your portfolio wasn't approved: {}. Fix it (your AI assistant can help), then {check}.",
                     status.reason.as_deref().unwrap_or("see your People page")
                 ),
                 site("/people/me#portfolio"),

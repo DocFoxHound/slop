@@ -126,10 +126,10 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
       <p className="muted small">
         Let your own AI agent (such as Claude Code, Claude or ChatGPT) publish and fix your apps: create store pages,
         submit releases with notes, read SLAPorSLOP's checks and get exact fixes, register community builds and mods, and
-        offer fixes to other apps. With <b>People</b> access it can also watch your jobs, send quotes and talk in job
-        conversations. It can never pay, accept agreements, change payouts or your account. Your agent does the work on
-        your side; SLAPorSLOP runs no AI for it. Each connection lasts up to 12 months: SLAPorSLOP reminds you a week and a day
-        before it ends, and you can remove it any time.
+        offer fixes to other apps. With <b>People</b> access it can also watch your jobs, send quotes, talk in job
+        conversations, and have your portfolio checked and sent for review. It can never pay, accept agreements, change
+        payouts or your account. Your agent does the work on your side; SLAPorSLOP runs no AI for it. Each connection lasts
+        up to 12 months: SLAPorSLOP reminds you a week and a day before it ends, and you can remove it any time.
       </p>
       <EasyConnect mcpUrl={mcpAddress(siteOrigin(window.location, typeof __SLOP_SITE_URL__ === "string" ? __SLOP_SITE_URL__ : ""))} />
       {terms.prompt}
@@ -227,8 +227,9 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
           ))}
         </fieldset>
         <label className="check">
-          <input type="checkbox" checked={people} onChange={(e) => setPeople(e.target.checked)} /> People jobs too: see
-          requests, send quotes, propose changes and talk in job conversations
+          <input type="checkbox" checked={people} onChange={(e) => setPeople(e.target.checked)} /> People too: see job
+          requests, send quotes, propose changes, talk in job conversations, and have your portfolio checked and sent
+          for review
         </label>
         <label>
           Expires after
@@ -280,7 +281,7 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
                   <b>{t.name}</b>{" "}
                   <span className="muted small">
                     {t.scope === "publish" ? "publishes" : "looks"} · {t.apps.length ? t.apps.join(", ") : "all apps"}
-                    {t.people ? " · People jobs" : ""}
+                    {t.people ? " · People" : ""}
                   </span>
                   {connected && (
                     <div className="small muted token-connected">

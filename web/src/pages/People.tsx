@@ -3,11 +3,12 @@
 // built to sell a service — banner, accent colour, their own section order — so it isn't an app
 // page with a different header.
 
-import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError, type AiUse, type CreativeCard, type CreativePage, type PageStatus, type PeopleQuery, type Section, type Work } from "../api";
 import { Avatar } from "../components/Avatar";
+import { HandoffError, HandoffNotice, HandoffWaiting, useHandoff } from "../components/Handoff";
 import { AI_USE, AiBadge, Lightbox, PersonCard, RatingLine, ServicesList, WorkTile, accentStyle } from "../components/People";
 import { DesignArea, slopParts } from "../components/PeopleDesign";
 import {
@@ -24,6 +25,7 @@ import { useTermsGate } from "../components/Terms";
 import { SkillIcon, VoteLabel } from "../components/StoreIcons";
 import { ErrorState, ExternalLink, Loading, SectionHeader, Shelf } from "../components/ui";
 import { formatDate, money } from "../format";
+import { HIRE_LABELS, HIRE_LIMITS, forgetHandoff, hireFill, type HandoffLink } from "../handoff";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { isDesktop, openExternal } from "../platform";
@@ -294,6 +296,17 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
     savedRef.current?.focus({ preventScroll: true });
   }, []);
   const [hiring, setHiring] = useState<{ serviceId?: string; skill?: string }>();
+  // A request prepared by the visitor's AI assistant (/people/{handle}#fill=…, handoff.ts): the
+  // form opens with it. `handoffDone`: the link the form has finished with (closed), so opening
+  // the form again starts empty.
+  const { link: handoff, n: handoffN } = useHandoff("hire", !p.is_me, p.handle);
+  const [handoffDone, setHandoffDone] = useState<number>();
+  useEffect(() => {
+    if (!handoff) return;
+    if (p.can_hire) setHiring((h) => h ?? {});
+    // No form opens for someone who can't be hired now: the request isn't kept for one.
+    else forgetHandoff("hire");
+  }, [handoff, handoffN]);
   const [open, setOpen] = useState<Work>();
   const onProseClick = (e: MouseEvent) => {
     const link = (e.target as HTMLElement).closest("a[data-external]");
@@ -439,13 +452,25 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
           </div>
         </div>
 
+        {handoff && !p.can_hire && (
+          <p className="notice handoff-error" role="status">
+            Your AI assistant prepared a request for {p.name}, but{" "}
+            {p.closed ? "their account is closed" : p.taking_work ? "they aren't taking paid work yet" : "they're fully booked"}, so it
+            can't be sent.
+          </p>
+        )}
         {hiring && (
           <HireForm
+            key={`hire-${handoffN}`}
             p={p}
             initial={hiring}
+            handoff={handoffDone === handoffN ? null : handoff}
             signedIn={Boolean(me)}
             adultConfirmed={Boolean(me?.adult_confirmed)}
-            onClose={() => setHiring(undefined)}
+            onClose={() => {
+              setHiring(undefined);
+              setHandoffDone(handoffN);
+            }}
           />
         )}
 
@@ -632,12 +657,15 @@ function DisputeForm({ jobId, onDone }: { jobId: string; onDone: () => void }) {
 function HireForm({
   p,
   initial,
+  handoff,
   signedIn,
   adultConfirmed,
   onClose,
 }: {
   p: CreativePage;
   initial: { serviceId?: string; skill?: string };
+  /** A request from the person's AI assistant, to fill the form in with. */
+  handoff: HandoffLink | null;
   signedIn: boolean;
   adultConfirmed: boolean;
   onClose: () => void;
@@ -657,10 +685,38 @@ function HireForm({
   // Before the early return below: the form opens signed out while the session is still loading,
   // and every hook has to run on every render (rules of hooks).
   const terms = useTermsGate();
+  // An AI assistant's request goes in once the person's projects are known (the project has to be
+  // one of theirs), and only as these fields' values. The boxes are never ticked for them.
+  const [cleared, setCleared] = useState(false);
+  const fill = useMemo(
+    () =>
+      handoff && "fields" in handoff && !cleared && projects.data && projects.data.length > 0
+        ? hireFill(handoff.fields, {
+            skills: p.skills.map((s) => s.slug),
+            services: p.services,
+            projects: projects.data.map((a) => a.slug),
+          })
+        : undefined,
+    [handoff, cleared, projects.data, p],
+  );
+  const filledIn = useRef(false);
+  useEffect(() => {
+    if (!fill || filledIn.current) return;
+    filledIn.current = true;
+    const v = fill.values;
+    if (v.app_slug !== undefined) setProject(v.app_slug);
+    if (v.service_id !== undefined) setServiceId(v.service_id);
+    if (v.skill !== undefined) setSkill(v.skill);
+    if (v.request_md !== undefined) setRequest(v.request_md);
+    if (v.wanted_by !== undefined) setWantedBy(v.wanted_by);
+    // In the form now: a reload doesn't fill it in again over what the person changed.
+    forgetHandoff("hire");
+  }, [fill]);
 
   if (!signedIn) {
     return (
       <div className="panel panel-pad hire-form">
+        <HandoffWaiting link={handoff} />
         <p>Sign in to hire {p.name}.</p>
         {isDesktop ? null : (
           <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(`/people/${p.handle}`)}`}>
@@ -705,13 +761,46 @@ function HireForm({
     >
       {terms.prompt}
       <h2>Hire {p.name}</h2>
+      {handoff && "error" in handoff && (
+        <HandoffError error={handoff.error} then="The form is empty: fill it in yourself, or ask your assistant for a new link." />
+      )}
       {projects.data && apps.length === 0 ? (
-        <p>
-          Jobs belong to one of your projects, so the work can be credited on its page. It can be a private draft or a Coming soon page.{" "}
-          <Link to="/publish/new">Create a project first</Link>.
-        </p>
+        <>
+          <p>
+            Jobs belong to one of your projects, so the work can be credited on its page. It can be a private draft or a Coming soon page.{" "}
+            <Link to="/publish/new">Create a project first</Link>.
+          </p>
+          {handoff && "fields" in handoff && (
+            <p className="notice handoff-waiting" role="status">
+              <b>Your AI assistant's request is ready.</b> Come back to this page once you have a project, and the form opens with it
+              filled in. It's kept in this browser tab only, for two hours.
+            </p>
+          )}
+        </>
       ) : (
         <>
+          {fill && (
+            <HandoffNotice
+              fill={fill}
+              labels={HIRE_LABELS}
+              check="what you're asking for, word for word"
+              button="Send request"
+              onClear={() => {
+                setCleared(true);
+                setProject("");
+                setServiceId(initial.serviceId ?? "");
+                setSkill(initial.skill ?? p.skills[0]?.slug ?? "");
+                setRequest("");
+                setWantedBy("");
+              }}
+              clearLabel="Clear the form"
+            >
+              <p>
+                The boxes under the request are yours to tick, and so is the choice between <b>Send request</b> and{" "}
+                <b>Ask about it first</b>.
+              </p>
+            </HandoffNotice>
+          )}
           <label>
             For which project?
             <select value={chosenProject} onChange={(e) => setProject(e.target.value)} required>
@@ -764,7 +853,7 @@ function HireForm({
               value={request}
               onChange={(e) => setRequest(e.target.value)}
               rows={5}
-              maxLength={4000}
+              maxLength={HIRE_LIMITS.request_md}
               required
               placeholder="For example: 1 character, 4 directions (up, down, left, right), walk cycle of 8 frames each, 32×32 pixels, transparent PNG sheets, palette like the attached reference."
             />

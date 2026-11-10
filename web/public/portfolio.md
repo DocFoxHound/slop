@@ -304,8 +304,9 @@ address, services and prices, answer the business question (and tick 18+ if aske
 ## Checklist for agents
 
 To help someone build their portfolio, in order. Steps marked **(person)** need the person
-themself: SLAPorSLOP's agent tokens can't check or send a portfolio, and there's no token or code to
-ask them for.
+themself. You don't need a token or a code for any of it, so don't ask for one. If the person has
+already connected you to SLAPorSLOP with People access (you have the `my_portfolio` and
+`check_my_portfolio` tools), steps 9 and 10 say what you can then do for them.
 
 1. Ask what they do, what kind of work they want to be hired for, and which works they're proudest
    of. Suggest a template: gallery (pictures), showreel (videos), tracklist (audio) or studio (a
@@ -339,8 +340,13 @@ ask them for.
 9. **(person)** In the editor's **Portfolio** section, paste the repository address and choose
    **Check my portfolio now**. If SLAPorSLOP lists problems, they can paste them to you: each line names
    the work and field. Fix, push, and check again.
+   Connected, with People access and a token that can publish? Then `check_my_portfolio` is that
+   button: it reads the repository again, answers with the same problems, and sends what's new
+   for review. Give it `repo_url` only while the page has no repository yet; changing a
+   repository that's set is the person's. Tell them what you sent.
 10. **(person)** Wait for review; set up **Get paid** meanwhile, so makers can hire them once the
-    page is live.
+    page is live. Connected with People access? `my_portfolio` says whether it's still waiting,
+    live, or turned down and why; a portfolio that was turned down isn't taken again unchanged.
 
 ## Your page's design
 

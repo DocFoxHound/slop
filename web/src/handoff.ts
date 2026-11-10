@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Handoff links (DESIGN §8 and §15.1): someone's AI assistant prepares a new app's store page or a
-// People page and gives them one link, /publish/new#fill=… or /people/me#fill=…, with the fields
-// as URL-encoded JSON (`encodeURIComponent(JSON.stringify(fields))`, named as the API names them).
-// The fill rides in the fragment, so it never reaches the server or its logs. The form opens
-// filled in; the person checks it and presses Create themselves.
+// Handoff links (DESIGN §8 and §15.1): someone's AI assistant prepares a new app's store page, a
+// People page or a request to hire someone, and gives them one link, /publish/new#fill=…,
+// /people/me#fill=… or /people/{handle}#fill=…, with the fields as URL-encoded JSON
+// (`encodeURIComponent(JSON.stringify(fields))`, named as the API names them). The fill rides in
+// the fragment, so it never reaches the server or its logs. The form opens filled in; the person
+// checks it and presses Create (or Send request) themselves.
 //
 // The link is untrusted: only the form's own fields, of the right type and within the form's
 // limits, go into the form, and only as the values of its inputs. Nothing that's the person's own
-// to decide is ever filled in: being 18 or older, agreements, whether they work as a business,
-// payments, or a token.
+// to decide is ever filled in: being 18 or older, agreements, whether they work (or hire) as a
+// business, that they've understood what a request commits them to, payments, or a token.
 
 import {
   ACCESSIBILITY,
@@ -25,7 +26,7 @@ import {
 } from "./api";
 import { CONTENT_LABEL, ONLINE_LABEL } from "./format";
 
-export type HandoffForm = "app" | "people";
+export type HandoffForm = "app" | "people" | "hire";
 
 /** A link's fields as sent, or why the link couldn't be read. */
 export type HandoffLink = { fields: Record<string, unknown> } | { error: string };
@@ -116,19 +117,25 @@ function load(key: string): string | null {
  * The link's fields for this form: from the address bar, or kept from before signing in. A fill in
  * the address is kept in the tab (for the sign-in pages in between) and taken out of the address
  * bar, so a reload doesn't apply it again over what the person changed. Safe to call twice.
+ *
+ * `scope`: which of the form's pages the link was opened on, where it has more than one (a
+ * request to hire is for one person's page). A fill kept for another page isn't this one's.
  */
-export function takeHandoff(form: HandoffForm, now = Date.now()): HandoffLink | null {
+export function takeHandoff(form: HandoffForm, now = Date.now(), scope = ""): HandoffLink | null {
   const link = decodeFill(window.location.hash);
   if (link) {
     window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
-    store(keyOf(form), "fields" in link ? JSON.stringify({ at: now, fields: link.fields }) : null);
+    store(keyOf(form), "fields" in link ? JSON.stringify({ at: now, fields: link.fields, scope }) : null);
     return link;
   }
   const kept = load(keyOf(form));
   if (!kept) return null;
   try {
-    const { at, fields } = JSON.parse(kept) as { at?: unknown; fields?: unknown };
-    if (typeof at === "number" && now - at >= 0 && now - at < KEEP_FOR_MS && isRecord(fields)) return { fields };
+    const { at, fields, scope: keptFor } = JSON.parse(kept) as { at?: unknown; fields?: unknown; scope?: unknown };
+    if (typeof at === "number" && now - at >= 0 && now - at < KEEP_FOR_MS && isRecord(fields)) {
+      // Kept for another page: it stays for that one.
+      return (typeof keptFor === "string" ? keptFor : "") === scope ? { fields } : null;
+    }
   } catch {
     // Not ours, or damaged: dropped below.
   }
@@ -576,4 +583,83 @@ export const PEOPLE_LABELS: Record<string, string> = {
   adult: "I'm 18 or older",
   stripe: "Get paid",
   payments: "Get paid",
+};
+
+// ---- A request to hire someone (/people/{handle}) ------------------------------------------------
+
+export const HIRE_LIMITS = { request_md: 4000 } as const;
+
+/** The hire form's fields a link can fill in (the API's hire body, without what's the person's own). */
+export interface HireFields {
+  app_slug: string;
+  service_id: string;
+  skill: string;
+  request_md: string;
+  wanted_by: string;
+}
+
+/** Who the request is for and whose it is: their skills and packages, and the person's projects. */
+export interface HireContext {
+  skills: readonly string[];
+  services: ReadonlyArray<{ id: string; skill: string }>;
+  projects: readonly string[];
+}
+
+/** A day as the date field holds it. */
+const day: Check<string> = (v) => {
+  const rule = "should be a date, like 2030-01-31";
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return new Skip(rule);
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v ? v : new Skip(rule);
+};
+
+const among = (choices: readonly string[], why: string): Check<string> => (v) =>
+  typeof v === "string" && choices.includes(v) ? v : new Skip(why);
+
+/**
+ * A request to hire someone (the API's hire body), checked against the form: the project is one
+ * of the person's own, the package and skill are ones this page offers. What commits the person
+ * is never filled in: that they've understood the request is exactly what's delivered, being 18
+ * or older, hiring as a business, and which button they press.
+ */
+export function hireFill(fields: Record<string, unknown>, to: HireContext): Fill<HireFields> {
+  const fill = read<HireFields>(
+    fields,
+    {
+      app_slug: among(to.projects, "isn't one of your projects"),
+      service_id: among(
+        to.services.map((s) => s.id),
+        "isn't one of their packages now",
+      ),
+      skill: among(to.skills, "isn't one of their skills"),
+      request_md: text(HIRE_LIMITS.request_md, { lines: true, required: true }),
+      wanted_by: day,
+    },
+    {
+      ...AGREEMENTS,
+      exact_wording_ack: "only you can say you've understood it",
+      confirm_adult: "only you can say you're 18 or older",
+      adult: "only you can say you're 18 or older",
+      client_is_business: "whether you're hiring as a business is yours to say",
+      inquiry: "you choose between Send request and Ask about it first",
+    },
+  );
+  // A package brings its skill, as picking it in the form does.
+  const service = to.services.find((s) => s.id === fill.values.service_id);
+  if (service && fill.values.skill === undefined) fill.values.skill = service.skill;
+  return fill;
+}
+
+/** The hire form's labels, for saying what was filled in. */
+export const HIRE_LABELS: Record<string, string> = {
+  app_slug: "Project",
+  service_id: "Package",
+  skill: "Skill",
+  request_md: "What you need",
+  wanted_by: "Hoping to have it by",
+  exact_wording_ack: "I understand",
+  confirm_adult: "I'm 18 or older",
+  adult: "I'm 18 or older",
+  client_is_business: "I'm hiring as a business",
+  inquiry: "Ask about it first",
 };

@@ -240,14 +240,14 @@ test.describe("AI agent token setup and expiry", () => {
     await expect(form.getByRole("textbox", { name: "Name" })).toBeFocused();
     await expect(form.getByRole("combobox", { name: "Can" })).toHaveValue("publish");
     await expect(form.getByRole("checkbox", { name: "Only Lantern Keep" })).toBeChecked();
-    await expect(form.getByRole("checkbox", { name: /People jobs too/ })).toBeChecked();
+    await expect(form.getByRole("checkbox", { name: /People too/ })).toBeChecked();
     await expect(form.getByRole("combobox", { name: "Expires after" })).toHaveValue("90");
     // Replacing the expired one picks up its own settings, a year.
     await studio.getByRole("button", { name: "Make a replacement for Studio PC" }).click();
     await expect(form.getByRole("textbox", { name: "Name" })).toHaveValue("Studio PC");
     await expect(form.getByRole("combobox", { name: "Can" })).toHaveValue("read");
     await expect(form.getByRole("radio", { name: /All my apps/ })).toBeChecked();
-    await expect(form.getByRole("checkbox", { name: /People jobs too/ })).not.toBeChecked();
+    await expect(form.getByRole("checkbox", { name: /People too/ })).not.toBeChecked();
     await expect(form.getByRole("combobox", { name: "Expires after" })).toHaveValue("365");
     await expect(form.getByRole("status")).toContainText("(it has expired)");
 
