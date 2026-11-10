@@ -6,6 +6,7 @@ import {
   decodeFill,
   forgetHandoff,
   forgetPortfolioRepo,
+  hireFill,
   keepPortfolioRepo,
   keptPortfolioRepo,
   KEEP_FOR_MS,
@@ -360,6 +361,90 @@ describe("a People page's fill", () => {
   });
 });
 
+describe("filling in a request to hire someone", () => {
+  // Vera's page (pixel art and music, one package) and the visitor's two projects.
+  const VERA = {
+    skills: ["pixel-art", "music"],
+    services: [{ id: "0a1b2c3d", skill: "pixel-art" }],
+    projects: ["cleos-tavern", "night-ferry"],
+  };
+  const REQUEST = {
+    app_slug: "night-ferry",
+    service_id: "0a1b2c3d",
+    skill: "music",
+    request_md: "1 ferry, 4 directions, 32×32.\nTransparent PNG.",
+    wanted_by: "2030-01-31",
+  };
+
+  it("takes the form's fields, in the form's order", () => {
+    const fill = hireFill(REQUEST, VERA);
+    expect(fill.values).toEqual(REQUEST);
+    expect(fill.filled).toEqual(["app_slug", "service_id", "skill", "request_md", "wanted_by"]);
+    expect(fill.left).toEqual([]);
+    expect(fill.unknown).toBe(0);
+  });
+
+  it("a package brings its skill when the link names none", () => {
+    expect(hireFill({ service_id: "0a1b2c3d" }, VERA).values).toEqual({ service_id: "0a1b2c3d", skill: "pixel-art" });
+    // A skill that isn't theirs is left out, and the package's stands.
+    const fill = hireFill({ service_id: "0a1b2c3d", skill: "voice" }, VERA);
+    expect(fill.values).toEqual({ service_id: "0a1b2c3d", skill: "pixel-art" });
+    expect(fill.left).toEqual([{ field: "skill", why: "isn't one of their skills" }]);
+  });
+
+  it("never fills in what commits the person, and says so", () => {
+    const fill = hireFill(
+      {
+        request_md: "A tavern cat.",
+        exact_wording_ack: true,
+        confirm_adult: true,
+        client_is_business: true,
+        inquiry: true,
+        accept_terms: true,
+        price_minor: 100,
+      },
+      VERA,
+    );
+    expect(fill.values).toEqual({ request_md: "A tavern cat." });
+    expect(Object.fromEntries(fill.left.map((l) => [l.field, l.why]))).toEqual({
+      exact_wording_ack: "only you can say you've understood it",
+      confirm_adult: "only you can say you're 18 or older",
+      client_is_business: "whether you're hiring as a business is yours to say",
+      inquiry: "you choose between Send request and Ask about it first",
+      accept_terms: "accepting an agreement is yours to do",
+    });
+    expect(fill.unknown).toBe(1);
+  });
+
+  it("leaves out what the form wouldn't take, with why", () => {
+    const fill = hireFill(
+      {
+        app_slug: "someone-elses",
+        service_id: "ffffffff",
+        skill: ["pixel-art"],
+        request_md: "x".repeat(4001),
+        wanted_by: "2030-02-30",
+      },
+      VERA,
+    );
+    expect(fill.values).toEqual({});
+    expect(Object.fromEntries(fill.left.map((l) => [l.field, l.why]))).toEqual({
+      app_slug: "isn't one of your projects",
+      service_id: "isn't one of their packages now",
+      skill: "isn't one of their skills",
+      request_md: "is over 4,000 characters",
+      wanted_by: "should be a date, like 2030-01-31",
+    });
+    for (const bad of ["31/01/2030", "2030-1-31", "soon", 20300131, "2030-13-01", ""]) {
+      expect(hireFill({ wanted_by: bad }, VERA).values).toEqual({});
+    }
+    expect(hireFill({ request_md: "  \n " }, VERA).left).toEqual([{ field: "request_md", why: "is empty" }]);
+    expect(hireFill({ request_md: "a\u0000b" }, VERA).left).toEqual([{ field: "request_md", why: "has characters that aren't allowed" }]);
+    // Names every object has aren't projects, packages or skills.
+    expect(hireFill({ app_slug: "toString", skill: "constructor" }, VERA).values).toEqual({});
+  });
+});
+
 describe("keeping a fill through signing in", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -379,6 +464,19 @@ describe("keeping a fill through signing in", () => {
     expect(takeHandoff("people")).toBeNull();
     forgetHandoff("app");
     expect(takeHandoff("app")).toBeNull();
+  });
+
+  it("a request to hire is kept for the page it was opened on", () => {
+    window.history.replaceState(null, "", `/people/vera-pixels${link({ request_md: "A tavern cat." })}`);
+    expect(takeHandoff("hire", undefined, "vera-pixels")).toEqual({ fields: { request_md: "A tavern cat." } });
+    expect(window.location.hash).toBe("");
+    // Someone else's page doesn't get it, and doesn't lose it for Vera's.
+    expect(takeHandoff("hire", undefined, "olly-sounds")).toBeNull();
+    expect(takeHandoff("hire", undefined, "vera-pixels")).toEqual({ fields: { request_md: "A tavern cat." } });
+    // Nor does the People editor, which keeps its own.
+    expect(takeHandoff("people")).toBeNull();
+    forgetHandoff("hire");
+    expect(takeHandoff("hire", undefined, "vera-pixels")).toBeNull();
   });
 
   it("isn't applied once it's two hours old", () => {

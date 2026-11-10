@@ -1524,13 +1524,51 @@ Tell the person: the form opens filled in. They should check everything, especia
 rating, content labels, licence and repository, and then press **Create draft** themselves. A
 link is used once; make a new one if they need it again.
 
+### A link for hiring someone
+
+The same works for a request to someone on People (an artist, a composer, a writer…).
+Write the request with the person, then give them one link to that creative's page: it opens with
+the hire form filled in. They sign in if needed, check it, tick the boxes that are theirs and
+press **Send request** (or **Ask about it first**) themselves. Nothing is sent until they do.
+
+Build the link: `/people/{handle}#fill=` on this site (the handle is the page's address),
+followed by `encodeURIComponent(JSON.stringify(fields))`. A People page is public: read it at
+`/v1/people/{handle}` for the skills and packages it offers.
+
+| Field | Type | Rules |
+|---|---|---|
+| `app_slug` | string | the project the job is for: the store address of one of the person's own apps (a draft counts). Left out, the form starts on their first one |
+| `service_id` | string | one of the creative's packages, by its `id`. It brings its skill |
+| `skill` | string | one of the skills the creative lists, by its slug (`pixel-art`, `music`…) |
+| `request_md` | string | what's needed, exactly: up to 4,000 characters |
+| `wanted_by` | string | a date, `YYYY-MM-DD` |
+
+Write `request_md` with care. Once the person accepts an offer, the creative is expected to
+deliver exactly what it says, nothing more and nothing less, and any change afterwards is new
+work with its own price and date. Put in sizes, quantities, formats, style, references and
+deadlines, and ask the person rather than guess.
+
+Never put in a link (they're ignored): that the person has understood this, that they're 18 or
+older, whether they're hiring as a business, whether it's a request or a question first, or
+anything about agreements and payments. Asking for a quote, accepting an offer and paying are
+theirs to do on the site; no agent token can do them.
+
+Example (on slaporslop.games):
+`https://slaporslop.games/people/sea-sounds#fill=%7B%22app_slug%22%3A%22harbour-lights%22%2C%22skill%22%3A%22sound%22%2C%22request_md%22%3A%2212%20harbour%20sounds%3A%20waves%20(3)%2C%20gulls%20(3)%2C%20a%20foghorn%2C%20rope%20creaks%20(5).%20WAV%2C%2048%20kHz%2C%2016-bit%2C%20each%20under%2010%20seconds%2C%20the%20waves%20loopable.%22%2C%22wanted_by%22%3A%222030-03-01%22%7D`
+
+Tell the person: the page opens with the request filled in. They should read it word for word,
+since it's what the work is measured against, and send it themselves. The link works for that
+one page, once. If the creative isn't taking work, the page says so and nothing is kept.
+
 ## Working with your AI agent
 
 Your own AI coding agent can do most of this for you, from your editor: write and create the
 store page, submit releases with notes, read SLAPorSLOP's checks of each release and fix what they find,
 put players back on an earlier release while it fixes a broken one, read what players say,
 register community builds and mods, offer fixes to the apps you build on, and search People for
-someone to hire. Creatives can let it watch People jobs, send quotes and talk in job conversations.
+someone to hire, with the request written out for you to check and send. Creatives can let it
+watch People jobs, send quotes and talk in job conversations, and have their portfolio checked
+and sent for review after it changes.
 
 **The easy way: approve it in your browser.** There's no token to copy or keep safe.
 

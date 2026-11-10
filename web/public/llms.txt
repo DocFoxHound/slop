@@ -28,3 +28,8 @@
 - [Your SLAPorSLOP portfolio](/portfolio.md): how creatives (artists, animators, composers, sound
   designers, writers…) build the portfolio their People page needs: the `.slop/portfolio.json`
   format, every limit SLAPorSLOP checks, ready-made templates, and a checklist for agents.
+
+- Hiring someone on People: an assistant can write a maker's request with them and hand it over
+  as one link to that creative's page (`/people/{handle}#fill=…`), which opens the hire form
+  filled in for the person to check and send themselves. The fields are in /publishing.md, under
+  "A link for hiring someone".

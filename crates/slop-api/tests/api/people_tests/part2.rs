@@ -5482,6 +5482,267 @@ async fn a_makers_agent_with_people_access_answers_jobs_but_never_agrees_pays_or
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_creatives_agent_checks_their_portfolio_and_never_changes_its_repository(db: PgPool) {
+    use super::part1::{call, link_github, portfolio_app, put_file, staff};
+    let (app, files, vera, cookie) = portfolio_app(db).await;
+    link_github(&app, vera, "42").await;
+    let (_, reviewer) = staff(&app, "Rae Reviewer", "reviewer").await;
+    let manifest = |works: Value| {
+        put_file(
+            &files,
+            "portfolio.json",
+            json!({ "avatar": "avatar.png", "works": works })
+                .to_string()
+                .into_bytes(),
+        )
+    };
+    let mcp = "/v1/maker/mcp";
+    let token = |name: &'static str, scope: &'static str, people: bool| {
+        maker_token(
+            &app,
+            &cookie,
+            json!({ "name": name, "scope": scope, "people": people }),
+        )
+    };
+    let agent = token("Claude", "publish", true).await;
+    let reader = token("Reader", "read", true).await;
+    let apps_only = token("Apps", "publish", false).await;
+    let parsed = |text: &str| serde_json::from_str::<Value>(text).unwrap();
+    let octo = "https://github.com/octo/game";
+    let repo = || async {
+        sqlx::query_scalar::<_, Option<String>>(
+            "select portfolio_repo from creatives where user_id = $1",
+        )
+        .bind(vera)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+    let sets = |status: &'static str| {
+        let db = &app.db;
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "select count(*) from portfolio_sets where creative_id = $1 and status = $2",
+            )
+            .bind(vera)
+            .bind(status)
+            .fetch_one(db)
+            .await
+            .unwrap()
+        }
+    };
+
+    // Looking is any People token's; having it read again is a publish token's.
+    let (ok, text) = tool(&app, &reader, mcp, "my_portfolio", json!({})).await;
+    assert!(ok, "{text}");
+    let overview = parsed(&text);
+    assert!(overview["repo_url"].is_null() && overview["pending"].is_null());
+    assert_eq!(overview["manifest_path"], ".slop/portfolio.json");
+    let (ok, text) = tool(&app, &reader, mcp, "check_my_portfolio", json!({})).await;
+    assert!(!ok && text.contains("forbidden"), "{text}");
+    for name in ["my_portfolio", "check_my_portfolio"] {
+        let (ok, text) = tool(&app, &apps_only, mcp, name, json!({})).await;
+        assert!(!ok && text.contains("forbidden"), "{name}: {text}");
+    }
+
+    // What's left says whose the portfolio is: the agent's that can have it checked, otherwise
+    // the person's button.
+    let portfolio_step = |text: &str| {
+        parsed(text)["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| {
+                s["link"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("/people/me#portfolio")
+            })
+            .cloned()
+            .unwrap()
+    };
+    let (_, text) = tool(&app, &agent, mcp, "whats_left", json!({})).await;
+    let step = portfolio_step(&text);
+    assert_eq!(step["who"], "assistant", "{step}");
+    assert!(
+        step["what"]
+            .as_str()
+            .unwrap()
+            .ends_with("then run check_my_portfolio."),
+        "{step}"
+    );
+    let (_, text) = tool(&app, &reader, mcp, "whats_left", json!({})).await;
+    let step = portfolio_step(&text);
+    assert_eq!(step["who"], "you", "{step}");
+    assert!(
+        step["what"]
+            .as_str()
+            .unwrap()
+            .ends_with("then press Check my portfolio now."),
+        "{step}"
+    );
+
+    // No repository yet: it says so, and the agent may name the first one. It's checked as the
+    // person's would be: theirs on GitHub, and every problem named.
+    let (ok, text) = tool(&app, &agent, mcp, "check_my_portfolio", json!({})).await;
+    assert!(!ok && text.contains("repo_url"), "{text}");
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "check_my_portfolio",
+        json!({ "repo_url": "https://github.com/someone-else/portfolio" }),
+    )
+    .await;
+    assert!(
+        !ok && text.contains("only the repository's owner can put it on SLAPorSLOP"),
+        "{text}"
+    );
+    assert_eq!(repo().await, None);
+    manifest(json!([{ "image": "tiny.png", "title": "Tiny" }]));
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "check_my_portfolio",
+        json!({ "repo_url": octo }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let overview = parsed(&text);
+    assert_eq!(
+        (overview["result"].as_str(), overview["repo_url"].as_str()),
+        (Some("problem"), Some(octo))
+    );
+    assert!(
+        overview["problem"]
+            .as_str()
+            .unwrap()
+            .contains("tiny.png is 16×16"),
+        "{text}"
+    );
+    assert_eq!(sets("pending").await, 0);
+
+    // Fixed and pushed: it waits for a person's review, once.
+    manifest(json!([{ "image": "knight.png", "title": "A knight" }]));
+    let (ok, text) = tool(&app, &agent, mcp, "check_my_portfolio", json!({})).await;
+    assert!(ok, "{text}");
+    let overview = parsed(&text);
+    assert_eq!(overview["result"], "pending");
+    assert_eq!(overview["pending"]["works"][0]["title"], "A knight");
+    assert!(overview["problem"].is_null(), "{text}");
+    let set = overview["pending"]["id"].as_str().unwrap().to_string();
+    let (ok, text) = tool(&app, &agent, mcp, "check_my_portfolio", json!({})).await;
+    assert!(ok && parsed(&text)["result"] == "unchanged", "{text}");
+    assert_eq!(sets("pending").await, 1);
+    // The page isn't live for it: a reviewer still decides.
+    let (status, page) = call(&app, req(Method::GET, "/v1/people/vera")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{page}");
+
+    // Another repository is the person's to choose; naming the one that's set changes nothing.
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "check_my_portfolio",
+        json!({ "repo_url": "https://github.com/octo/other" }),
+    )
+    .await;
+    assert!(
+        !ok && text.contains("changing it is for the person"),
+        "{text}"
+    );
+    assert_eq!(repo().await.as_deref(), Some(octo));
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "check_my_portfolio",
+        json!({ "repo_url": "https://github.com/Octo/game.git" }),
+    )
+    .await;
+    assert!(ok && parsed(&text)["result"] == "unchanged", "{text}");
+    assert_eq!(repo().await.as_deref(), Some(octo));
+    // So are the order of the works and the page itself.
+    for (method, path) in [
+        (Method::PUT, "/v1/me/creative/portfolio/order"),
+        (Method::PUT, "/v1/me/creative"),
+    ] {
+        let res = app
+            .send(
+                req(method, path)
+                    .header("authorization", agent.clone())
+                    .json(json!({ "keys": [] })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+
+    // Turned down: the agent reads why, and the same portfolio isn't taken again.
+    app.send(post(
+        format!("/v1/admin/portfolio/{set}/reject"),
+        &reviewer,
+        json!({ "reason": "The knight is a placeholder." }),
+    ))
+    .await;
+    let (ok, text) = tool(&app, &reader, mcp, "my_portfolio", json!({})).await;
+    assert!(ok, "{text}");
+    let overview = parsed(&text);
+    assert_eq!(
+        overview["rejected"]["status_reason"],
+        "The knight is a placeholder."
+    );
+    assert!(overview["pending"].is_null() && overview["live"].is_null());
+    let (ok, text) = tool(&app, &agent, mcp, "check_my_portfolio", json!({})).await;
+    assert!(ok, "{text}");
+    let overview = parsed(&text);
+    assert_eq!(overview["result"], "problem");
+    assert!(
+        overview["problem"]
+            .as_str()
+            .unwrap()
+            .contains("this is the portfolio that was turned down"),
+        "{text}"
+    );
+
+    // A new one, approved by the reviewer: the page is live.
+    manifest(json!([{ "image": "knight.png", "title": "My own knight" }]));
+    let (ok, text) = tool(&app, &agent, mcp, "check_my_portfolio", json!({})).await;
+    assert!(ok, "{text}");
+    let set = parsed(&text)["pending"]["id"].as_str().unwrap().to_string();
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/portfolio/{set}/approve")).cookie(&reviewer))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let (ok, text) = tool(&app, &reader, mcp, "my_portfolio", json!({})).await;
+    assert!(ok, "{text}");
+    assert_eq!(parsed(&text)["live"]["works"][0]["title"], "My own knight");
+
+    // An agent's checks are counted with its other repository lookups (30 an hour); the
+    // person's own aren't.
+    let check = |auth: Option<&str>| {
+        let r = req(Method::POST, "/v1/me/creative/portfolio/check");
+        let r = match auth {
+            Some(token) => r.header("authorization", token.to_string()),
+            None => r.cookie(&cookie).json(json!({})),
+        };
+        app.send(r)
+    };
+    let mut limited_after = None;
+    for n in 0..31 {
+        let status = check(Some(&agent)).await.status();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            limited_after = Some(n);
+            break;
+        }
+        // No body at all is the same as no repository named.
+        assert_eq!(status, StatusCode::OK, "check {n}");
+    }
+    assert!(limited_after.is_some_and(|n| n > 0), "{limited_after:?}");
+    assert_eq!(check(None).await.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn a_makers_agent_reads_and_updates_bug_reports_only_on_its_own_apps(db: PgPool) {
     let app = test_app_with(db, chat_limits).await;
     let (maker_id, maker) = app.user("Maker", "US").await;

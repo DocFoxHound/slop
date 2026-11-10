@@ -74,7 +74,8 @@ pub struct AgentToken {
     pub scope: Scope,
     /// The apps it may touch; empty: all the maker's apps, and creating new ones.
     pub app_ids: Vec<Uuid>,
-    /// May handle People jobs (requests, quotes, changes, the job conversation).
+    /// People access: jobs (requests, quotes, changes, the job conversation), the person's own
+    /// People page and portfolio, and the day's shelves.
     pub people: bool,
 }
 
@@ -162,6 +163,12 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     // withdrawing or cancelling. Those stay with the person.
     ("GET", "/me/jobs", false, Slug::People),
     ("GET", "/me/creative", false, Slug::People),
+    // The portfolio: where it stands, and reading it again from the repository, which queues
+    // what's new for a person's review, like an app's pictures. Changing a repository the person
+    // set (portfolio.rs refuses it from a token), the works' order and the page itself stay
+    // with the person.
+    ("GET", "/me/creative/portfolio", false, Slug::People),
+    ("POST", "/me/creative/portfolio/check", true, Slug::People),
     ("GET", "/jobs/*", false, Slug::People),
     ("GET", "/jobs/*/conversation", false, Slug::People),
     ("POST", "/jobs/*/offer", true, Slug::People),
@@ -348,7 +355,7 @@ struct TokenInfo {
     scope: String,
     /// App addresses; empty: all the maker's apps.
     apps: Vec<String>,
-    /// Also handles People jobs.
+    /// Has People access.
     people: bool,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
@@ -1439,7 +1446,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "find_people",
-        description: "Searches People: the artists, composers, writers and other creatives who take paid work on SLAPorSLOP, for when your maker needs art, music, sound, writing or another skill. Each has their page's address (`handle`), a headline, skills, how much AI they use (`ai_use`), whether they're taking work, their lowest price, and their rating from past clients. Read one with get_person. Hiring is for your maker: give them the link to the person's page (`/people/` plus the handle), where they press Hire.",
+        description: "Searches People: the artists, composers, writers and other creatives who take paid work on SLAPorSLOP, for when your maker needs art, music, sound, writing or another skill. Each has their page's address (`handle`), a headline, skills, how much AI they use (`ai_use`), whether they're taking work, their lowest price, and their rating from past clients. Read one with get_person. Hiring is for your maker: give them the link to the person's page (`/people/` plus the handle), where they press Hire. You can add the request to that link, so the form opens filled in for them to check and send (maker_guide, \"Finding someone to hire\").",
         method: Method::GET,
         path: "/v1/people",
         properties: || {
@@ -1477,6 +1484,26 @@ pub(crate) const TOOLS: &[Tool] = &[
         method: Method::GET,
         path: "/v1/me/creative",
         properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "my_portfolio",
+        description: "Your person's portfolio as SLAPorSLOP has it: the repository, the approved one that shows on their page (`live`), one waiting for a person's review (`pending`), the newest one turned down with the reviewer's reason (`rejected`), when it was last read (`checked_at`) and what was wrong then (`problem`: one line for each problem, naming the work and the field). Needs a token with People access.",
+        method: Method::GET,
+        path: "/v1/me/creative/portfolio",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "check_my_portfolio",
+        description: "\"Check my portfolio now\": reads `.slop/portfolio.json` at the newest commit of your person's portfolio repository and checks every work. `result` says what happened: `pending` (it's new and now waits for a person's review, replacing one that was still waiting), `unchanged` (the same as the one approved or waiting), `none` (no portfolio.json there) or `problem` (`problem` lists every one: fix them, push, and check again). Dry-run first without sending anything: GET /v1/check/portfolio?url=…. A portfolio that was turned down isn't taken again unchanged. `repo_url` only when the page has no repository yet (it must be a public GitHub repository of their linked GitHub account); changing it is for the person. Needs a publish token with People access.",
+        method: Method::POST,
+        path: "/v1/me/creative/portfolio/check",
+        properties: || {
+            json!({
+                "repo_url": s("The portfolio repository, only while none is set, e.g. https://github.com/you/portfolio"),
+            })
+        },
         required: &[],
     },
     Tool {
@@ -1690,6 +1717,7 @@ const SERVER: crate::agent::Server = crate::agent::Server {
         "submit_github_release",
         "check_repository",
         "check_pictures",
+        "check_my_portfolio",
         "register_community_build",
         "add_dedicated_server",
         "offer_fix_to_original",
@@ -1781,7 +1809,7 @@ If I didn't say which app, find it with my_apps (ask me when there's more than o
         text: "Help me set up my People page and portfolio on SLAPorSLOP, so makers can hire me.
 What I do: {work}.
 
-Read {site}/portfolio.md and follow its checklist for agents. Ask me what I make, what work I want to be hired for and which pieces I'm proudest of. Build the portfolio in a public GitHub repository of mine, and prepare my People page as one link that fills the editor in. Never decide for me whether I'm 18 or older, whether I work as a business, my prices, or anything about agreements and payments. Finish by telling me the steps that are mine, with their links.",
+Read {site}/portfolio.md and follow its checklist for agents. Ask me what I make, what work I want to be hired for and which pieces I'm proudest of. Build the portfolio in a public GitHub repository of mine, and prepare my People page as one link that fills the editor in. Once my page exists and the portfolio is pushed, have it checked with check_my_portfolio if your token has People access (otherwise I press Check my portfolio now), and fix what it lists. Never decide for me whether I'm 18 or older, whether I work as a business, my prices, or anything about agreements and payments. Finish by telling me the steps that are mine, with their links.",
     },
     Prompt {
         name: "find_someone_to_hire",
@@ -1794,7 +1822,7 @@ Read {site}/portfolio.md and follow its checklist for agents. Ask me what I make
         )],
         text: "I'm looking for someone to hire on SLAPorSLOP's People for my project. I need: {need}.
 
-Call list_skills, then find_people with the skill that fits (limit 20, taking work), and read the pages of the ones that fit best with get_person. Show me up to five: who they are, what they offer and at what price, how much AI they use, what past clients said, and the link to their page ({site}/people/ plus their handle). Don't rank them by anything I didn't ask for. Asking for a quote is mine to do: I press Hire on their page.",
+Call list_skills, then find_people with the skill that fits (limit 20, taking work), and read the pages of the ones that fit best with get_person. Show me up to five: who they are, what they offer and at what price, how much AI they use, what past clients said, and the link to their page ({site}/people/ plus their handle). Don't rank them by anything I didn't ask for. Asking for a quote is mine to do: I press Hire on their page. Once I've picked someone, offer to write the request with me and give me the link that opens their page with it filled in (maker_guide, \"Finding someone to hire\"): I check it and send it myself.",
     },
 ];
 
@@ -1917,21 +1945,31 @@ mod tests {
                 "{p}"
             );
         }
-        // What's personal needs People access: the creative's own page, and the day's shelves
-        // (they say what the viewer has hired for).
-        for p in ["/v1/me/creative", "/v1/people/discover"] {
+        // What's personal needs People access: the creative's own page and portfolio, and the
+        // day's shelves (they say what the viewer has hired for).
+        for p in [
+            "/v1/me/creative",
+            "/v1/me/creative/portfolio",
+            "/v1/people/discover",
+        ] {
             assert_eq!(
                 route(&Method::GET, p),
                 Some((false, Slug::People, None)),
                 "{p}"
             );
         }
+        // Having the portfolio read again sends what's new for review: a publish token's.
+        assert_eq!(
+            route(&Method::POST, "/v1/me/creative/portfolio/check"),
+            Some((true, Slug::People, None))
+        );
         for (m, p) in [
             (Method::POST, "/v1/people/vera/hire"),
             (Method::GET, "/v1/people/vera/hire"),
             (Method::PUT, "/v1/people/reviews/x/reply"),
             (Method::PUT, "/v1/me/creative"),
-            (Method::POST, "/v1/me/creative/portfolio/check"),
+            (Method::PUT, "/v1/me/creative/portfolio/order"),
+            (Method::POST, "/v1/me/creative/stripe"),
             (Method::PUT, "/v1/apps/pong/update-settings"),
         ] {
             assert_eq!(route(&m, p), None, "{m} {p}");

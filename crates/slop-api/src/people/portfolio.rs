@@ -896,21 +896,48 @@ pub async fn overview(
     Ok(Json(load_overview(&state, me).await?))
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckBody {
     /// Sets the repository first, when given.
     repo_url: Option<String>,
 }
 
-/// "Check my portfolio now".
+/// "Check my portfolio now". The creative's own agent may run it too (a publish token with
+/// People access, maker_agents.rs): it reads the repository the person set, and what's new waits
+/// for a person's review as ever. An agent names the repository only while there's none.
 pub async fn check(
     State(state): State<AppState>,
     user: CurrentUser,
-    Json(body): Json<CheckBody>,
+    body: Option<Json<CheckBody>>,
 ) -> ApiResult<Json<Overview>> {
     let me = my_creative(&state, &user).await?;
-    if let Some(repo) = body.repo_url.as_deref().map(str::trim) {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let mut named = body.repo_url.as_deref().map(str::trim);
+    if user.agent.is_some() {
+        // An agent can run unattended, and each check reads from GitHub.
+        crate::limits::check(&state, user.id, crate::limits::Action::Lookup)?;
+        if let Some(asked) = named {
+            let set: Option<String> =
+                sqlx::query_scalar("select portfolio_repo from creatives where user_id = $1")
+                    .bind(me)
+                    .fetch_one(&state.db)
+                    .await?;
+            if let Some(set) = set {
+                if !crate::manage::same_repo(&set, asked) {
+                    return Err(ApiError::invalid(
+                        "repo_url",
+                        format!(
+                            "the portfolio's repository is {set}: changing it is for the person, under Portfolio on their People page. Leave repo_url out to check that one"
+                        ),
+                    ));
+                }
+                // The one the person set: it stays as they wrote it.
+                named = None;
+            }
+        }
+    }
+    if let Some(repo) = named {
         if slop_provenance::github_repo_path(repo).is_none() {
             return Err(ApiError::invalid(
                 "repo_url",

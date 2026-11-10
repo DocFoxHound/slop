@@ -9,20 +9,21 @@ import { takeHandoff, type Fill, type HandoffForm, type HandoffLink } from "../h
 /**
  * The handoff link for this form, read once per visit to it (none while `enabled` is false), and
  * which one it is: a new link opened in the same tab on the same page only changes the fragment,
- * so it's read as it comes, and the form starts again from it.
+ * so it's read as it comes, and the form starts again from it. `scope`: which of the form's pages
+ * this is, where there's more than one (takeHandoff).
  */
-export function useHandoff(form: HandoffForm, enabled = true): { link: HandoffLink | null; n: number } {
-  const [state, setState] = useState(() => ({ link: enabled ? takeHandoff(form) : null, n: 0 }));
+export function useHandoff(form: HandoffForm, enabled = true, scope = ""): { link: HandoffLink | null; n: number } {
+  const [state, setState] = useState(() => ({ link: enabled ? takeHandoff(form, undefined, scope) : null, n: 0 }));
   useEffect(() => {
     if (!enabled) return;
     const opened = () => {
       if (!window.location.hash.startsWith("#fill=")) return;
-      const link = takeHandoff(form);
+      const link = takeHandoff(form, undefined, scope);
       setState((s) => ({ link, n: s.n + 1 }));
     };
     window.addEventListener("hashchange", opened);
     return () => window.removeEventListener("hashchange", opened);
-  }, [form, enabled]);
+  }, [form, enabled, scope]);
   return enabled ? state : { link: null, n: 0 };
 }
 
