@@ -587,6 +587,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             github_oidc_issuer: github_base.trim_end_matches('/').to_string(),
             github_token: None,
             github_app: None,
+            github_statuses: false,
             // Tests users have no GitHub accounts; repo_owner tests switch it on.
             require_repo_owner: false,
             repo_token_key: Some([9; 32]),
@@ -7702,6 +7703,8 @@ async fn closing_an_account_bans_the_sign_in_and_keeps_ratings_honest(db: PgPool
     assert_eq!(export["votes"][0]["app"], "liked");
     assert_eq!(export["apps"][0]["slug"], "octos-game");
     assert!(export["app_releases"].is_array());
+    assert!(export["app_commit_status"].is_array());
+    assert!(export["commit_statuses"].is_array());
     assert_eq!(export["agreements_accepted"][0]["document"], "terms");
     assert!(export["sessions"][0].get("token_hash").is_none());
 

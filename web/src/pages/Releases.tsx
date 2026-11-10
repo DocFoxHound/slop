@@ -1373,8 +1373,8 @@ export function UpdatesPanel({ slug, browser = false, onChanged }: { slug: strin
             <>
               <b>Faster pickup:</b> install SLAPorSLOP's GitHub App on this repository
               and GitHub tells SLAPorSLOP the moment you publish a release, instead of
-              SLAPorSLOP checking every so often. It only reads your releases and
-              code.{" "}
+              SLAPorSLOP checking every so often. It reads your releases and code,
+              and never changes them.{" "}
               <ExternalLink href={s.github_app.install_url}>
                 Install on GitHub
               </ExternalLink>

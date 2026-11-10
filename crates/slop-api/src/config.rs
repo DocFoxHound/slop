@@ -301,6 +301,10 @@ pub struct ReleaseConfig {
     pub github_token: Option<String>,
     /// SLAPorSLOP's GitHub App, when configured (github_app.rs).
     pub github_app: Option<GithubAppConfig>,
+    /// Posts each release's state as a commit status on its GitHub commit, for apps whose maker
+    /// switched it on (commit_status.rs). Needs the GitHub App with "Commit statuses: Read and
+    /// write". Off unless SLOP_GITHUB_STATUSES is 1 or true.
+    pub github_statuses: bool,
     /// Only a repository's GitHub owner may link it (repo_owner.rs). Off only in tests and the
     /// simulation sandbox, whose players have no GitHub accounts (`SLOP_REQUIRE_REPO_OWNER`).
     pub require_repo_owner: bool,
@@ -375,6 +379,7 @@ impl fmt::Debug for ReleaseConfig {
                 "github_app",
                 &self.github_app.as_ref().map(|a| (&a.app_id, &a.slug)),
             )
+            .field("github_statuses", &self.github_statuses)
             .finish()
     }
 }
@@ -604,6 +609,7 @@ impl Config {
             ),
             github_token: env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()),
             github_app: GithubAppConfig::from_env()?,
+            github_statuses: switched_on(&var_or("SLOP_GITHUB_STATUSES", "false")),
             require_repo_owner: var_or("SLOP_REQUIRE_REPO_OWNER", "true") != "false",
             repo_token_key: match env::var("SLOP_REPO_TOKEN_KEY") {
                 Ok(v) if !v.is_empty() => {
@@ -827,6 +833,11 @@ fn var_or(name: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// A switch that is on for `1` or `true` (SLOP_GITHUB_STATUSES).
+fn switched_on(value: &str) -> bool {
+    matches!(value.trim(), "1" | "true")
+}
+
 fn list_var(name: &str) -> Vec<String> {
     env::var(name)
         .unwrap_or_default()
@@ -929,7 +940,17 @@ fn desktop_environment(value: &str) -> anyhow::Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{desktop_environment, desktop_ref, desktop_workflow, email_address};
+    use super::{desktop_environment, desktop_ref, desktop_workflow, email_address, switched_on};
+
+    #[test]
+    fn github_statuses_is_on_for_1_or_true() {
+        for on in ["1", "true", " true "] {
+            assert!(switched_on(on), "{on}");
+        }
+        for off in ["", "0", "false", "yes", "TRUE", "on", "2"] {
+            assert!(!switched_on(off), "{off}");
+        }
+    }
 
     #[test]
     fn desktop_workflows_are_file_names_and_environments_optional() {

@@ -267,6 +267,18 @@ pub fn config_alerts(config: &crate::config::Config) -> Vec<Alert> {
             false,
         ));
     }
+    // Results on GitHub (commit_status.rs) post with the App's installation token only.
+    if config.releases.github_statuses && config.releases.github_app.is_none() {
+        out.push(alert(
+            "github-statuses-without-app",
+            "Results on GitHub are switched on without the GitHub App",
+            "SLOP_GITHUB_STATUSES is set but GITHUB_APP_* isn't, so no maker is offered results on \
+             GitHub. Set up the GitHub App (deploy/README.md, \"GitHub App\") or remove \
+             SLOP_GITHUB_STATUSES from slop.env, and restart slop-api.",
+            "/admin",
+            false,
+        ));
+    }
     out
 }
 

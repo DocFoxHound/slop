@@ -89,6 +89,12 @@ website also shows it when they next publish). Carry on once they've accepted it
 3. `get_fixes`: every problem SLAPorSLOP's checks found, with what to do. Fix the `must` ones first. The checks run on each release, so a new release shows whether the fixes worked; for what the source check found, `check_source` on the pushed commit shows it sooner, with nothing submitted.
 4. Fix, commit, push, and release again with a new version (a browser game: put the fixed game on its site, then `submit_play_address`).
 
+If `app_overview` has `commit_status`, SLAPorSLOP can also put each release's result on its commit
+on GitHub (a status named SLAPorSLOP), where anyone who can see the commit sees it. It's off until
+your maker switches it on (the Manage page's **Results on GitHub**, or `set_commit_status` when they
+ask you). `list_releases` stays the place to read the result and the reason: the status never
+says why. Changing the app's repository address switches it off.
+
 Stages go Coming soon → Beta → Released, and the maker moves the app on when they decide to, once
 a release (a browser game: its play address) has been approved: on the website (the stage bar at the top of the app's Manage, Edit
 store page and Releases pages) or with `move_to_stage` when they ask you. Only forward; Coming soon has a

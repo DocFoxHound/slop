@@ -43,6 +43,8 @@ pub enum Action {
     LibraryAdd,
     /// Reading an app's History (history.rs): up to a year of days each time.
     History,
+    /// Switching results on GitHub or checking again: each one asks GitHub for a token.
+    CommitStatus,
 }
 
 impl Action {
@@ -76,6 +78,7 @@ impl Action {
             Self::SourceCheck => (20, HOUR),
             Self::LibraryAdd => (60, HOUR),
             Self::History => (120, HOUR),
+            Self::CommitStatus => (20, HOUR),
         };
         (n, Duration::from_secs(secs))
     }
@@ -103,6 +106,7 @@ impl Action {
             Self::SourceCheck => "source checks",
             Self::LibraryAdd => "library adds",
             Self::History => "history requests",
+            Self::CommitStatus => "commit status changes",
         }
     }
 }

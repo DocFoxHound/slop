@@ -593,6 +593,8 @@ pub(crate) struct Server {
     /// counts as that until it's listed here. They use it to decide when to ask first.
     pub(crate) additive: &'static [&'static str],
     pub(crate) prompts: &'static [Prompt],
+    /// Tools left out of the list, and unknown to tools/call, on a server where they can't work.
+    pub(crate) hidden: fn(&crate::config::Config) -> &'static [&'static str],
 }
 
 /// A ready-made request the person picks in their AI tool (an MCP prompt), instead of having to
@@ -1157,11 +1159,12 @@ const TOOLS: &[Tool] = &[
     },
 ];
 
-fn tool_list(server: &Server) -> Value {
+fn tool_list(server: &Server, hidden: &[&str]) -> Value {
     Value::Array(
         server
             .tools
             .iter()
+            .filter(|t| !hidden.contains(&t.name))
             .map(|t| {
                 let read_only = t.method == Method::GET;
                 json!({
@@ -1357,6 +1360,7 @@ const SERVER: Server = Server {
         "reply_to_admin_message",
     ],
     prompts: &[],
+    hidden: |_| &[],
 };
 
 /// MCP over plain HTTP POST (JSON responses, no server-sent events).
@@ -1402,10 +1406,18 @@ pub(crate) async fn serve_mcp(state: &AppState, request: Request, server: &Serve
             )
         }
         "ping" => rpc_result(id, json!({})),
-        "tools/list" => rpc_result(id, json!({ "tools": tool_list(server) })),
+        "tools/list" => rpc_result(
+            id,
+            json!({ "tools": tool_list(server, (server.hidden)(&state.config)) }),
+        ),
         "tools/call" => {
             let name = req.params["name"].as_str().unwrap_or("");
-            match server.tools.iter().find(|t| t.name == name) {
+            let hidden = (server.hidden)(&state.config);
+            match server
+                .tools
+                .iter()
+                .find(|t| t.name == name && !hidden.contains(&t.name))
+            {
                 None => rpc_error(id, -32602, "unknown tool"),
                 Some(tool) => match call_tool(state, tool, args, &headers, connect).await {
                     Ok((ok, text)) => rpc_result(
@@ -1568,7 +1580,7 @@ mod tests {
     #[test]
     fn tools_say_whether_they_look_add_or_change() {
         check_server(&SERVER);
-        let list = tool_list(&SERVER);
+        let list = tool_list(&SERVER, &[]);
         let hints = |name: &str| {
             let tools = list.as_array().unwrap();
             let t = tools.iter().find(|t| t["name"] == name).unwrap();
@@ -1581,6 +1593,22 @@ mod tests {
         assert_eq!(hints("add_note"), (false, false));
         assert_eq!(hints("reject_release"), (false, true));
         assert_eq!(hints("delete_shelf"), (false, true));
+    }
+
+    #[test]
+    fn hidden_tools_are_left_out() {
+        let names = |list: Value| -> Vec<String> {
+            list.as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let all = names(tool_list(&SERVER, &[]));
+        let shown = names(tool_list(&SERVER, &["slop_status"]));
+        assert!(all.iter().any(|n| n == "slop_status"));
+        assert!(!shown.iter().any(|n| n == "slop_status"));
+        assert_eq!(shown.len(), all.len() - 1);
     }
 
     #[test]

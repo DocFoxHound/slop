@@ -21,6 +21,7 @@ pub mod challenge;
 pub mod chat;
 pub mod checks;
 pub mod cleanup;
+pub mod commit_status;
 pub mod config;
 pub mod demos;
 pub mod dep_watch;
@@ -326,6 +327,12 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(repo_tokens::routes())
         .merge(chat::routes())
         .merge(interested::routes())
+        // Results on GitHub: where the server doesn't offer them, the address doesn't exist.
+        .merge(if commit_status::available(&state.config) {
+            commit_status::routes()
+        } else {
+            Router::new()
+        })
         // Everything except the routes merged below (uploads, webhooks, legal documents, SLAPorSLOP
         // Build submissions): small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))

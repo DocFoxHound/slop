@@ -558,7 +558,11 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 .status-row .step-state { margin-left: 4px; }
 .pick-row.off { opacity: 0.6; }
 .pick-row label.check code { word-break: break-all; }
-.updates-panel { gap: 10px; }
+.updates-panel, .commit-status-panel { gap: 10px; }
+.commit-status-panel [aria-disabled="true"] { opacity: 0.6; cursor: progress; }
+/* The panel's live region stays in place while empty; the panel's gap isn't doubled for it. */
+.commit-status-live { display: flex; flex-direction: column; gap: 10px; }
+.commit-status-live:empty { margin-top: -10px; }
 .updates-status { margin: -4px 0 4px 28px; }
 .link-button { background: none; border: 0; padding: 0; color: var(--slime); cursor: pointer; font: inherit; text-decoration: underline; }
 .platform-picker { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }

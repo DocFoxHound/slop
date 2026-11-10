@@ -21,6 +21,7 @@ don't copy it into real code.
 | Admin panel (review queue, listing, moderation, audit log) and makers' publishing progress | Done |
 | Slop Pulse (optional): launch tokens, heartbeats, playing now, monthly peaks, playtime; "Share my playtime" | Done |
 | History for makers: players, first plays and library adds per day on Manage; `get_history` for agents | Done |
+| Results on GitHub (commit statuses, `commit_status.rs`) | Built, off until `SLOP_GITHUB_STATUSES` is set |
 | Public publishing guide (`/publish/guide`, `/publishing.md`, `/llms.txt`) | Done |
 | Rate limits per client IP (strictest on sign-in); hourly cleanup of expired sign-ins, sessions and tokens | Done |
 | Desktop client core (`crates/slop-client`): verified install, launch, revocation checks | Done, tested |
@@ -208,6 +209,7 @@ to run Slop Pong against the real Slop Link too.
 | `POST /v1/auth/desktop/requests` | desktop app | Start desktop sign-in |
 | `GET /v1/auth/desktop/requests/{id}`, `POST …/approve` | signed in (website) | Approve a desktop device |
 | `POST /v1/auth/desktop/token` | desktop app | Code or refresh token → access + refresh tokens |
+| `PUT /v1/apps/{slug}/commit-status` | the app's maker, or their agent (publish) | Switches results on GitHub on or off; 404 unless `SLOP_GITHUB_STATUSES` and the GitHub App are set |
 
 The signed documents are the [SLAPorSLOP open standard](standard/README.md); `slop-verify` checks them.
 

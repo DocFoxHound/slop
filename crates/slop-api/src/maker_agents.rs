@@ -141,6 +141,7 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("POST", "/apps/{slug}/releases/*/withdraw", true, Slug::Own),
     ("POST", "/apps/{slug}/repo-check", true, Slug::Own),
     ("POST", "/apps/{slug}/stage", true, Slug::Own),
+    ("PUT", "/apps/{slug}/commit-status", true, Slug::Own),
     ("POST", "/apps/{slug}/media/check", true, Slug::Own),
     ("POST", "/apps/{slug}/offers", true, Slug::Own),
     ("PUT", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
@@ -1331,6 +1332,19 @@ pub(crate) const TOOLS: &[Tool] = &[
         required: &["slug", "stage"],
     },
     Tool {
+        name: "set_commit_status",
+        description: "Switches SLAPorSLOP's result on GitHub on or off for one of your maker's apps. With it on, each release sent from then on gets a commit status named SLAPorSLOP on its commit: being checked, waiting for review, passed, not approved, couldn't be checked, or withdrawn. Anyone who can see the commit on GitHub sees it, also when a release isn't approved; it never says why. Only when your maker asks: tell them that first. Only for apps whose app_overview has `commit_status`. If its `permission` is false, your maker must accept the App's Commit statuses permission on GitHub (`github_url`, then Configure, then Review request); afterwards call this again with on true, which checks again. Statuses already on GitHub stay when it's switched off, except that a passed one is corrected if SLAPorSLOP later withdraws that release.",
+        method: Method::PUT,
+        path: "/v1/apps/{slug}/commit-status",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "on": { "type": "boolean", "description": "true switches it on (or checks again), false switches it off" },
+            })
+        },
+        required: &["slug", "on"],
+    },
+    Tool {
         name: "check_repository",
         description: "Checks now that SLAPorSLOP can still read the app's repository, instead of waiting for the daily check. A freeze for lost access is lifted once SLAPorSLOP can read it (not one SLAPorSLOP's staff placed). Returns `frozen` (the freeze still in place, or null) and `recommendations`: what's worth adding that never blocks anything (e.g. no icon yet), with exact instructions. It doesn't check the code (SLAPorSLOP's source check runs on each release) or read the pictures (check_pictures does).",
         method: Method::POST,
@@ -1743,6 +1757,14 @@ const SERVER: crate::agent::Server = crate::agent::Server {
         "reply_to_admin_message",
     ],
     prompts: PROMPTS,
+    // Results on GitHub exist only where the owner switched them on (commit_status.rs).
+    hidden: |c| {
+        if crate::commit_status::available(c) {
+            &[]
+        } else {
+            &["set_commit_status"]
+        }
+    },
 };
 
 /// What a person can pick in their AI tool instead of knowing what to ask for.
@@ -1922,6 +1944,10 @@ mod tests {
         assert_eq!(
             route(&Method::POST, "/v1/apps/pong/branches"),
             Some((true, Slug::Any, Some("pong")))
+        );
+        assert_eq!(
+            route(&Method::PUT, "/v1/apps/pong/commit-status"),
+            Some((true, Slug::Own, Some("pong")))
         );
         for (m, p) in [
             (Method::GET, "/v1/me/export"),

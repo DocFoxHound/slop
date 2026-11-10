@@ -11,7 +11,8 @@
 //! - a creative's page is frozen: still readable (its reviews and credits are other people's
 //!   record too) but it can't take new work, and it leaves the People directory;
 //! - the maker's apps leave the store (installs keep working), since nobody can answer for them;
-//!   their signing keys stop working and their repository tokens and push subscriptions go;
+//!   their signing keys stop working, their repository tokens and push subscriptions go, and
+//!   results on GitHub end (commit_status.rs; statuses already on GitHub stay);
 //! - what its AI agents wrote to SLAPorSLOP's admins (admin_messages.rs) is deleted;
 //! - agreements, job records, reviews and moderation records stay as they were.
 //!
@@ -128,6 +129,27 @@ const EXPORT: &[(&str, &str)] = &[
                 'revoked_at', r.revoked_at, 'signed_manifest', r.signed_manifest,
                 'play_address', r.play_address, 'address_checks', r.address_checks) order by r.created_at), '[]')
          from releases r join apps a on a.id = r.app_id where a.maker_id = $1",
+    ),
+    (
+        // The maker's apps with results on GitHub switched on, now or before, with what GitHub
+        // last said about them (commit_status.rs).
+        "app_commit_status",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'switched_on_at', s.switched_on_at,
+                'switched_off_at', s.switched_off_at, 'permission', s.permission,
+                'permission_checked_at', s.permission_checked_at, 'wait_until', s.wait_until,
+                'problem_code', s.problem_code, 'problem_at', s.problem_at)
+                order by s.switched_on_at), '[]')
+         from app_commit_status s join apps a on a.id = s.app_id where a.maker_id = $1",
+    ),
+    (
+        // What SLAPorSLOP last posted on each commit of the maker's apps, and how its tries went
+        // (commit_status.rs).
+        "commit_statuses",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'commit', p.commit_sha,
+                'posted_status', p.posted_status, 'posted_at', p.posted_at, 'attempts', p.attempts,
+                'next_attempt_at', p.next_attempt_at, 'last_code', p.last_code,
+                'stopped_at', p.stopped_at) order by p.posted_at nulls last, p.commit_sha), '[]')
+         from commit_statuses p join apps a on a.id = p.app_id where a.maker_id = $1",
     ),
     (
         "people_profile",
@@ -488,6 +510,13 @@ pub async fn close_account(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    // Results on GitHub end with the account (commit_status.rs). What is on GitHub stays.
+    for sql in [
+        "delete from commit_statuses where app_id in (select id from apps where maker_id = $1)",
+        "delete from app_commit_status where app_id in (select id from apps where maker_id = $1)",
+    ] {
+        sqlx::query(sql).bind(user_id).execute(&mut *tx).await?;
+    }
     sqlx::query("delete from push_subscriptions where user_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
