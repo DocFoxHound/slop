@@ -1684,56 +1684,107 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
     Ok(n)
 }
 
+/// What the source check reads from an app's store page.
+pub struct StorePage {
+    pub repo_url: String,
+    /// The licence it names.
+    pub declared: String,
+    pub public: bool,
+    /// It says the app goes online.
+    online: bool,
+    sandbox_ready: bool,
+    is_mod: bool,
+    dedicated_server: bool,
+}
+
+impl StorePage {
+    pub async fn of(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Self> {
+        type Row = (String, String, bool, bool, bool, bool, bool);
+        let (repo_url, declared, public, online, sandbox_ready, is_mod, dedicated_server): Row =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "select a.repo_url, a.license_spdx, a.visibility = 'public',
+                        cardinality(a.online) > 0, a.sandbox_ready, a.branch_kind is not distinct from 'addon',
+                        {}
+                 from apps a where a.id = $1",
+                crate::catalog::IS_DEDICATED_SERVER
+            )))
+            .bind(app_id)
+            .fetch_one(db)
+            .await?;
+        Ok(Self {
+            repo_url,
+            declared,
+            public,
+            online,
+            sandbox_ready,
+            is_mod,
+            dedicated_server,
+        })
+    }
+}
+
+/// Adds to a scan's report what depends on the app's store page as it is now.
+pub async fn flag_for_app(
+    state: &AppState,
+    app_id: Uuid,
+    page: &StorePage,
+    report: &mut Value,
+) -> anyhow::Result<()> {
+    // Players are told about apps that go online; one that doesn't say so needs a look.
+    if !page.online && report["network"].as_array().is_some_and(|n| !n.is_empty()) {
+        report["online_undeclared"] = json!(true);
+    }
+    // A mod may carry code (DESIGN §9): flagged for a full read, and one that goes online,
+    // declared or not, is flagged and suggests sandbox mode for its game.
+    if page.is_mod && report["status"] == "checked" {
+        if report["code_files"]
+            .as_array()
+            .is_some_and(|c| !c.is_empty())
+        {
+            report["mod_code"] = json!(true);
+        }
+        if report["network"].as_array().is_some_and(|n| !n.is_empty()) {
+            report["mod_online"] = json!(true);
+        }
+    }
+    // A community build of a game that counts players must count them too (DESIGN §9).
+    if report["status"] == "checked"
+        && report["pulse"] == "none"
+        && crate::branches::needs_pulse(&mut *state.db.acquire().await?, app_id).await?
+    {
+        report["pulse_missing"] = json!(true);
+    }
+    // "Works in sandbox mode" means local saves only in SLOP_SAVE_DIR.
+    if page.sandbox_ready && report["save_folder"] == "elsewhere" {
+        report["sandbox_mismatch"] = json!(true);
+    }
+    // Whether it was a dedicated server when it was checked: the rule on code from outside
+    // SLAPorSLOP doesn't cover servers, and the maker chooses the tag, so an app that becomes
+    // one waits for a person (`new_concerns`).
+    report["dedicated_server"] = json!(page.dedicated_server);
+    Ok(())
+}
+
 /// Checks one release's source now and stores the result. Called when a release's files are
 /// fetched, before automatic approval, and by the background round for the rest.
 pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
-    type Row = (Uuid, String, String, String, bool, bool, bool, bool, bool);
-    let (app_id, repo_url, commit, declared, public, online, sandbox_ready, is_mod, server): Row =
-        sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "select a.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public',
-                    cardinality(a.online) > 0, a.sandbox_ready, a.branch_kind is not distinct from 'addon',
-                    {}
-             from releases r join apps a on a.id = r.app_id where r.id = $1",
-            crate::catalog::IS_DEDICATED_SERVER
-        )))
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
+    let (app_id, commit): (Uuid, String) =
+        sqlx::query_as("select app_id, commit_sha from releases where id = $1")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
+    let page = StorePage::of(&state.db, app_id).await?;
     {
-        let (mut report, packages) =
-            scan_release(state, app_id, &repo_url, &commit, &declared, public).await;
-        // Players are told about apps that go online; one that doesn't say so needs a look.
-        if !online && report["network"].as_array().is_some_and(|n| !n.is_empty()) {
-            report["online_undeclared"] = json!(true);
-        }
-        // A mod may carry code (DESIGN §9): flagged for a full read, and one that goes online,
-        // declared or not, is flagged and suggests sandbox mode for its game.
-        if is_mod && report["status"] == "checked" {
-            if report["code_files"]
-                .as_array()
-                .is_some_and(|c| !c.is_empty())
-            {
-                report["mod_code"] = json!(true);
-            }
-            if report["network"].as_array().is_some_and(|n| !n.is_empty()) {
-                report["mod_online"] = json!(true);
-            }
-        }
-        // A community build of a game that counts players must count them too (DESIGN §9).
-        if report["status"] == "checked"
-            && report["pulse"] == "none"
-            && crate::branches::needs_pulse(&mut *state.db.acquire().await?, app_id).await?
-        {
-            report["pulse_missing"] = json!(true);
-        }
-        // "Works in sandbox mode" means local saves only in SLOP_SAVE_DIR.
-        if sandbox_ready && report["save_folder"] == "elsewhere" {
-            report["sandbox_mismatch"] = json!(true);
-        }
-        // Whether it was a dedicated server when it was checked: the rule on code from outside
-        // SLAPorSLOP doesn't cover servers, and the maker chooses the tag, so an app that becomes
-        // one waits for a person (`new_concerns`).
-        report["dedicated_server"] = json!(server);
+        let (mut report, packages) = scan_release(
+            state,
+            app_id,
+            &page.repo_url,
+            &commit,
+            &page.declared,
+            page.public,
+        )
+        .await;
+        flag_for_app(state, app_id, &page, &mut report).await?;
         let mut tx = state.db.begin().await?;
         sqlx::query("update releases set repo_scan = $2, repo_scanned_at = now() where id = $1")
             .bind(id)

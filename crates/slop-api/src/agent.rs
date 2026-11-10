@@ -582,6 +582,36 @@ pub(crate) fn s(desc: &str) -> Value {
     json!({ "type": "string", "description": desc })
 }
 
+/// One MCP server: what it's called, what it tells an AI first, and what it offers.
+pub(crate) struct Server {
+    pub(crate) name: &'static str,
+    pub(crate) instructions: &'static str,
+    pub(crate) tools: &'static [Tool],
+    /// The tools that change something but only ever add (a note, a message, a draft) and commit
+    /// their person to nothing. AI tools are told which tools only look (the GET ones), which
+    /// only add (these), and that every other one may replace or remove something, so a new tool
+    /// counts as that until it's listed here. They use it to decide when to ask first.
+    pub(crate) additive: &'static [&'static str],
+    pub(crate) prompts: &'static [Prompt],
+}
+
+/// A ready-made request the person picks in their AI tool (an MCP prompt), instead of having to
+/// know what to ask for.
+pub(crate) struct Prompt {
+    pub(crate) name: &'static str,
+    /// What the person sees in their tool's list.
+    pub(crate) title: &'static str,
+    pub(crate) description: &'static str,
+    /// (name, what to give, whether it's needed)
+    pub(crate) arguments: &'static [(&'static str, &'static str, bool)],
+    /// The request, as the person's own message. `{name}` stands for that argument and `{site}`
+    /// for SLAPorSLOP's address; a line naming an argument that wasn't given is left out.
+    pub(crate) text: &'static str,
+}
+
+/// The longest argument a prompt takes: a store address, a name, a short wish.
+const MAX_PROMPT_ARGUMENT: usize = 300;
+
 const TOOLS: &[Tool] = &[
     Tool {
         name: "slop_status",
@@ -1127,19 +1157,109 @@ const TOOLS: &[Tool] = &[
     },
 ];
 
-fn tool_list(tools: &[Tool]) -> Value {
+fn tool_list(server: &Server) -> Value {
     Value::Array(
-        tools
+        server
+            .tools
             .iter()
             .map(|t| {
+                let read_only = t.method == Method::GET;
                 json!({
                     "name": t.name,
                     "description": t.description,
                     "inputSchema": { "type": "object", "properties": (t.properties)(), "required": t.required },
+                    "annotations": {
+                        "readOnlyHint": read_only,
+                        "destructiveHint": !read_only && !server.additive.contains(&t.name),
+                    },
                 })
             })
             .collect(),
     )
+}
+
+fn prompt_list(prompts: &[Prompt]) -> Value {
+    Value::Array(
+        prompts
+            .iter()
+            .map(|p| {
+                json!({
+                    "name": p.name,
+                    "title": p.title,
+                    "description": p.description,
+                    "arguments": p.arguments.iter().map(|(name, description, required)| {
+                        json!({ "name": name, "description": description, "required": required })
+                    }).collect::<Vec<_>>(),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// A prompt's request with its arguments filled in. They're the person's own words, on their
+/// way to their own AI tool: one line each, of a sensible length.
+fn prompt_text(
+    prompt: &Prompt,
+    args: &serde_json::Map<String, Value>,
+    site: &str,
+) -> Result<String, String> {
+    let mut given = Vec::new();
+    for (name, _, required) in prompt.arguments {
+        let value = match args.get(*name) {
+            Some(Value::String(s)) => s.trim(),
+            Some(Value::Null) | None => "",
+            Some(_) => return Err(format!("{name} must be text")),
+        };
+        if value.chars().count() > MAX_PROMPT_ARGUMENT || value.chars().any(char::is_control) {
+            return Err(format!(
+                "{name} must be one line of at most {MAX_PROMPT_ARGUMENT} characters"
+            ));
+        }
+        if value.is_empty() {
+            if *required {
+                return Err(format!("missing argument: {name}"));
+            }
+        } else {
+            given.push((format!("{{{name}}}"), value));
+        }
+    }
+    let lines: Vec<String> = prompt
+        .text
+        .lines()
+        .filter(|line| {
+            prompt.arguments.iter().all(|(name, _, _)| {
+                let mark = format!("{{{name}}}");
+                !line.contains(&mark) || given.iter().any(|(m, _)| *m == mark)
+            })
+        })
+        .map(|line| {
+            // One pass over the line, so an argument's own text is never read as a placeholder.
+            let mut out = String::new();
+            let mut rest = line;
+            while let Some(start) = rest.find('{') {
+                out.push_str(&rest[..start]);
+                rest = &rest[start..];
+                let filled = given
+                    .iter()
+                    .map(|(m, v)| (m.as_str(), *v))
+                    .chain([("{site}", site)])
+                    .find(|(m, _)| rest.starts_with(m));
+                match filled {
+                    Some((mark, value)) => {
+                        out.push_str(value);
+                        rest = &rest[mark.len()..];
+                    }
+                    None => {
+                        out.push('{');
+                        rest = &rest[1..];
+                    }
+                }
+            }
+            out.push_str(rest);
+            out
+        })
+        .collect();
+    Ok(lines.join("\n"))
 }
 
 /// Builds the admin API request a tool call stands for.
@@ -1224,26 +1344,29 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
+/// The admin API's MCP server.
+const SERVER: Server = Server {
+    name: "slop-admin",
+    instructions: "SLAPorSLOP's admin API. Call slop_status first, read review_guide before deciding, and only act when the admin you work for asked you to. Every action is in the audit log under your token's name.",
+    tools: TOOLS,
+    additive: &[
+        "add_note",
+        "create_shelf",
+        "reply_to_ai_message",
+        "send_admin_message",
+        "reply_to_admin_message",
+    ],
+    prompts: &[],
+};
+
 /// MCP over plain HTTP POST (JSON responses, no server-sent events).
 async fn mcp(State(state): State<AppState>, _admin: AdminUser, request: Request) -> Response {
-    serve_mcp(
-        &state,
-        request,
-        TOOLS,
-        "slop-admin",
-        "SLAPorSLOP's admin API. Call slop_status first, read review_guide before deciding, and only act when the admin you work for asked you to. Every action is in the audit log under your token's name.",
-    )
-    .await
+    serve_mcp(&state, request, &SERVER).await
 }
 
-/// Answers one MCP request with `tools`, each calling SLAPorSLOP's API with the caller's credentials.
-pub(crate) async fn serve_mcp(
-    state: &AppState,
-    request: Request,
-    tools: &'static [Tool],
-    server: &str,
-    instructions: &str,
-) -> Response {
+/// Answers one MCP request for `server`, each tool calling SLAPorSLOP's API with the caller's
+/// credentials.
+pub(crate) async fn serve_mcp(state: &AppState, request: Request, server: &Server) -> Response {
     let headers = request.headers().clone();
     let connect = request
         .extensions()
@@ -1260,23 +1383,29 @@ pub(crate) async fn serve_mcp(
     if req.id.is_none() {
         return StatusCode::ACCEPTED.into_response();
     }
+    let empty = serde_json::Map::new();
+    let args = req.params["arguments"].as_object().unwrap_or(&empty);
     let reply = match req.method.as_str() {
-        "initialize" => rpc_result(
-            id,
-            json!({
-                "protocolVersion": PROTOCOL,
-                "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": server, "version": env!("CARGO_PKG_VERSION") },
-                "instructions": instructions,
-            }),
-        ),
+        "initialize" => {
+            let mut capabilities = json!({ "tools": { "listChanged": false } });
+            if !server.prompts.is_empty() {
+                capabilities["prompts"] = json!({ "listChanged": false });
+            }
+            rpc_result(
+                id,
+                json!({
+                    "protocolVersion": PROTOCOL,
+                    "capabilities": capabilities,
+                    "serverInfo": { "name": server.name, "version": env!("CARGO_PKG_VERSION") },
+                    "instructions": server.instructions,
+                }),
+            )
+        }
         "ping" => rpc_result(id, json!({})),
-        "tools/list" => rpc_result(id, json!({ "tools": tool_list(tools) })),
+        "tools/list" => rpc_result(id, json!({ "tools": tool_list(server) })),
         "tools/call" => {
             let name = req.params["name"].as_str().unwrap_or("");
-            let empty = serde_json::Map::new();
-            let args = req.params["arguments"].as_object().unwrap_or(&empty);
-            match tools.iter().find(|t| t.name == name) {
+            match server.tools.iter().find(|t| t.name == name) {
                 None => rpc_error(id, -32602, "unknown tool"),
                 Some(tool) => match call_tool(state, tool, args, &headers, connect).await {
                     Ok((ok, text)) => rpc_result(
@@ -1287,6 +1416,26 @@ pub(crate) async fn serve_mcp(
                         id,
                         json!({ "content": [{ "type": "text", "text": message }], "isError": true }),
                     ),
+                },
+            }
+        }
+        "prompts/list" if !server.prompts.is_empty() => {
+            rpc_result(id, json!({ "prompts": prompt_list(server.prompts) }))
+        }
+        "prompts/get" if !server.prompts.is_empty() => {
+            let name = req.params["name"].as_str().unwrap_or("");
+            let site = state.config.public_url.as_str().trim_end_matches('/');
+            match server.prompts.iter().find(|p| p.name == name) {
+                None => rpc_error(id, -32602, "unknown prompt"),
+                Some(prompt) => match prompt_text(prompt, args, site) {
+                    Ok(text) => rpc_result(
+                        id,
+                        json!({
+                            "description": prompt.description,
+                            "messages": [{ "role": "user", "content": { "type": "text", "text": text } }],
+                        }),
+                    ),
+                    Err(message) => rpc_error(id, -32602, &message),
                 },
             }
         }
@@ -1350,12 +1499,141 @@ async fn call_tool(
     Ok((status.is_success(), text))
 }
 
+/// What every MCP server's lists must keep to; each server's tests run it.
+#[cfg(test)]
+pub(crate) fn check_server(server: &Server) {
+    let tool = |name: &str| server.tools.iter().find(|t| t.name == name);
+    for (i, t) in server.tools.iter().enumerate() {
+        assert!(
+            server.tools[..i].iter().all(|o| o.name != t.name),
+            "two tools are called {}",
+            t.name
+        );
+    }
+    // A tool that only looks can't be listed as one that only adds.
+    for name in server.additive {
+        assert!(
+            tool(name).is_some_and(|t| t.method != Method::GET),
+            "{name} isn't a tool that changes something"
+        );
+    }
+    let no_arguments = serde_json::Map::new();
+    for (i, p) in server.prompts.iter().enumerate() {
+        assert!(
+            server.prompts[..i].iter().all(|o| o.name != p.name),
+            "two prompts are called {}",
+            p.name
+        );
+        for (name, _, _) in p.arguments {
+            assert!(
+                p.text.contains(&format!("{{{name}}}")),
+                "{}: {name} isn't used",
+                p.name
+            );
+        }
+        // The person can pick a prompt and give nothing more, unless it can't do without.
+        assert_eq!(
+            prompt_text(p, &no_arguments, "https://slop.example").is_err(),
+            p.arguments.iter().any(|(_, _, required)| *required),
+            "{}",
+            p.name
+        );
+        // Every placeholder is an argument or the site, and every tool it names exists.
+        for (at, _) in p.text.match_indices('{') {
+            let name = p.text[at + 1..].split('}').next().unwrap();
+            assert!(
+                name == "site" || p.arguments.iter().any(|(a, _, _)| *a == name),
+                "{}: {{{name}}} isn't an argument",
+                p.name
+            );
+        }
+        for word in p
+            .text
+            .split(|c: char| !c.is_ascii_lowercase() && c != '_')
+            .filter(|w| w.contains('_'))
+        {
+            assert!(tool(word).is_some(), "{}: no tool called {word}", p.name);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn args(v: Value) -> serde_json::Map<String, Value> {
         v.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn tools_say_whether_they_look_add_or_change() {
+        check_server(&SERVER);
+        let list = tool_list(&SERVER);
+        let hints = |name: &str| {
+            let tools = list.as_array().unwrap();
+            let t = tools.iter().find(|t| t["name"] == name).unwrap();
+            (
+                t["annotations"]["readOnlyHint"].as_bool().unwrap(),
+                t["annotations"]["destructiveHint"].as_bool().unwrap(),
+            )
+        };
+        assert_eq!(hints("slop_status"), (true, false));
+        assert_eq!(hints("add_note"), (false, false));
+        assert_eq!(hints("reject_release"), (false, true));
+        assert_eq!(hints("delete_shelf"), (false, true));
+    }
+
+    #[test]
+    fn prompts_fill_in_what_the_person_gave() {
+        const ASK: Prompt = Prompt {
+            name: "ask",
+            title: "Ask",
+            description: "Asks.",
+            arguments: &[("app", "Which app", false), ("need", "What for", true)],
+            text: "Read {site}/guide first.\nThe app is {app}.\nI need: {need}. Keep {this} and {site.",
+        };
+        let site = "https://slop.example";
+        let fill = |given: Value| prompt_text(&ASK, &args(given), site);
+        assert_eq!(
+            fill(json!({ "app": "pong", "need": " music " })).unwrap(),
+            "Read https://slop.example/guide first.\nThe app is pong.\nI need: music. Keep {this} and {site."
+        );
+        // A line about something the person didn't give is left out.
+        for given in [
+            json!({ "need": "music" }),
+            json!({ "need": "music", "app": "  " }),
+            json!({ "need": "music", "app": null }),
+        ] {
+            assert_eq!(
+                fill(given).unwrap(),
+                "Read https://slop.example/guide first.\nI need: music. Keep {this} and {site."
+            );
+        }
+        // What they typed is never read as a placeholder.
+        assert_eq!(
+            fill(json!({ "app": "{need}", "need": "{site} {app}" })).unwrap(),
+            "Read https://slop.example/guide first.\nThe app is {need}.\nI need: {site} {app}. Keep {this} and {site."
+        );
+        for bad in [
+            json!({}),
+            json!({ "app": "pong" }),
+            json!({ "need": "" }),
+            json!({ "need": 5 }),
+            json!({ "need": "a\nb" }),
+            json!({ "need": "x".repeat(MAX_PROMPT_ARGUMENT + 1) }),
+        ] {
+            assert!(fill(bad.clone()).is_err(), "{bad}");
+        }
+        assert!(fill(json!({ "need": "x".repeat(MAX_PROMPT_ARGUMENT) })).is_ok());
+        let listed = prompt_list(&[ASK]);
+        assert_eq!(listed[0]["name"], "ask");
+        assert_eq!(
+            listed[0]["arguments"],
+            json!([
+                { "name": "app", "description": "Which app", "required": false },
+                { "name": "need", "description": "What for", "required": true },
+            ])
+        );
     }
 
     #[test]

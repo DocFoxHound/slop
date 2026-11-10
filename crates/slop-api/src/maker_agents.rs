@@ -45,7 +45,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    agent::{Tool, s},
+    agent::{Prompt, Tool, s},
     auth::session::{self, CurrentUser},
     error::{ApiError, ApiResult},
     tokens::{hash_token, new_token},
@@ -118,6 +118,8 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("GET", "/apps/{slug}/manage", false, Slug::Own),
     ("GET", "/apps/{slug}/releases", false, Slug::Own),
     ("GET", "/apps/{slug}/fixes", false, Slug::Own),
+    // A dry run: it reads the repository and stores nothing (fixes.rs).
+    ("GET", "/apps/{slug}/source-check", false, Slug::Own),
     ("GET", "/apps/{slug}/reviews", false, Slug::Own),
     ("GET", "/apps/{slug}/ratings", false, Slug::Own),
     ("GET", "/apps/{slug}/slop-build", false, Slug::Own),
@@ -160,7 +162,6 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     // withdrawing or cancelling. Those stay with the person.
     ("GET", "/me/jobs", false, Slug::People),
     ("GET", "/me/creative", false, Slug::People),
-    ("GET", "/people/skills", false, Slug::People),
     ("GET", "/jobs/*", false, Slug::People),
     ("GET", "/jobs/*/conversation", false, Slug::People),
     ("POST", "/jobs/*/offer", true, Slug::People),
@@ -172,6 +173,14 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("POST", "/jobs/*/conversation/open", true, Slug::People),
     ("POST", "/jobs/*/conversation/close", true, Slug::People),
     ("POST", "/jobs/*/messages", true, Slug::People),
+    // The People directory and its pages are public: any token may look, so a maker's agent can
+    // find someone to hire. Asking for a quote stays with the person (`/people/*/hire` isn't here).
+    ("GET", "/people", false, Slug::Any),
+    ("GET", "/people/skills", false, Slug::Any),
+    // The day's shelves include "Suggested for you", which says what the viewer has hired for:
+    // only with People access. It's here, before the page, so the page's `*` doesn't take it.
+    ("GET", "/people/discover", false, Slug::People),
+    ("GET", "/people/*", false, Slug::Any),
     // Writing to SLAPorSLOP's admins: any token, since it changes nothing of the maker's. It has its
     // own limits per account (admin_messages.rs).
     ("GET", "/staff-contacts", false, Slug::Any),
@@ -831,15 +840,15 @@ async fn guide_section(_user: CurrentUser, Path(section): Path<String>) -> ApiRe
 fn store_page_fields() -> Value {
     json!({
         "title": s("Name, 1–80 characters"),
-        "summary": s("One line for tiles, up to 160 characters"),
+        "summary": s("One line for tiles, up to 200 characters"),
         "description_md": s("The store page's description, Markdown, up to 20,000 characters: what it is, how to play, what's different. Plain words; no claims it's \"safe\""),
         "repo_url": s("The public repository, e.g. https://github.com/owner/repo"),
         "license_spdx": s("The repository's licence as an SPDX ID, e.g. MIT, GPL-3.0-or-later"),
-        "min_age": { "type": "integer", "description": "Minimum age: 0, 7, 12, 16 or 18" },
+        "min_age": { "type": "integer", "description": "Minimum age: 0, 3, 7, 12, 16 or 18" },
         "content_labels": { "type": "array", "items": { "type": "string" }, "description": "Any of romance, suggestive, violence, horror, strong_language, gambling_themes" },
         "tags": { "type": "array", "items": { "type": "string" }, "description": "Up to 10 tag slugs from list_categories. A category with max_age (Kids & Family) lists only apps rated at most that and without its excluded_labels: don't tag an older app with it" },
-        "platforms": { "type": "array", "items": { "type": "string" }, "description": "windows and/or linux: every release must include exactly these. Or [\"browser\"] alone, for a game that plays on your own website: nothing to download, and each release is its play address (submit_play_address). Can't change between the two once it has releases" },
-        "online": { "type": "array", "items": { "type": "string" }, "description": "How it goes online, if it does (see the guide section \"Online play and mods\")" },
+        "platforms": { "type": "array", "items": { "type": "string" }, "description": "Any of windows, linux (a .tar.gz), linux-deb and linux-rpm: every release must include exactly these. linux needs linux-deb and/or linux-rpm with it, and they need linux. Or [\"browser\"] alone, for a game that plays on your own website: nothing to download, and each release is its play address (submit_play_address). Can't change between the two once it has releases" },
+        "online": { "type": "array", "items": { "type": "string" }, "description": "How it goes online, if it does: any of own_servers (servers you run), player_servers (servers players host), peer_to_peer, other_services (someone else's: a login, a leaderboard, an AI service). Empty: it doesn't go online. See the guide section \"Online play and mods\"" },
         "online_hosts": { "type": "array", "items": { "type": "string" }, "description": "The hosts it connects to" },
         "sandbox_ready": { "type": "boolean", "description": "Works in sandbox mode: local saves only in SLOP_SAVE_DIR. Not for browser games" },
         "mods_folder": { "type": ["object", "null"], "description": "Where it reads mods from: {base: game|saves, path, layout: folder|flat}; null if it reads SLOP_MODS or has no mods. Not for browser games" },
@@ -884,7 +893,7 @@ fn release_fields() -> Value {
         "slug": s("The app's store address"),
         "version": s("The version, e.g. 1.2.0"),
         "commit_sha": s("The full 40-character commit SHA it was built from"),
-        "files": { "type": "array", "description": "One per platform: {platform: windows|linux, kind: archive|installer, url: the file on your release page, exec: the program inside an archive, args: []}", "items": { "type": "object" } },
+        "files": { "type": "array", "description": "One for each platform on the store page: {platform, kind, url: the file attached to a release on the app's repository, exec: the program to start inside an archive (e.g. bin/game.exe), args: []}. windows: kind archive, a .zip. linux: kind archive, a .tar.gz. linux-deb: kind installer, a .deb. linux-rpm: kind installer, an .rpm. A mod: platform any, kind archive, a .zip, no exec", "items": { "type": "object" } },
         "notes": s("What changed, for players: Markdown, up to 5,000 characters"),
         "runtimes": { "type": "array", "items": { "type": "string" }, "description": "Shared runtimes the Windows build needs, by ID from list_runtimes; leave out to keep the last release's" },
     })
@@ -917,10 +926,15 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "whats_new",
-        description: "The notifications of the person you work for, newest first: releases approved or rejected, reviews, offered fixes, job requests and messages. One call to see what needs attention; check it now and then rather than polling every tool. `your_token` says when your own token expires: within 7 days, tell your person to make a replacement on Account → AI agents.",
+        description: "The notifications of the person you work for, newest first: releases approved or rejected, reviews, offered fixes, job requests and messages. One call to see what needs attention; check it now and then rather than polling every tool. Reading them here doesn't mark them read. `your_token` says when your own token expires: within 7 days, tell your person to make a replacement on Account → AI agents.",
         method: Method::GET,
         path: "/v1/me/notifications",
-        properties: || json!({}),
+        properties: || {
+            json!({
+                "unread": { "type": "boolean", "description": "Only the ones the person hasn't read yet" },
+                "limit": { "type": "integer", "description": "How many, 1 to 100; 60 when left out" },
+            })
+        },
         required: &[],
     },
     Tool {
@@ -941,18 +955,31 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "app_overview",
-        description: "An app's management page: its store page fields, stage, what's waiting for review, and what's needed next.",
+        description: "An app's management page: the release players get now (`serving`) and whether it's held there (`held`), the approved releases they could get (`approved`), releases waiting for review (`waiting`), changes asked for (`changes`), a freeze if SLAPorSLOP can't read the repository, and whether the app can move to its next stage. The store page's own text is get_store_page.",
         method: Method::GET,
         path: "/v1/apps/{slug}/manage",
         properties: slug_only,
         required: &["slug"],
     },
     Tool {
+        name: "get_store_page",
+        description: "An app's store page as players see it: title, summary, description, tags, age rating and content labels, platforms, online, licence, repository, stage and rating. Your maker's own apps (drafts too), or any app in the store, e.g. the original before you register a community build of it. Read it before update_store_page, so you change only what should change.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}",
+        properties: slug_only,
+        required: &["slug"],
+    },
+    Tool {
         name: "list_releases",
-        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and SLAPorSLOP's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds. A browser game's release has no files: `play_address`, and `address_checks` (https, public_host and public_host_skipped, bad_links, status, final_address, redirects, hops, content_type, ok, problem); its `progress.stage` is checking_address while SLAPorSLOP checks it, which takes seconds.",
+        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and SLAPorSLOP's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds. A browser game's release has no files: `play_address`, and `address_checks` (https, public_host and public_host_skipped, bad_links, status, final_address, redirects, hops, content_type, ok, problem); its `progress.stage` is checking_address while SLAPorSLOP checks it, which takes seconds. Each release is long: to follow the one you just submitted, ask for `limit` 1.",
         method: Method::GET,
         path: "/v1/apps/{slug}/releases",
-        properties: slug_only,
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "limit": { "type": "integer", "description": "How many, newest first: 1 for only the newest. 1 to 50; 50 when left out" },
+            })
+        },
         required: &["slug"],
     },
     Tool {
@@ -960,6 +987,63 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "Every problem SLAPorSLOP's checks found in the app's newest release, each with why it matters and exact instructions to fix it in the repository. Fix them, push, and submit a new release (a browser game: give its play address again). `recommendations` lists what's worth adding that never blocks a release (e.g. the app has no icon yet), with the same kind of instructions.",
         method: Method::GET,
         path: "/v1/apps/{slug}/fixes",
+        properties: slug_only,
+        required: &["slug"],
+    },
+    Tool {
+        name: "check_source",
+        description: "A dry run of SLAPorSLOP's source check, before submitting a release: reads the app's repository at a commit that's been pushed and returns the fixes a release there would get, in get_fixes' form (licence problems, purchases, code loaded from outside SLAPorSLOP, going online without the store page saying so, saves outside SLOP_SAVE_DIR, Slop Pulse). Nothing is saved, submitted or sent for review. `status` is must_fix, should_fix, looks_good, or not_checked (`detail` says why the source couldn't be read, e.g. the commit isn't pushed). It can take a minute on a large repository. It doesn't run what only a release gets: Slop Build's own checks (secrets, packages with known vulnerabilities), the scan of the files, a person's review.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/source-check",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "commit_sha": s("The full 40-character commit SHA to check, in lowercase (git rev-parse HEAD prints it); leave out on GitHub to check the default branch's newest"),
+            })
+        },
+        required: &["slug"],
+    },
+    Tool {
+        name: "hold_at_release",
+        description: "Chooses which approved release players get. A rollback, when the newest release turned out broken: give the earlier release's ID from app_overview's `approved`, and players are moved back to it and held there while you fix things. Give `release_id` null to stop holding, so players follow the newest approved release again. It's applied at once when the release would be approved without a person (app_overview's `auto_approval_ready`); otherwise it waits for a person at SLAPorSLOP, and `status_reason` says why. A new request replaces one still waiting. Only when your maker asks: it changes what every player gets. Not for browser games, which always open their newest approved address.",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/changes",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "kind": { "type": "string", "enum": ["release"], "description": "Always release" },
+                "release_id": { "type": ["string", "null"], "description": "The approved release to hold players at, from app_overview's `approved`; null to follow the newest approved release again" },
+                "note": s("Why, for SLAPorSLOP's reviewer: up to 500 characters"),
+            })
+        },
+        required: &["slug", "kind", "release_id"],
+    },
+    Tool {
+        name: "cancel_pending_change",
+        description: "Cancels a change that's still waiting for a person (status pending in app_overview's `changes`): a hold_at_release that wasn't applied at once, or a move to another repository your maker asked for on the website.",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/changes/{id}/cancel",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "id": s("The change's ID, from app_overview's `changes`"),
+            })
+        },
+        required: &["slug", "id"],
+    },
+    Tool {
+        name: "release_settings",
+        description: "How the app's releases reach SLAPorSLOP and players: whether SLAPorSLOP watches the repository for new GitHub releases (`watch_releases`, with the last tag seen and any problem), whether an approved release goes to players by itself (`auto_update`), and whether the next release would be approved without a person (`auto_approval_ready`; `auto_approval_note` says why not). Switching these is for your maker, on the app's Manage page.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/update-settings",
+        properties: slug_only,
+        required: &["slug"],
+    },
+    Tool {
+        name: "app_ratings",
+        description: "The app's rating: Slaps and Slop votes now, the rating at the end of each month, votes per day for the last 90 days (with days of unusual voting SLAPorSLOP's abuse checks found), and how many votes it needs before a rating shows (`min_votes`). release_feedback says how each release landed.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/ratings",
         properties: slug_only,
         required: &["slug"],
     },
@@ -984,6 +1068,19 @@ pub(crate) const TOOLS: &[Tool] = &[
             })
         },
         required: &["slug", "id", "body"],
+    },
+    Tool {
+        name: "remove_review_reply",
+        description: "Takes down your maker's reply under a player's review (the review stays). Only when your maker asks.",
+        method: Method::DELETE,
+        path: "/v1/apps/{slug}/reviews/{id}/reply",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "id": s("The review's ID, from list_reviews"),
+            })
+        },
+        required: &["slug", "id"],
     },
     Tool {
         name: "list_bug_reports",
@@ -1030,6 +1127,14 @@ pub(crate) const TOOLS: &[Tool] = &[
         path: "/v1/apps/{slug}/demo",
         properties: || json!({ "slug": s("The app's store address"), "url": s("The web build's address on the release page") }),
         required: &["slug", "url"],
+    },
+    Tool {
+        name: "end_browser_demo",
+        description: "Ends the app's browser demo now and deletes its files, before its days are up. Only when your maker asks.",
+        method: Method::DELETE,
+        path: "/v1/apps/{slug}/demo",
+        properties: slug_only,
+        required: &["slug"],
     },
     Tool {
         name: "list_bounties",
@@ -1221,6 +1326,14 @@ pub(crate) const TOOLS: &[Tool] = &[
         required: &["slug"],
     },
     Tool {
+        name: "list_pictures",
+        description: "The app's pictures as SLAPorSLOP has them, without reading the repository again: what the store shows (`live`), what waits for a person's review (`pending`), a set that was turned down and why (`rejected`), and the last `problem`. After you push new pictures, check_pictures reads them.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/media",
+        properties: slug_only,
+        required: &["slug"],
+    },
+    Tool {
         name: "register_community_build",
         description: "Registers a community build or a mod of another app (its original), from your own fork or repository. It starts as a draft; submit a release for it like any app, and it's checked and reviewed the same way. Mods (kind addon) are one .zip for every platform (platform any) with nothing to start. Read the guide sections \"Publishing a community build\" or \"Publishing a mod\" first.",
         method: Method::POST,
@@ -1230,12 +1343,12 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "original": s("The original app's store address"),
                 "slug": s("The new store address for your build or mod"),
                 "title": s("Its name"),
-                "summary": s("One line, up to 160 characters"),
+                "summary": s("One line, up to 200 characters"),
                 "repo_url": s("Your fork's or mod's public repository"),
                 "license_spdx": s("Its licence, as an SPDX ID (a fork keeps the original's terms)"),
                 "kind": s("addon (a mod), mod (a modded version), fix, translation, port or other"),
                 "note": s("What it changes from the original, for players: up to 500 characters"),
-                "platforms": { "type": "array", "items": { "type": "string" }, "description": "windows and/or linux; leave out for a mod. A community build can't play in the browser, and a browser game can't have community builds or mods, yet" },
+                "platforms": { "type": "array", "items": { "type": "string" }, "description": "windows and/or linux (with linux-deb and/or linux-rpm); leave out for a mod. A community build can't play in the browser, and a browser game can't have community builds or mods, yet" },
                 "description_md": s("Its store page text, Markdown; the note when empty"),
                 "min_age": { "type": "integer", "description": "At least the original's; the original's when left out" },
                 "content_labels": { "type": "array", "items": { "type": "string" } },
@@ -1323,6 +1436,48 @@ pub(crate) const TOOLS: &[Tool] = &[
             })
         },
         required: &["slug", "id", "decision"],
+    },
+    Tool {
+        name: "find_people",
+        description: "Searches People: the artists, composers, writers and other creatives who take paid work on SLAPorSLOP, for when your maker needs art, music, sound, writing or another skill. Each has their page's address (`handle`), a headline, skills, how much AI they use (`ai_use`), whether they're taking work, their lowest price, and their rating from past clients. Read one with get_person. Hiring is for your maker: give them the link to the person's page (`/people/` plus the handle), where they press Hire.",
+        method: Method::GET,
+        path: "/v1/people",
+        properties: || {
+            json!({
+                "skill": s("One skill, by its slug from list_skills (e.g. pixel-art, music)"),
+                "q": s("Words in their name, headline or page address"),
+                "taking_work": { "type": "boolean", "description": "Only people taking work now" },
+                "ai": s("none, assisted or heavy: only people who use AI exactly that much"),
+                "studios": { "type": "boolean", "description": "Only studios (teams)" },
+                "sort": s("rating or clients; left out, the order is shuffled daily so nobody is buried"),
+                "limit": { "type": "integer", "description": "How many, 1 to 200; 20 is plenty to choose from. 200 when left out" },
+            })
+        },
+        required: &[],
+    },
+    Tool {
+        name: "get_person",
+        description: "One person's People page: what they do (`about_md`), their services with prices and delivery days, portfolio works, how they use AI, turnaround, reviews from past clients and the projects they worked on. With People access, your own person's page (by their handle, from my_people_page) also says where it stands and previews a portfolio that's still in review.",
+        method: Method::GET,
+        path: "/v1/people/{handle}",
+        properties: || json!({ "handle": s("The page's address, from find_people") }),
+        required: &["handle"],
+    },
+    Tool {
+        name: "list_skills",
+        description: "The skills People pages can list, each with its slug and name: for find_people's `skill`, and for a People page's `skills`.",
+        method: Method::GET,
+        path: "/v1/people/skills",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "my_people_page",
+        description: "Your person's own People page as they saved it: handle, headline, about, skills, services and prices, links, portfolio repository, and where the page stands (`status`: draft, waiting for review, turned down, live or hidden). 404 when they have none yet. Changing it is for the person (you can prepare a link that fills the editor in: see the portfolio guide). Needs a token with People access.",
+        method: Method::GET,
+        path: "/v1/me/creative",
+        properties: || json!({}),
+        required: &[],
     },
     Tool {
         name: "my_jobs",
@@ -1520,6 +1675,129 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
 ];
 
+/// The makers' and creatives' MCP server.
+const SERVER: crate::agent::Server = crate::agent::Server {
+    name: "slop-maker",
+    instructions: "SLAPorSLOP, the store for open-source AI-made apps and games, for the maker you work for. Call maker_guide first. Do the writing and fixing yourself in the repository; SLAPorSLOP checks, a person reviews. Never claim an app is \"safe\": say what SLAPorSLOP checked.",
+    tools: TOOLS,
+    // Not here though they only add: a quote and a change to a job's terms (send_quote,
+    // propose_change, request_change) commit the person once the other side accepts, so the AI
+    // tool should ask first.
+    additive: &[
+        "create_store_page",
+        "submit_release",
+        "submit_play_address",
+        "submit_github_release",
+        "check_repository",
+        "check_pictures",
+        "register_community_build",
+        "add_dedicated_server",
+        "offer_fix_to_original",
+        "claim_bounty",
+        "send_job_message",
+        "open_job_conversation",
+        "ask_for_job_conversation",
+        "send_admin_message",
+        "reply_to_admin_message",
+    ],
+    prompts: PROMPTS,
+};
+
+/// What a person can pick in their AI tool instead of knowing what to ask for.
+const PROMPTS: &[Prompt] = &[
+    Prompt {
+        name: "publish_project",
+        title: "Publish this project",
+        description: "Gets the project you have open onto SLAPorSLOP: store page, pictures, builds and the first release.",
+        arguments: &[(
+            "address",
+            "The store address you'd like, e.g. pixel-dungeon (optional)",
+            false,
+        )],
+        text: "Help me publish the project in this folder on SLAPorSLOP.
+I'd like its store address to be {address}.
+
+1. Call maker_guide and whats_left first, and follow the guide.
+2. Check the repository is public and has an OSI licence file. If something SLAPorSLOP doesn't allow is in the way (closed-source parts, purchases, a self-updater), tell me before going on.
+3. Write the store page from the code and the README and create it. Don't invent features.
+4. Add the pictures (an icon, a thumbnail, screenshots), push, and have SLAPorSLOP read them.
+5. Run check_source on what's pushed and fix what it lists, so the first release doesn't come back for it.
+6. Set up releases with Slop Build, or submit the builds I already have. A game that plays on my own website is a browser game: give its address instead.
+7. Follow the first release until SLAPorSLOP's checks are done, and fix whatever get_fixes lists.
+
+Ask me before anything that's mine to decide: the name, the age rating, the stage. Finish with whats_left, and tell me in plain words which steps are mine, with their links.",
+    },
+    Prompt {
+        name: "fix_last_release",
+        title: "Fix my last release",
+        description: "Reads what SLAPorSLOP's checks found in your newest release, fixes it in the repository and releases again.",
+        arguments: &[(
+            "app",
+            "The app's store address (optional when you have one app)",
+            false,
+        )],
+        text: "My newest release on SLAPorSLOP needs fixing.
+The app's store address is {app}.
+
+1. If I didn't say which app, find it with my_apps (ask me when there's more than one).
+2. Call list_releases with limit 1 for where the release stands, then get_fixes for every problem and how to fix it.
+3. Fix the `must` problems in the repository, then the `should` ones. Tell me about any that needs my decision.
+4. Commit and push, then run check_source on the new commit to see the source problems are gone.
+5. Release again with a new version, with notes for players on what changed.
+6. Follow the new release with list_releases (limit 1) every few minutes until its checks are done.
+
+Tell me what you changed and what's still waiting, for a person at SLAPorSLOP or for me.",
+    },
+    Prompt {
+        name: "whats_left",
+        title: "What's left to do?",
+        description: "Everything still open across your apps, agreements and People page, and who does each step.",
+        arguments: &[],
+        text: "Call whats_left and whats_new on SLAPorSLOP. Tell me in plain words what's waiting for me (with the links), what's waiting for SLAPorSLOP, and what you can do yourself. Then do your own steps, and tell me what you did.",
+    },
+    Prompt {
+        name: "player_feedback",
+        title: "What are players saying?",
+        description: "Sums up reviews, bug reports and how each release landed, and suggests what to fix first.",
+        arguments: &[(
+            "app",
+            "The app's store address (optional when you have one app)",
+            false,
+        )],
+        text: "Tell me what players think of my app on SLAPorSLOP.
+The app's store address is {app}.
+
+If I didn't say which app, find it with my_apps (ask me when there's more than one). Read release_feedback, list_reviews, list_bug_reports and app_ratings. Then tell me, briefly: what players like, what they complain about most, which bugs the most players hit, and whether the last release made things better or worse. Suggest what to fix first, and where it is in the code. Don't reply to reviews or change bug reports unless I ask.",
+    },
+    Prompt {
+        name: "set_up_people_page",
+        title: "Set up my People page",
+        description: "For artists, composers and other creatives: builds your portfolio repository and prepares your People page.",
+        arguments: &[(
+            "work",
+            "What you do, e.g. pixel art and animation (optional)",
+            false,
+        )],
+        text: "Help me set up my People page and portfolio on SLAPorSLOP, so makers can hire me.
+What I do: {work}.
+
+Read {site}/portfolio.md and follow its checklist for agents. Ask me what I make, what work I want to be hired for and which pieces I'm proudest of. Build the portfolio in a public GitHub repository of mine, and prepare my People page as one link that fills the editor in. Never decide for me whether I'm 18 or older, whether I work as a business, my prices, or anything about agreements and payments. Finish by telling me the steps that are mine, with their links.",
+    },
+    Prompt {
+        name: "find_someone_to_hire",
+        title: "Find someone to hire",
+        description: "Searches People for artists, composers or other creatives who fit what your project needs.",
+        arguments: &[(
+            "need",
+            "What you need, e.g. a chiptune soundtrack or pixel art for a platformer",
+            true,
+        )],
+        text: "I'm looking for someone to hire on SLAPorSLOP's People for my project. I need: {need}.
+
+Call list_skills, then find_people with the skill that fits (limit 20, taking work), and read the pages of the ones that fit best with get_person. Show me up to five: who they are, what they offer and at what price, how much AI they use, what past clients said, and the link to their page ({site}/people/ plus their handle). Don't rank them by anything I didn't ask for. Asking for a quote is mine to do: I press Hire on their page.",
+    },
+];
+
 /// What a maker's agent is told before writing to SLAPorSLOP's admins.
 const ADMIN_MESSAGE_RULES: &str = "Writes to SLAPorSLOP's admins: an error you hit on SLAPorSLOP, a bug in SLAPorSLOP itself, or a suggestion (not your maker's own app's bugs: fix those in its repository). Your maker's whole account may post once an hour and 5 times a day (a new thread or a reply, all its tokens together), so write only when it matters. Be brief and thorough in one message, so you don't spend your maker's tokens on follow-ups: what happened, where, what you expected, what you suggest. Plain text only, under 2,000 characters, at most 3 links. Only staff and makers with an app in the store, with accounts at least 7 days old, can write, with a token at least an hour old. Never include secrets, tokens or players' personal data. The admins answer in the thread: you'll see it in whats_new and list_my_admin_messages.";
 
@@ -1552,14 +1830,7 @@ async fn mcp(
         // The website's own session can't drive the agent endpoint.
         return ApiError::Forbidden.into_response();
     }
-    crate::agent::serve_mcp(
-        &state,
-        request,
-        TOOLS,
-        "slop-maker",
-        "SLAPorSLOP, the store for open-source AI-made apps and games, for the maker you work for. Call maker_guide first. Do the writing and fixing yourself in the repository; SLAPorSLOP checks, a person reviews. Never claim an app is \"safe\": say what SLAPorSLOP checked.",
-    )
-    .await
+    crate::agent::serve_mcp(&state, request, &SERVER).await
 }
 
 async fn mcp_get(
@@ -1638,6 +1909,99 @@ mod tests {
     }
 
     #[test]
+    fn any_token_looks_at_people_and_only_looks() {
+        for p in ["/v1/people", "/v1/people/skills", "/v1/people/vera"] {
+            assert_eq!(
+                route(&Method::GET, p),
+                Some((false, Slug::Any, None)),
+                "{p}"
+            );
+        }
+        // What's personal needs People access: the creative's own page, and the day's shelves
+        // (they say what the viewer has hired for).
+        for p in ["/v1/me/creative", "/v1/people/discover"] {
+            assert_eq!(
+                route(&Method::GET, p),
+                Some((false, Slug::People, None)),
+                "{p}"
+            );
+        }
+        for (m, p) in [
+            (Method::POST, "/v1/people/vera/hire"),
+            (Method::GET, "/v1/people/vera/hire"),
+            (Method::PUT, "/v1/people/reviews/x/reply"),
+            (Method::PUT, "/v1/me/creative"),
+            (Method::POST, "/v1/me/creative/portfolio/check"),
+            (Method::PUT, "/v1/apps/pong/update-settings"),
+        ] {
+            assert_eq!(route(&m, p), None, "{m} {p}");
+        }
+    }
+
+    #[test]
+    fn the_tools_and_prompts_hold_together() {
+        crate::agent::check_server(&SERVER);
+    }
+
+    #[test]
+    fn tool_calls_become_maker_requests() {
+        let call = |name: &str, args: Value| {
+            let tool = TOOLS.iter().find(|t| t.name == name).unwrap();
+            crate::agent::tool_request(tool, args.as_object().unwrap())
+        };
+        // A rollback names the release; following the newest again is a null, which is still sent.
+        let (m, path, body) = call(
+            "hold_at_release",
+            json!({ "slug": "pong", "kind": "release", "release_id": null }),
+        )
+        .unwrap();
+        assert_eq!((m, path.as_str()), (Method::POST, "/v1/apps/pong/changes"));
+        assert_eq!(body, Some(json!({ "kind": "release", "release_id": null })));
+        assert!(
+            call(
+                "hold_at_release",
+                json!({ "slug": "pong", "kind": "release" })
+            )
+            .is_err()
+        );
+        // Taking something away sends no body.
+        for (name, args, want) in [
+            (
+                "remove_review_reply",
+                json!({ "slug": "pong", "id": "r1" }),
+                "/v1/apps/pong/reviews/r1/reply",
+            ),
+            (
+                "end_browser_demo",
+                json!({ "slug": "pong" }),
+                "/v1/apps/pong/demo",
+            ),
+        ] {
+            let (m, path, body) = call(name, args).unwrap();
+            assert_eq!((m, path.as_str(), body), (Method::DELETE, want, None));
+        }
+        let (_, path, body) = call(
+            "cancel_pending_change",
+            json!({ "slug": "pong", "id": "c1" }),
+        )
+        .unwrap();
+        assert_eq!(
+            (path.as_str(), body),
+            ("/v1/apps/pong/changes/c1/cancel", None)
+        );
+        let (_, path, _) = call(
+            "find_people",
+            json!({ "skill": "pixel-art", "taking_work": true, "limit": 5 }),
+        )
+        .unwrap();
+        assert_eq!(path, "/v1/people?limit=5&skill=pixel-art&taking_work=true");
+        let (_, path, _) = call("list_releases", json!({ "slug": "pong", "limit": 1 })).unwrap();
+        assert_eq!(path, "/v1/apps/pong/releases?limit=1");
+        let (_, path, _) = call("get_person", json!({ "handle": "../me/creative" })).unwrap();
+        assert_eq!(path, "/v1/people/..%2Fme%2Fcreative");
+    }
+
+    #[test]
     fn guide_sections_are_found() {
         let all = sections();
         let names: Vec<&str> = all.iter().map(|(t, _)| t.as_str()).collect();
@@ -1662,9 +2026,16 @@ mod tests {
     #[test]
     fn every_tool_is_an_allowed_route() {
         for t in TOOLS {
-            let path = ["{section}", "{id}", "{slug}", "{original}", "{game}"]
-                .iter()
-                .fold(t.path.to_string(), |p, v| p.replace(v, "x"));
+            let path = [
+                "{section}",
+                "{id}",
+                "{slug}",
+                "{original}",
+                "{game}",
+                "{handle}",
+            ]
+            .iter()
+            .fold(t.path.to_string(), |p, v| p.replace(v, "x"));
             assert!(
                 route(&t.method, &path).is_some(),
                 "{}: {} {path}",

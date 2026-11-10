@@ -283,7 +283,7 @@ jobs:
     with:
       app: my-game                # your store address
       slop-url: https://slop.example   # the SLAPorSLOP site
-      project-type: rust          # rust, go or custom
+      project-type: rust          # one of the project types below
 ```
 
 | Input | Meaning |
@@ -1528,8 +1528,9 @@ link is used once; make a new one if they need it again.
 
 Your own AI coding agent can do most of this for you, from your editor: write and create the
 store page, submit releases with notes, read SLAPorSLOP's checks of each release and fix what they find,
-register community builds and mods, and offer fixes to the apps you build on. Creatives can let it
-watch People jobs, send quotes and talk in job conversations.
+put players back on an earlier release while it fixes a broken one, read what players say,
+register community builds and mods, offer fixes to the apps you build on, and search People for
+someone to hire. Creatives can let it watch People jobs, send quotes and talk in job conversations.
 
 **The easy way: approve it in your browser.** There's no token to copy or keep safe.
 
@@ -1554,7 +1555,14 @@ watch People jobs, send quotes and talk in job conversations.
    Agreement: the page shows it for you to accept. Only approve a request you just started
    yourself.
 3. **Ask it to read `maker_guide` first**, then give it the job: "publish this game on SLAPorSLOP",
-   "fix what SLAPorSLOP found in my last release", "offer this fix to the original".
+   "fix what SLAPorSLOP found in my last release", "offer this fix to the original". Tools that show a
+   connection's ready-made requests (in Claude Code, type `/` and look for `slaporslop`) list
+   these to pick from: Publish this project, Fix my last release, What's left to do?, What are
+   players saying?, Set up my People page, Find someone to hire.
+
+Each tool tells your AI whether it only looks or changes something, so an AI tool that asks before
+changes can let it look freely and still check with you before it publishes, rolls back or removes
+anything.
 
 It's listed under Account → AI agents, and you can remove it there (or sign it out like a device)
 any time. SLAPorSLOP tells you a week and a day before the time you chose is up; after that, your
@@ -1592,6 +1600,13 @@ you. Releases it submits are checked and reviewed like any other. Remove a token
 
 **Fixes:** every problem SLAPorSLOP's checks find comes with exact instructions, on your Releases page
 ("Copy for your AI") and from the agent tool `get_fixes`.
+
+**Before a release:** your agent can run SLAPorSLOP's source check on what you've pushed without
+submitting anything (`check_source`). It reads the repository at that commit and lists what a
+release there would be sent back for: the licence, purchases, code loaded from outside
+SLAPorSLOP, going online without the store page saying so, saves outside `SLOP_SAVE_DIR`. Nothing
+is saved. A release still gets the rest: Slop Build's own checks, the scan of the files, and a
+person's review where one is due.
 
 ## Keeping Windows from blocking your app
 
@@ -2040,8 +2055,11 @@ address with `submit_play_address` (or, in a [handoff link](#hand-the-person-one
    language and call it once at startup. Send nothing but the token.
 6. Either publish a GitHub release with the files the store page's platforms need (Option A; archives need the
    program path, which the owner enters on SLAPorSLOP), or add `.github/workflows/slop.yml` (Option B) with `app` set to the store address the
-   owner will use, `slop-url` set to the SLAPorSLOP site, and `project-type` set to `rust`, `go` or
-   `custom` (with `build-command`, `output-dir` and `exec`). For private repositories without
+   owner will use, `slop-url` set to the SLAPorSLOP site, and `project-type` set to the one that
+   fits the project: `rust`, `go`, `godot`, `unity`, `dotnet`, `python`, `electron`, `tauri` or
+   `web` (the table under **Project types** above says what each builds and needs), or `custom`
+   for anything else (with `build-command`, `output-dir` and `exec`). With a token,
+   `slop_build_setup` gives the file filled in for the repository. For private repositories without
    GitHub Enterprise, add `sign: false`. Off GitHub, or for full control, set up Option C. For
    Option A, name files so the version is the only part that changes between releases
    (e.g. `game-1.0.0-windows.zip`), so SLAPorSLOP can pick up later releases by itself.
@@ -2052,7 +2070,10 @@ address with `submit_play_address` (or, in a [handoff link](#hand-the-person-one
    from the repository. If a tool answers `terms_required` (the Publisher Agreement changed
    since the owner accepted it), tell them it's waiting for them on SLAPorSLOP under **Account → AI
    agents** (the website also shows it when they next publish), wait until they've accepted it,
-   then carry on.
+   then carry on. Once the page exists, run `check_source` on what's pushed (the full commit
+   SHA from `git rev-parse HEAD`; on GitHub, leaving it out checks the default branch's newest)
+   and fix every `must` item before the first release: it's SLAPorSLOP's source check with nothing
+   submitted, so the release doesn't come back for it.
 8. Option A: **(token)** submit the GitHub release (`submit_github_release`, or on the website
    under **Releases & progress → Submit a release**).
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.

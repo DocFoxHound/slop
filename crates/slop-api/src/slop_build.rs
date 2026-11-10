@@ -462,7 +462,8 @@ async fn submit_checks(
 struct Setup {
     /// Whether Slop Build can build this repository today.
     supported: bool,
-    /// rust, go or custom.
+    /// What the repository looks like: rust, go, godot, godot-dotnet (Godot with C#), unity,
+    /// dotnet, python, electron, tauri or web, or custom when it's none of them.
     project_type: String,
     /// What the repository looks like, when it's something Slop Build can't build on its own yet.
     detected: Option<String>,

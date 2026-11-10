@@ -37,14 +37,16 @@ and links, in plain words.
 
 1. Read the repository. Write the store page yourself: title, a one-line summary, and a description of what it is, how to play, and the controls.
 2. `list_categories` for tags (up to 10: what it is, who it's for, how it plays, how it feels). Pick an age (0, 3, 7, 12, 16, 18) and content labels honestly. Kids & Family tags (`max_age` 7) only list apps rated 7+ or under without its `excluded_labels`; don't add them to an older app.
-3. `create_store_page`. It's a draft until a release is approved.
+3. `create_store_page`. It's a draft until a release is approved. To change a page later, read it with `get_store_page` first, then `update_store_page` with only what should change.
 4. Pictures: add a `.slop/` folder with `media.json` naming an **icon** (square, 512×512 PNG is
    best; 256 to 1024 pixels a side), a thumbnail (920×430) and screenshots, push, then
    `check_pictures`. Make the icon from the app's own art (its logo, a character, a square crop of
    a screenshot); never one that shows something the app doesn't have or suggests another game.
-   No icon yet is fine (never a blocker): `get_fixes` lists it under `recommendations`. Guide
-   section "Pictures and videos".
-5. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`. A game that plays on the maker's own website works differently: see the next section.
+   No icon yet is fine (never a blocker): `get_fixes` lists it under `recommendations`.
+   `list_pictures` shows what the store has now and what waits for review. Guide section
+   "Pictures and videos".
+5. Before the first release, `check_source`: SLAPorSLOP's source check on what's pushed, without submitting anything. Fix the `must` items it lists (a missing licence file, purchases, code loaded from outside SLAPorSLOP, going online without the store page saying so), push, and check the new commit.
+6. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`. A game that plays on the maker's own website works differently: see the next section.
 
 A **dedicated server** is a program players run on their own computer or a host so others can play your game. Add it to the game with `add_dedicated_server` (or **Add a dedicated server** on the game's Edit store page): it needs its own repository, never the game's (split a repository that holds both first), and Windows and/or Linux like any download. It's an app of its own with its own releases (submit them as for any app; Slop Build works as usual), checked and reviewed the same way, and listed by a reviewer once one is approved. It has no store page of its own: it shows on the game's, players get the game without it unless they tick it, and it goes out of the store whenever the game does. A game can have several (a world server and a lobby server). Its versions are its own: SLAPorSLOP doesn't check which work with which game versions. Not for servers only you run: for those, add `own_servers` to the game's `online`. A server-like program with no game on SLAPorSLOP (a tool) is published as an ordinary app. A reviewer checks a server really is one. Guide section "Dedicated servers".
 
@@ -83,8 +85,8 @@ website also shows it when they next publish). Carry on once they've accepted it
 ## Every release
 
 1. Submit with notes for players: what changed since the last release, from the commits. Plain, short, no hype.
-2. `list_releases` shows its progress: fetching, then awaiting_review, then approved (or rejected or failed, with the reason). Its `progress.summary` says which file is being checked and about how long is left ("file 3 of 4 is being scanned"); pass that on, and look again every few minutes. A browser game's play address is checked in seconds. A first release then waits for a person at SLAPorSLOP, usually a day or two. If your maker didn't send a release, or asks you to take one back before it's reviewed, `withdraw_release`; the next release is then reviewed by a person.
-3. `get_fixes`: every problem SLAPorSLOP's checks found, with what to do. Fix the `must` ones first. The checks run on each release, so a new release shows whether the fixes worked.
+2. `list_releases` shows its progress (with `limit` 1, only the one you just submitted): fetching, then awaiting_review, then approved (or rejected or failed, with the reason). Its `progress.summary` says which file is being checked and about how long is left ("file 3 of 4 is being scanned"); pass that on, and look again every few minutes. A browser game's play address is checked in seconds. A first release then waits for a person at SLAPorSLOP, usually a day or two. If your maker didn't send a release, or asks you to take one back before it's reviewed, `withdraw_release`; the next release is then reviewed by a person.
+3. `get_fixes`: every problem SLAPorSLOP's checks found, with what to do. Fix the `must` ones first. The checks run on each release, so a new release shows whether the fixes worked; for what the source check found, `check_source` on the pushed commit shows it sooner, with nothing submitted.
 4. Fix, commit, push, and release again with a new version (a browser game: put the fixed game on its site, then `submit_play_address`).
 
 Stages go Coming soon → Beta → Released, and the maker moves the app on when they decide to, once
@@ -92,15 +94,24 @@ a release (a browser game: its play address) has been approved: on the website (
 store page and Releases pages) or with `move_to_stage` when they ask you. Only forward; Coming soon has a
 year to reach Beta and Beta a year to be released, or the page leaves the store until it does.
 
+**If a release turns out broken** and your maker wants players off it while you fix it:
+`app_overview` shows the release players get (`serving`) and the approved ones (`approved`), and
+`hold_at_release` with an earlier one's ID moves players back to it and keeps them there. It's
+applied at once when the app's releases are approved without a person (`release_settings` says);
+otherwise it waits for a person, and `cancel_pending_change` takes it back. When the fixed release
+is approved, `hold_at_release` with `release_id` null lets players follow the newest again. Only
+when your maker asks. Not for browser games.
+
 If an app is frozen because SLAPorSLOP can't read its repository, it takes no new releases. Restore
 SLAPorSLOP's access, then `check_repository`: it checks SLAPorSLOP can read the repository again and lifts
 the freeze (not one SLAPorSLOP's staff placed). It doesn't check the code.
 
 ## Reviews
 
-`list_reviews` shows what players say. Reply with `reply_to_review` only when your maker wants
-you to: brief, polite, specific (what was fixed or is planned). Never argue, and never ask for
-or reward a better vote.
+`list_reviews` shows what players say, and `app_ratings` the rating over time. Reply with
+`reply_to_review` only when your maker wants you to: brief, polite, specific (what was fixed or
+is planned). Never argue, and never ask for or reward a better vote. `remove_review_reply` takes
+a reply down again.
 
 ## Community builds and mods
 
@@ -124,11 +135,20 @@ When your maker's app receives an offer, `list_offers` shows it: review the pull
 - Don't submit the same failing release again unchanged. Read `get_fixes` first.
 - Don't make many tiny releases: each one is reviewed by a person.
 
+## Finding someone to hire
+
+Artists, composers, writers and other creatives take paid work on SLAPorSLOP; makers hire them.
+Any token can look: `find_people` searches by skill (`list_skills`) or words, and `get_person`
+reads one page, with services, prices, portfolio and reviews from past clients. Show your maker
+two or three who fit, with what each charges and the link to their page (`/people/` plus the
+handle). Never rank them by rating alone, and say when nobody fits. Asking for a quote is the
+person's: they press Hire on the page.
+
 ## People jobs (with People access)
 
-Artists, composers and other creatives take paid work on SLAPorSLOP; makers hire them. If your token
-has People access you can watch and help with jobs, as the creative or the client:
+If your token has People access you can watch and help with jobs, as the creative or the client:
 
+- `my_people_page` shows the person's own People page as they saved it, and where it stands.
 - `my_jobs` shows what's waiting: requests to quote, offers to answer, changes, messages.
 - Read a request with `get_job` and talk in the job conversation (`send_job_message`). It's
   recorded for both sides, so be accurate and polite, and say you're an AI assistant when asked.
