@@ -377,6 +377,8 @@ pub struct Generated {
     pub teams: usize,
     /// Friendships between players.
     pub friends: u64,
+    /// Rows of daily totals for makers (one per app and day with anything in it).
+    pub history_days: usize,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -724,6 +726,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         "vote_events",
         "votes",
         "pulse_sessions",
+        "app_daily_counts",
         "pulse_counts",
         "user_app_usage",
         "library_entries",
@@ -944,6 +947,37 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     )
     .await?;
 
+    // History for makers (history.rs): the same days, counted as the launch and library routes count.
+    let mut daily: HashMap<(usize, i64), (i32, i32, i32)> = HashMap::new();
+    for ((a, day), n) in &players_by_day {
+        daily.entry((*a, *day)).or_default().0 = *n;
+    }
+    for ((_, a), (_, _, first, _)) in &usage {
+        daily.entry((*a, *first)).or_default().1 += 1;
+    }
+    for entries in library.values() {
+        for (a, day) in entries {
+            daily.entry((*a, *day)).or_default().2 += 1;
+        }
+    }
+    let history_rows: Vec<(Uuid, time::Date, i32, i32, i32)> = daily
+        .iter()
+        .map(|((a, d), (p, f, l))| (apps[*a].id, (start + Duration::days(*d)).date(), *p, *f, *l))
+        .collect();
+    bulk(
+        &mut tx,
+        "insert into app_daily_counts (app_id, day, players, first_plays, library_adds) ",
+        &history_rows,
+        |b, (a, d, p, f, l)| {
+            b.push_bind(*a)
+                .push_bind(*d)
+                .push_bind(*p)
+                .push_bind(*f)
+                .push_bind(*l);
+        },
+    )
+    .await?;
+
     let truth_users: Vec<_> = users
         .iter()
         .map(|u| {
@@ -996,6 +1030,14 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
                 .push_bind(r.4);
         },
     )
+    .await?;
+    // A simulated app's history goes back to the day it was made.
+    sqlx::query(
+        "update apps set history_from = (created_at at time zone 'UTC')::date,
+                         players_from = (created_at at time zone 'UTC')::date
+         where id in (select app_id from sim_apps)",
+    )
+    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
 
@@ -1098,6 +1140,11 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     )
     .fetch_all(db)
     .await?;
+    // Nothing is counted for a private app (history.rs).
+    sqlx::query("delete from app_daily_counts where app_id = any($1)")
+        .bind(&private_apps)
+        .execute(db)
+        .await?;
     for app in &private_apps {
         sqlx::query(
             "insert into app_shares (app_id, user_id)
@@ -1173,6 +1220,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         private_apps: private_apps.len(),
         teams,
         friends,
+        history_days: history_rows.len(),
     })
 }
 

@@ -274,7 +274,8 @@ function ProfileSection() {
               <b>Share my playtime</b>
               <span className="muted small" style={{ display: "block" }}>
                 Games you launch from SLAPorSLOP can count you in their "playing now" numbers, and your playtime makes your votes
-                count more. SLAPorSLOP gets nothing but a launch token and a heartbeat; never what you do in the game.
+                count more. SLAPorSLOP gets nothing but a launch token and a heartbeat; never what you do in the game. With this on,
+                a launch also counts you in the daily totals a game's maker sees: how many played, never who.
               </span>
             </span>
           </label>

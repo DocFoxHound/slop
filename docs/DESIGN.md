@@ -272,7 +272,7 @@ Results are **passed**, **note**, **on hold** (fixable, e.g. a license mismatch 
 
 ## 11. Slop Pulse (player count)
 
-- **Purpose:** show "N playing now" and a monthly peak for games. Nothing else.
+- **Purpose:** show "N playing now" and a monthly peak for games, and give makers the busiest moment of each day in their History (below).
 - **How it works:**
   1. When the SLAPorSLOP client launches a game, it passes a **one-time signed launch token**.
   2. A tiny open-source library in the game sends `start` and then a heartbeat every few minutes, carrying only the app id and that token.
@@ -285,6 +285,7 @@ Results are **passed**, **note**, **on hold** (fixable, e.g. a license mismatch 
 - **Optional** (decided 2026-10-18; it was planned as required for public games). Recommended for games: it powers "playing now", the monthly peak and playtime-weighted votes. The publishing guide (`web/public/publishing.md`) has the protocol and code for common languages.
 - **Privacy:** no device IDs or gameplay data. Extra payload fails the scan.
 - **Browser games** (2026-11-07) get no Pulse token: their page has nowhere to receive one. Play records the day the player played instead (`last_platform` 'browser'), so they show no players now or monthly peak, and their votes are weighted by days played.
+- **History for makers (built 2026-11-10):** the Manage page shows, per UTC day, how many accounts played the app, how many played it for the first time and how many times it was added to a library (an account that removes it and adds it again on a later day counts again), with the day's busiest moment from Pulse, for 30, 90 or 365 days (`GET /v1/apps/{slug}/history`; agent tool `get_history`). Counts only (`app_daily_counts`): no account ids, no breakdowns. Counted when a launch or a library add happens. A launch counts only for an account with "Share my playtime" on; a library add counts for every account, and one taken back the same UTC day is not counted. Never for a private app, a dedicated server or the maker's own account. Installs are not counted: first plays stand in for them. No minimum count: a day can show 1. Open owner decision (2026-11-10): the build ships without a floor because a public app's page already shows "1 playing now".
 
 ## 12. Money
 

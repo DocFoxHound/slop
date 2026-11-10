@@ -32,6 +32,7 @@ mod agents_tests;
 mod browser_games_tests;
 mod checks_tests;
 mod discover_tests;
+mod history_tests;
 mod icons_tests;
 mod messages_tests;
 mod money_tests;
@@ -5913,6 +5914,39 @@ async fn the_simulation_scores_the_real_code_against_its_truth(db: PgPool) {
     assert_eq!(r.monthly_matching_now, r.ratings_checked);
     assert!(r.rating_truth_correlation > 0.4, "{r:#?}");
     assert_eq!(r.players_matching, r.players_checked);
+    // History for makers: daily totals for public apps from the day each was made, none for a
+    // private one. Later steps of the simulation may remove usage and library rows, never add.
+    assert!(made.history_days > 0, "{made:?}");
+    let (on_private, too_early): (i64, i64) = sqlx::query_as(
+        "select count(*) filter (where a.visibility = 'private'),
+                count(*) filter (where c.day < a.history_from or a.players_from <> a.history_from)
+         from app_daily_counts c join apps a on a.id = c.app_id",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((on_private, too_early), (0, 0));
+    let (first_plays, launched, library_adds, in_library): (i64, i64, i64, i64) = sqlx::query_as(
+        "select (select coalesce(sum(c.first_plays), 0)::bigint from app_daily_counts c
+                 join apps a on a.id = c.app_id where a.visibility = 'public'),
+                (select count(*) from user_app_usage u
+                 join apps a on a.id = u.app_id where a.visibility = 'public'),
+                (select coalesce(sum(c.library_adds), 0)::bigint from app_daily_counts c
+                 join apps a on a.id = c.app_id where a.visibility = 'public'),
+                (select count(*) from library_entries l
+                 join apps a on a.id = l.app_id where a.visibility = 'public')",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(
+        launched > 0 && first_plays >= launched,
+        "{first_plays} < {launched}"
+    );
+    assert!(
+        in_library > 0 && library_adds >= in_library,
+        "{library_adds} < {in_library}"
+    );
 
     // People: creatives, jobs in every state, payments through the real code.
     let p = &r.people;

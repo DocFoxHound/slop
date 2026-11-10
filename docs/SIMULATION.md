@@ -25,7 +25,9 @@ unweighted, over time) and **player counts** against a truth we know. The code i
     twice;
   - **think again after updates:** some change or withdraw their vote.
 
-  Player counts are recorded per 3 hours, busiest in the evening.
+  Player counts are recorded per 3 hours, busiest in the evening. The daily totals makers see
+  (players, first plays and library adds per app and day) are written from the same simulated
+  days; private apps get none.
 
 - **Reports and moderation** (`sim_moderation.rs`): every simulated user has accepted the
   agreements in effect. About 30 apps, reviews and People profiles get one to three reports with

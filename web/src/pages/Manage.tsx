@@ -14,6 +14,7 @@ import { api, ApiError, type AppChange, type ManageOverview, type RatingGroup, t
 import { OffersPanel } from "../components/Offers";
 import { DemoPanel } from "../components/Demo";
 import { BugReportsPanel, ReleaseFeedbackPanel } from "../components/BugReports";
+import { HistoryPanel } from "../components/MakerHistory";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, playsInBrowser } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -84,6 +85,8 @@ export function Manage() {
       <div className="maker-cols">
         <div className="maker-main">
           {browser ? <WherePlayGoes slug={slug} overview={m} /> : <ReleaseChoice slug={slug} overview={m} onChanged={changed} />}
+          {/* Nothing is counted for a Private app or a dedicated server (crates/slop-api/src/history.rs). */}
+          {!app.data.private && !server && <HistoryPanel slug={slug} />}
           {!app.data.private && !server && app.data.stage !== "coming_soon" && <RatingBreakdown slug={slug} />}
           <BugReportsPanel slug={slug} repoUrl={app.data.repo_url} accepting={app.data.bug_reports} />
           {!app.data.private && <ReleaseFeedbackPanel slug={slug} />}

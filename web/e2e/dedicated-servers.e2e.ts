@@ -143,6 +143,16 @@ test("the maker adds a dedicated server on the game's Edit store page, from its 
   await expect(form.getByText("a dedicated server lives in its own repository, not the game's")).toBeVisible();
 });
 
+test("a dedicated server's Manage page has no History: nothing is counted for one", async ({ page }) => {
+  await signIn(page, "designer");
+  await page.goto(`/publish/${SERVER}/manage`);
+  await expect(page.getByRole("heading", { name: "Bug reports", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "History", exact: true })).toHaveCount(0);
+  // Its game has one.
+  await page.goto(`/publish/${GAME}/manage`);
+  await expect(page.getByRole("region", { name: "History", exact: true })).toBeVisible();
+});
+
 test("only the game's maker can add a dedicated server to it", async () => {
   const res = await tryCall("player", "POST", `/v1/apps/${GAME}/servers`, {
     slug: "not-my-server",

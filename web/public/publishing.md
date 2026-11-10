@@ -41,6 +41,10 @@ optional.
   a person, before Play opens it.
 - **Player counts.** Add a few lines of code ([Slop Pulse](#slop-pulse-player-counts)) and your
   store page shows how many people are playing now and the peak this month.
+- **History.** Your Manage page shows, for each day, how many accounts played your app, how many
+  played it for the first time and how many times it was added to a library. Totals only, never
+  who. Plays by people who switched off "Share my playtime" aren't counted, and Private apps and
+  dedicated servers have no history.
 - *(coming)* **Slaps / Slop ratings** from people who actually launched your app.
 
 ## What SLAPorSLOP asks of your project
@@ -1565,10 +1569,10 @@ one page, once. If the creative isn't taking work, the page says so and nothing 
 Your own AI coding agent can do most of this for you, from your editor: write and create the
 store page, submit releases with notes, read SLAPorSLOP's checks of each release and fix what they find,
 put players back on an earlier release while it fixes a broken one, read what players say,
-register community builds and mods, offer fixes to the apps you build on, and search People for
-someone to hire, with the request written out for you to check and send. Creatives can let it
-watch People jobs, send quotes and talk in job conversations, and have their portfolio checked
-and sent for review after it changes.
+read how many played each day, register community builds and mods, offer fixes to the apps you
+build on, and search People for someone to hire, with the request written out for you to check
+and send. Creatives can let it watch People jobs, send quotes and talk in job conversations, and
+have their portfolio checked and sent for review after it changes.
 
 **The easy way: approve it in your browser.** There's no token to copy or keep safe.
 
@@ -1784,7 +1788,9 @@ hand, so expect a longer wait.
 Optional, recommended for games. With Pulse, your store page shows **N playing now** and the
 **peak this month**, and players' playtime makes their ratings count more. Not for
 [browser games](#browser-games): Play gets no Pulse token, and their players' votes count the days
-they played.
+they played. Pulse also gives your History its "busiest moment each day". Players per day, first
+plays and library adds are counted for every public app (not dedicated servers), with or without
+Pulse; like Pulse, players per day and first plays count only players who share their playtime.
 
 **How it works.** When a signed-in player starts your game from the SLAPorSLOP desktop app, the app sets
 three environment variables for your game:

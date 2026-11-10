@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Publishing, part 3: the Manage page. Which release players get (straight away, or checked by a
 // person), moving the repository, withdrawing a release not reviewed yet, requests and cancelling
-// them; and, read-only on the seeded Lantern Keep, ratings, how each release landed and bug triage.
+// them; and, read-only on the seeded Lantern Keep, ratings, its history, how each release landed and
+// bug triage.
+import AxeBuilder from "@axe-core/playwright";
+
+import type { AppHistory } from "../src/api";
 import { expect, ids, signIn, test } from "./fixtures";
 import { answer, approve, call, createApp, fakeRepo, readNotices, submitRelease, uniq } from "./publishing-helpers";
 
@@ -233,6 +237,47 @@ test("Lantern Keep's maker reads its ratings, how its release landed, and its bu
   await expect(bugs.getByText("None.")).toBeVisible();
   await bugs.getByLabel("Show").selectOption("all");
   await expect(bugs.getByRole("listitem").filter({ hasText: /Fog covers|Crash on level 3|Text too small/ })).toHaveCount(3);
+});
+
+test("Lantern Keep's maker reads its history: players, first plays and library adds per day", async ({ page }) => {
+  // Seeded players launched it through the real route (examples/e2e_server/seed.rs), so the seed
+  // itself made counts. Not tied to "today": a run across UTC midnight still passes.
+  const h = await call<AppHistory>("maker", "GET", `/v1/apps/${ids.listedApp}/history?days=30`);
+  expect(h.days).toHaveLength(30);
+  expect(h.days.some((d) => (d.players ?? 0) >= 1 && (d.first_plays ?? 0) >= 1)).toBe(true);
+
+  await signIn(page, "maker");
+  await page.goto(`/publish/${ids.listedApp}/manage`);
+  const history = page.getByRole("region", { name: "History", exact: true });
+  await expect(history).toBeVisible();
+  await expect(history.getByText("Totals only, never who.")).toBeVisible();
+  await expect(history.getByText("Players and first plays per day", { exact: true })).toBeVisible();
+  await expect(history.getByText("Library adds per day", { exact: true })).toBeVisible();
+  // The app was made when the test server started: the days before that weren't counted, and it says so.
+  await expect(history.getByText(new RegExp(`^Nothing is counted before ${h.history_from}: the day the app was made`))).toBeVisible();
+
+  // Every day in numbers, with at least one day someone played.
+  await history.getByRole("button", { name: "Show numbers" }).first().click();
+  const rows = history.getByRole("table").locator("tbody tr");
+  await expect(rows).toHaveCount(30);
+  await expect(rows.filter({ has: page.getByRole("cell", { name: /^[1-9]\d*$/ }) }).first()).toBeVisible();
+
+  // Another range: the open table follows it.
+  const days90 = history.getByRole("button", { name: "90 days" });
+  await days90.click();
+  await expect(days90).toHaveAttribute("aria-pressed", "true");
+  await expect(history.getByRole("button", { name: "30 days" })).toHaveAttribute("aria-pressed", "false");
+  await expect(rows).toHaveCount(90);
+  await expect(history).toHaveAttribute("aria-busy", "false");
+
+  const results = await new AxeBuilder({ page })
+    .include('section[aria-labelledby="history-title"]')
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+    .analyze();
+  const serious = results.violations
+    .filter((v) => v.impact === "serious" || v.impact === "critical")
+    .map((v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")})`);
+  expect(serious, serious.join("\n")).toEqual([]);
 });
 
 test("the stage bar: Coming soon until a release is approved, then Beta and Released, only forward", async ({ page }) => {

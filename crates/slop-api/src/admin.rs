@@ -715,8 +715,12 @@ async fn list_app_as(
         .fetch_one(&mut *tx)
         .await?;
         ensure!(requested, "its owner hasn't asked to make it public");
+        // Nothing was counted while it was private: its History starts today (history.rs).
         sqlx::query(
-            "update apps set visibility = 'public', public_requested_at = null where id = $1",
+            "update apps set visibility = 'public', public_requested_at = null,
+                    history_from = (now() at time zone 'UTC')::date,
+                    players_from = (now() at time zone 'UTC')::date
+             where id = $1",
         )
         .bind(id)
         .execute(&mut *tx)

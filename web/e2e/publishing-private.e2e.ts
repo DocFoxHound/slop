@@ -86,8 +86,10 @@ test("asking to make it public, and keeping it private after all", async ({ page
   await signIn(page, "maker2");
   await page.goto(manage);
   const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Make it public" }) });
-  // Private apps have no donations or ratings.
+  // Private apps have no donations, ratings or history (nothing is counted for one).
+  await expect(section.getByRole("button", { name: "Ask to make it public" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Ratings" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "History", exact: true })).toHaveCount(0);
   await section.getByRole("button", { name: "Ask to make it public" }).click();
   await expect(section.getByText(/^Waiting for a reviewer\./)).toBeVisible();
   await section.getByRole("button", { name: "Keep it private" }).click();
