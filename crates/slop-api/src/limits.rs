@@ -37,6 +37,8 @@ pub enum Action {
     Bounty,
     /// Choosing a profile picture: each one is downloaded from the provider.
     Picture,
+    /// A dry run of the source check (fixes.rs): each one downloads the repository.
+    SourceCheck,
 }
 
 impl Action {
@@ -67,6 +69,7 @@ impl Action {
             // Opening fix bounties (pledging counts as Donation).
             Self::Bounty => (10, HOUR),
             Self::Picture => (20, HOUR),
+            Self::SourceCheck => (20, HOUR),
         };
         (n, Duration::from_secs(secs))
     }
@@ -91,6 +94,7 @@ impl Action {
             Self::Lookup => "repository lookups",
             Self::Bounty => "new bounties",
             Self::Picture => "picture changes",
+            Self::SourceCheck => "source checks",
         }
     }
 }

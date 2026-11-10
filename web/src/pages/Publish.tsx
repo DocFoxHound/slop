@@ -171,6 +171,15 @@ export function Publish() {
           </li>
         ))}
       </ul>
+      {mine.data && (
+        <section className="ai-start" aria-label="Using an AI assistant">
+          <p className="small">
+            <b>Using an AI assistant?</b> It can get {mine.data.length === 0 ? "your project" : "your next project"} ready and
+            walk you through the rest. Paste this in:
+          </p>
+          <CopyLine text={startPrompt(siteAddress(), "publish")} label="Copy the line for your AI assistant" />
+        </section>
+      )}
     </div>
   );
 }

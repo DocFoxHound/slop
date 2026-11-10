@@ -843,8 +843,10 @@ struct DirectoryQuery {
     #[serde(default)]
     studios: bool,
     q: Option<String>,
-    /// shuffle (default), rating, clients or new.
+    /// rating or clients; anything else is the daily shuffle.
     sort: Option<String>,
+    /// How many, 1 to 200 (200 when left out).
+    limit: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -907,7 +909,8 @@ async fn directory(
             .push_bind(OffsetDateTime::now_utc().date().to_string())
             .push(")"),
     };
-    qb.push(" limit 200");
+    qb.push(" limit ")
+        .push_bind(q.limit.unwrap_or(200).clamp(1, 200));
     let rows: Vec<CardRow> = qb.build_query_as().fetch_all(&state.db).await?;
     let counts: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select s, count(*) from creatives c, unnest(c.skills) s where {OPEN_SQL} group by s"
@@ -1062,7 +1065,11 @@ async fn page(
         .push_bind(handle.to_ascii_lowercase());
     let row: Option<Row> = qb.build_query_as().fetch_optional(&state.db).await?;
     let row = row.ok_or(ApiError::NotFound)?;
-    let is_me = user.as_ref().is_some_and(|u| u.id == row.user_id);
+    // The creative's own view (a draft, a page turned down, a portfolio in review) is People
+    // access for their AI's token (maker_agents.rs); a token without it sees what anyone does.
+    let is_me = user
+        .as_ref()
+        .is_some_and(|u| u.id == row.user_id && u.agent.as_ref().is_none_or(|a| a.people));
     let live = row.portfolio_set_id.is_some() && row.hidden_reason.is_none() && !row.suspended;
     if !live && !is_me {
         return Err(ApiError::NotFound);

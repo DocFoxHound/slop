@@ -445,6 +445,8 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .ai-notice p { margin: 6px 0; }
 .ai-prompt { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; }
 .ai-prompt code { flex: 1; display: block; padding: 8px 10px; line-height: 1.5; white-space: normal; }
+/* The same line under a signed-in maker's apps (Publish): no wider than a readable line. */
+.ai-start { margin-top: 22px; max-width: 760px; }
 /* AI agent tokens (components/AiAgents.tsx, AgentSetup.tsx) */
 .agent-setup { border-color: var(--slime); margin-bottom: 20px; }
 .agent-setup-title { margin: 0 0 10px; font-size: 16px; color: var(--text); }

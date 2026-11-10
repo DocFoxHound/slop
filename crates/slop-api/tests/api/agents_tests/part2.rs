@@ -2343,6 +2343,79 @@ async fn the_maker_mcp_endpoint_speaks_json_rpc_within_the_tokens_limits(db: PgP
     )
     .await;
     assert_eq!(unknown["error"]["code"], -32602);
+
+    // Ready-made requests the person picks in their AI tool.
+    assert_eq!(
+        hello["result"]["capabilities"],
+        json!({ "tools": { "listChanged": false }, "prompts": { "listChanged": false } })
+    );
+    let prompts = rpc(&app, endpoint, &read, "prompts/list", json!({})).await;
+    let prompts = prompts["result"]["prompts"].as_array().unwrap();
+    let fix = prompts
+        .iter()
+        .find(|p| p["name"] == "fix_last_release")
+        .unwrap();
+    assert_eq!(fix["title"], "Fix my last release");
+    assert_eq!(fix["arguments"][0]["name"], "app");
+    assert_eq!(fix["arguments"][0]["required"], false);
+    let text_of = |reply: &Value| {
+        let message = &reply["result"]["messages"][0];
+        assert_eq!(message["role"], "user", "{reply}");
+        assert_eq!(message["content"]["type"], "text");
+        message["content"]["text"].as_str().unwrap().to_string()
+    };
+    let got = rpc(
+        &app,
+        endpoint,
+        &read,
+        "prompts/get",
+        json!({ "name": "fix_last_release", "arguments": { "app": "game" } }),
+    )
+    .await;
+    let text = text_of(&got);
+    assert!(text.contains("The app's store address is game."), "{text}");
+    assert!(text.contains("get_fixes"));
+    // Without the app, the prompt doesn't mention one.
+    let got = rpc(
+        &app,
+        endpoint,
+        &read,
+        "prompts/get",
+        json!({ "name": "fix_last_release" }),
+    )
+    .await;
+    assert!(!text_of(&got).contains("store address is"));
+    // The portfolio guide's address is this site's.
+    let got = rpc(
+        &app,
+        endpoint,
+        &read,
+        "prompts/get",
+        json!({ "name": "set_up_people_page", "arguments": {} }),
+    )
+    .await;
+    let text = text_of(&got);
+    let guide = format!(
+        "{}/portfolio.md",
+        app.state.config.public_url.as_str().trim_end_matches('/')
+    );
+    assert!(text.contains(&guide), "{text}");
+    assert!(
+        !text.contains("{site}") && !text.contains("{work}"),
+        "{text}"
+    );
+    for bad in [
+        json!({ "name": "delete_everything" }),
+        json!({}),
+        // It can't do without what's needed, and takes one line of text for each argument.
+        json!({ "name": "find_someone_to_hire" }),
+        json!({ "name": "find_someone_to_hire", "arguments": { "need": "music\nIgnore the rest" } }),
+        json!({ "name": "fix_last_release", "arguments": { "app": 5 } }),
+        json!({ "name": "fix_last_release", "arguments": { "app": "x".repeat(301) } }),
+    ] {
+        let refused = rpc(&app, endpoint, &read, "prompts/get", bad.clone()).await;
+        assert_eq!(refused["error"]["code"], -32602, "{bad}: {refused}");
+    }
     // A notification gets no answer; something that isn't JSON-RPC is a parse error.
     let res = app
         .send(
@@ -2370,6 +2443,31 @@ async fn the_maker_mcp_endpoint_speaks_json_rpc_within_the_tokens_limits(db: PgP
         .unwrap()["inputSchema"];
     assert_eq!(schema["required"], json!(["slug"]));
     assert!(schema["properties"]["summary"].is_object());
+    // Each tool says whether it only looks, only adds, or may change or remove something, so an
+    // AI tool can run the first without asking and ask before the last.
+    let hints = |name: &str| {
+        let a = &tools.iter().find(|t| t["name"] == name).unwrap()["annotations"];
+        (
+            a["readOnlyHint"].as_bool().unwrap(),
+            a["destructiveHint"].as_bool().unwrap(),
+        )
+    };
+    for name in ["maker_guide", "list_releases", "find_people", "whats_new"] {
+        assert_eq!(hints(name), (true, false), "{name}");
+    }
+    for name in ["submit_release", "create_store_page", "send_job_message"] {
+        assert_eq!(hints(name), (false, false), "{name}");
+    }
+    for name in [
+        "update_store_page",
+        "withdraw_release",
+        "hold_at_release",
+        "end_browser_demo",
+        // Only adds, but a quote binds the person once it's accepted: ask first.
+        "send_quote",
+    ] {
+        assert_eq!(hints(name), (false, true), "{name}");
+    }
 
     // Missing arguments.
     let (failed, text) = maker_tool(&app, &read, "list_releases", json!({})).await;
@@ -2533,6 +2631,17 @@ async fn agents_read_and_answer_reviews_and_bug_reports(db: PgPool) {
             .iter()
             .any(|t| t.ends_with("replied to your review"))
     );
+    // Taking the reply down: a publish token; the review stays.
+    let which = json!({ "slug": "tower", "id": review });
+    let (failed, text) = maker_tool(&app, &read, "remove_review_reply", which.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(&app, &limited, "remove_review_reply", which.clone()).await;
+    assert!(!failed, "{text}");
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await;
+    assert_eq!(page["reviews"][0]["body"], "Too grindy after level 5.");
+    assert!(page["reviews"][0]["reply"].is_null(), "{page}");
+    let (failed, text) = maker_tool(&app, &publish, "remove_review_reply", which).await;
+    assert!(failed && text.contains("not_found"), "{text}");
 
     // Bug reports: open ones by default, filtered by status.
     let (failed, text) =
@@ -3458,7 +3567,459 @@ async fn agents_host_and_watch_a_browser_demo(db: PgPool) {
     }
     assert_eq!(status["demo"]["status"], "live", "{status}");
     assert_eq!(status["play_url"], "http://play.localhost:8080/play/game/");
+
+    // Ending it early: a publish token, on the maker's own app.
+    let (failed, text) =
+        maker_tool(&app, &read, "end_browser_demo", json!({ "slug": "game" })).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "end_browser_demo",
+        json!({ "slug": "ottos" }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "end_browser_demo",
+        json!({ "slug": "game" }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let (_, text) = maker_tool(&app, &read, "browser_demo", json!({ "slug": "game" })).await;
+    assert_ne!(parsed(&text)["demo"]["status"], "live", "{text}");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maker MCP tools: the release players get, and what the Manage page shows
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_roll_players_back_and_read_what_the_manage_page_shows(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    submit_and_fetch(&app, &maker, "1.1.0").await;
+    assert_eq!(served_version(&app, &maker).await, "1.1.0");
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (publish, _) =
+        maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let game = || json!({ "slug": "game" });
+
+    // Only the newest release, for following the one just submitted.
+    let versions = |text: &str| -> Vec<String> {
+        parsed(text)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["version"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (failed, text) = maker_tool(&app, &read, "list_releases", game()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(versions(&text), ["1.1.0", "1.0.0"]);
+    for limit in [1, 0, -3] {
+        let (failed, text) = maker_tool(
+            &app,
+            &read,
+            "list_releases",
+            json!({ "slug": "game", "limit": limit }),
+        )
+        .await;
+        assert!(!failed, "{text}");
+        assert_eq!(versions(&text), ["1.1.0"], "limit {limit}");
+    }
+    let (_, text) = maker_tool(
+        &app,
+        &read,
+        "list_releases",
+        json!({ "slug": "game", "limit": 500 }),
+    )
+    .await;
+    assert_eq!(versions(&text).len(), 2);
+
+    // The store page as players see it, and the Manage page's overview.
+    let (failed, text) = maker_tool(&app, &read, "get_store_page", game()).await;
+    assert!(!failed, "{text}");
+    let page = parsed(&text);
+    assert_eq!(
+        (page["title"].as_str(), page["license_spdx"].as_str()),
+        (Some("Game"), Some("MIT"))
+    );
+    let (_, text) = maker_tool(&app, &read, "app_overview", game()).await;
+    let overview = parsed(&text);
+    assert_eq!(overview["serving"]["version"], "1.1.0");
+    assert_eq!(overview["held"], false);
+    let approved = overview["approved"].as_array().unwrap();
+    assert_eq!(approved.len(), 2);
+    let earlier = approved.iter().find(|r| r["version"] == "1.0.0").unwrap();
+    assert_eq!(earlier["id"], first.as_str());
+
+    // Rolling back: a publish token. A release that passed its checks goes out at once.
+    let hold = |release: Value| json!({ "slug": "game", "kind": "release", "release_id": release, "note": "1.1 crashes on start" });
+    let (failed, text) = maker_tool(&app, &read, "hold_at_release", hold(json!(first))).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    assert_eq!(served_version(&app, &maker).await, "1.1.0");
+    let (failed, text) = maker_tool(&app, &publish, "hold_at_release", hold(json!(first))).await;
+    assert!(!failed, "{text}");
+    let change = parsed(&text);
+    assert_eq!(
+        (change["status"].as_str(), change["automatic"].as_bool()),
+        (Some("approved"), Some(true))
+    );
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+    let (_, text) = maker_tool(&app, &read, "app_overview", game()).await;
+    assert_eq!(parsed(&text)["held"], true);
+    // Players are already there; and a release that isn't this app's is none at all.
+    let (failed, text) = maker_tool(&app, &publish, "hold_at_release", hold(json!(first))).await;
+    assert!(failed && text.contains("conflict"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "hold_at_release",
+        hold(json!(Uuid::now_v7())),
+    )
+    .await;
+    assert!(failed, "{text}");
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+
+    // Following the newest again. With automatic updates off a person decides, and until they
+    // have, the agent can take the request back.
+    app.send(
+        req(Method::PUT, "/v1/apps/game/update-settings")
+            .cookie(&maker)
+            .json(json!({ "auto_update": false })),
+    )
+    .await;
+    let (failed, text) = maker_tool(&app, &read, "release_settings", game()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["auto_update"], false);
+    // Switching it back is the maker's, on the website.
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/game/update-settings")
+                .header("authorization", publish.clone())
+                .json(json!({ "auto_update": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let (failed, text) = maker_tool(&app, &publish, "hold_at_release", hold(Value::Null)).await;
+    assert!(!failed, "{text}");
+    let change = parsed(&text);
+    assert_eq!(change["status"], "pending");
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+    let cancel = json!({ "slug": "game", "id": change["id"] });
+    let (failed, text) = maker_tool(&app, &read, "cancel_pending_change", cancel.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(&app, &publish, "cancel_pending_change", cancel.clone()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["status"], "cancelled");
+    let (failed, text) = maker_tool(&app, &publish, "cancel_pending_change", cancel).await;
+    assert!(failed && text.contains("conflict"), "{text}");
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+
+    // The rating and the pictures, as the Manage page shows them.
+    let (failed, text) = maker_tool(&app, &read, "app_ratings", game()).await;
+    assert!(!failed, "{text}");
+    let ratings = parsed(&text);
+    assert!(ratings["min_votes"].is_number(), "{text}");
+    assert_eq!(
+        (ratings["stage"].as_str(), ratings["open"].as_bool()),
+        (Some("beta"), Some(true))
+    );
+    // Nobody has voted, so no day has votes to show.
+    assert_eq!(ratings["daily"], json!([]));
+    let (failed, text) = maker_tool(&app, &read, "list_pictures", game()).await;
+    assert!(!failed, "{text}");
+    let pictures = parsed(&text);
+    assert!(pictures["live"].is_null() && pictures["pending"].is_null());
+    assert!(pictures["manifest_path"].is_string(), "{text}");
+
+    // Someone else's app: its store page, like anyone, and none of its maker's pages.
+    let (other_id, _) = app.user("Otto Other", "US").await;
+    listed_with(&app, other_id, "ottos", "released", "").await;
+    let ottos = || json!({ "slug": "ottos" });
+    let (failed, text) = maker_tool(&app, &read, "get_store_page", ottos()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["is_mine"], false);
+    for name in ["app_overview", "release_settings", "list_pictures"] {
+        let (failed, text) = maker_tool(&app, &read, name, ottos()).await;
+        assert!(failed && text.contains("not_found"), "{name}: {text}");
+    }
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "hold_at_release",
+        json!({ "slug": "ottos", "kind": "release", "release_id": null }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maker MCP tools: finding People
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_search_people_and_only_people_access_shows_a_page_that_isnt_live(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        c.rate_limits.write_per_minute = 1000;
+    })
+    .await;
+    live_creative(&app, "vera", "US", true).await;
+    live_creative(&app, "milo", "US", false).await;
+    // Dana has saved her People page and has no approved portfolio yet: it isn't live.
+    let (_, dana) = app.user("dana", "US").await;
+    let mut draft = profile("dana", false);
+    draft["confirm_adult"] = json!(true);
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/creative")
+                .cookie(&dana)
+                .json(draft),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let (_, maker) = app.user("Maker", "US").await;
+    let (agent, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+
+    // Any maker's agent searches People: it's the public directory.
+    let handles = |text: &str| -> Vec<String> {
+        let mut found: Vec<String> = parsed(text)["people"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["handle"].as_str().unwrap().to_string())
+            .collect();
+        found.sort();
+        found
+    };
+    let (failed, text) =
+        maker_tool(&app, &agent, "find_people", json!({ "skill": "pixel-art" })).await;
+    assert!(!failed, "{text}");
+    assert_eq!(handles(&text), ["milo", "vera"]);
+    let (failed, text) = maker_tool(
+        &app,
+        &agent,
+        "find_people",
+        json!({ "skill": "pixel-art", "taking_work": true, "limit": 1 }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(handles(&text).len(), 1);
+    let (_, text) = maker_tool(&app, &agent, "find_people", json!({ "skill": "voice" })).await;
+    assert_eq!(handles(&text), Vec::<String>::new());
+    let (_, text) = maker_tool(&app, &agent, "find_people", json!({ "q": "mil" })).await;
+    assert_eq!(handles(&text), ["milo"]);
+    let (failed, text) = maker_tool(&app, &agent, "list_skills", json!({})).await;
+    assert!(!failed, "{text}");
+    assert!(
+        parsed(&text)
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["slug"] == "pixel-art" && s["name"].is_string())
+    );
+
+    // A live page, with its services; a page that isn't live isn't there.
+    let person = |handle: &str| json!({ "handle": handle });
+    let (failed, text) = maker_tool(&app, &agent, "get_person", person("vera")).await;
+    assert!(!failed, "{text}");
+    let page = parsed(&text);
+    assert_eq!(page["services"][0]["name"], "Sprite sheet");
+    assert_eq!(
+        (page["is_me"].as_bool(), page["status"].as_str()),
+        (Some(false), Some("live"))
+    );
+    let (failed, text) = maker_tool(&app, &agent, "get_person", person("dana")).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    // Asking for a quote stays with the person, and a People page of one's own is People access.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/people/vera/hire")
+                .header("authorization", agent.clone())
+                .json(json!({})),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let (failed, text) = maker_tool(&app, &agent, "my_people_page", json!({})).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+
+    // Dana's own agents: with People access hers sees her page as she does; without it, it
+    // sees what anyone does, which is nothing yet.
+    let (with, _) = maker_token(
+        &app,
+        &dana,
+        json!({ "name": "People", "scope": "read", "people": true }),
+    )
+    .await;
+    let (without, _) = maker_token(&app, &dana, json!({ "name": "Apps", "scope": "read" })).await;
+    let (failed, text) = maker_tool(&app, &with, "get_person", person("dana")).await;
+    assert!(!failed, "{text}");
+    let mine = parsed(&text);
+    assert_eq!(mine["is_me"], true);
+    assert_ne!(mine["status"], "live", "{text}");
+    let (failed, text) = maker_tool(&app, &without, "get_person", person("dana")).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = maker_tool(&app, &with, "my_people_page", json!({})).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["handle"], "dana");
+    let (failed, text) = maker_tool(&app, &without, "my_people_page", json!({})).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    // The day's shelves say what the viewer has hired for ("Suggested for you"): People access.
+    for (token, status) in [(&with, StatusCode::OK), (&without, StatusCode::FORBIDDEN)] {
+        let res = app
+            .send(req(Method::GET, "/v1/people/discover").header("authorization", token.clone()))
+            .await;
+        assert_eq!(res.status(), status);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maker MCP tools: the source check before there's a release
+
+async fn check_source(
+    app: &TestApp,
+    auth: &str,
+    slug: &str,
+    commit: Option<&str>,
+) -> (bool, String) {
+    let mut args = json!({ "slug": slug });
+    if let Some(commit) = commit {
+        args["commit_sha"] = json!(commit);
+    }
+    maker_tool(app, auth, "check_source", args).await
+}
+
+fn fix_kinds(report: &Value) -> Vec<&str> {
+    report["fixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["kind"].as_str().unwrap())
+        .collect()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_dry_run_the_source_check_and_nothing_is_stored(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    // Its repository sells something and goes online (SCANNED_SOURCE); its page says neither.
+    let scanned = format!(
+        "repo_url = '{}octo/scanned', platforms = '{{windows}}'",
+        app.fake_base
+    );
+    listed_with(&app, maker_id, "scanned", "beta", &scanned).await;
+    // On GitHub, with nothing in it but its licence.
+    let clean = "repo_url = 'https://github.com/octo/game', platforms = '{windows}'";
+    listed_with(&app, maker_id, "clean", "beta", clean).await;
+    let (other_id, _) = app.user("Other", "US").await;
+    listed_with(&app, other_id, "ottos", "beta", &scanned).await;
+    let read = json!({ "name": "Reader", "scope": "read" });
+    let (agent, _) = maker_token(&app, &maker, read).await;
+    let one = json!({ "name": "One", "scope": "read", "apps": ["clean"] });
+    let (clean_only, _) = maker_token(&app, &maker, one).await;
+    let commit = "c".repeat(40);
+
+    // What a release at this commit would be told, in get_fixes' form, the musts first.
+    let (failed, text) = check_source(&app, &agent, "scanned", Some(&commit)).await;
+    assert!(!failed, "{text}");
+    let report = parsed(&text);
+    assert_eq!(report["status"], "must_fix", "{text}");
+    assert_eq!(report["commit_sha"], commit);
+    assert_eq!(fix_kinds(&report), ["purchases", "online_undeclared"]);
+    assert!(
+        report["fixes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["severity"] == "must" && f["instruction"].is_string())
+    );
+    let summary = report["summary"].as_str().unwrap();
+    assert!(
+        summary.contains("commit ccccccc") && summary.contains("2 things must be fixed"),
+        "{summary}"
+    );
+    assert!(report["dry_run"].as_str().unwrap().contains("dry run"));
+    assert!(report["not_checked"].as_str().unwrap().contains("secrets"));
+    // And that's all it did: no release, nothing on the app.
+    let stored: (i64, i64) = sqlx::query_as(
+        "select (select count(*) from releases), (select count(*) from release_packages)",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(stored, (0, 0));
+
+    // The store page now says it goes online: asked again, that fix is gone (what the page says
+    // is read each time, whatever is kept for the commit).
+    sqlx::query("update apps set online = '{own_servers}' where slug = 'scanned'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (failed, text) = check_source(&app, &agent, "scanned", Some(&commit)).await;
+    assert!(!failed, "{text}");
+    assert_eq!(fix_kinds(&parsed(&text)), ["purchases"]);
+
+    // The newest commit is only looked up on GitHub; a commit is its full ID.
+    let (failed, text) = check_source(&app, &agent, "scanned", None).await;
+    assert!(failed && text.contains("git rev-parse HEAD"), "{text}");
+    for bad in ["abc", &"C".repeat(40), "main"] {
+        let (failed, text) = check_source(&app, &agent, "scanned", Some(bad)).await;
+        assert!(failed && text.contains("invalid"), "{bad}: {text}");
+    }
+    let (failed, text) = check_source(&app, &agent, "clean", None).await;
+    assert!(!failed, "{text}");
+    let report = parsed(&text);
+    assert_eq!(
+        (report["status"].as_str(), report["commit_sha"].as_str()),
+        (Some("looks_good"), Some("b".repeat(40).as_str())),
+        "{text}"
+    );
+    assert_eq!(report["fixes"], json!([]));
+
+    // Only the maker's own apps, and only the token's.
+    let (failed, text) = check_source(&app, &agent, "ottos", Some(&commit)).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = check_source(&app, &clean_only, "scanned", Some(&commit)).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = check_source(&app, &clean_only, "clean", None).await;
+    assert!(!failed, "{text}");
+}
+
+/// Each new commit checked downloads the repository, so an account gets so many an hour; what
+/// was read a few minutes ago is answered without one.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn source_check_dry_runs_are_counted_per_account(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let scanned = format!("repo_url = '{}octo/scanned'", app.fake_base);
+    listed_with(&app, maker_id, "scanned", "beta", &scanned).await;
+    let read = json!({ "name": "Reader", "scope": "read" });
+    let (agent, _) = maker_token(&app, &maker, read).await;
+    let commit = |n: usize| format!("{n:040x}");
+    for n in 0..20 {
+        let (failed, text) = check_source(&app, &agent, "scanned", Some(&commit(n))).await;
+        assert!(!failed, "{n}: {text}");
+    }
+    let (failed, text) = check_source(&app, &agent, "scanned", Some(&commit(20))).await;
+    assert!(
+        failed && text.contains("rate_limited") && text.contains("source checks"),
+        "{text}"
+    );
+    let (failed, text) = check_source(&app, &agent, "scanned", Some(&commit(3))).await;
+    assert!(!failed, "{text}");
 }
 
 // ---------------------------------------------------------------------------------------------

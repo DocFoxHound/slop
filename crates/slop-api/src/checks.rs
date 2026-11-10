@@ -66,7 +66,8 @@ const MAX_CACHED: usize = 2_000;
 /// Where Slop Build's workflow lives (publishing.md, Option B), and the most of it that's read.
 const WORKFLOW_PATH: &str = ".github/workflows/slop.yml";
 const MAX_WORKFLOW_BYTES: u64 = 64 * 1024;
-const DRY_RUN: &str = "This was a dry run: nothing was saved, and nothing was sent for review.";
+pub(crate) const DRY_RUN: &str =
+    "This was a dry run: nothing was saved, and nothing was sent for review.";
 
 /// What the checks share between requests (AppState::checks).
 pub struct Shared {
@@ -77,6 +78,9 @@ pub struct Shared {
     github_resets: Mutex<Option<Instant>>,
     /// Reports by kind, repository and commit.
     cache: Mutex<HashMap<String, (Instant, Value)>>,
+    /// A maker's dry runs of the source check (fixes.rs) each download a repository: this many
+    /// at a time, the rest wait their turn.
+    pub(crate) scans: tokio::sync::Semaphore,
 }
 
 struct Bucket {
@@ -94,6 +98,7 @@ impl Shared {
             per_hour: github_per_hour,
             github_resets: Mutex::new(None),
             cache: Mutex::default(),
+            scans: tokio::sync::Semaphore::new(2),
         }
     }
 
@@ -121,13 +126,13 @@ impl Shared {
         }
     }
 
-    fn cached(&self, key: &str) -> Option<Value> {
+    pub(crate) fn cached(&self, key: &str) -> Option<Value> {
         let cache = self.cache.lock().ok()?;
         let (at, report) = cache.get(key)?;
         (at.elapsed() < CACHE_FOR).then(|| report.clone())
     }
 
-    fn keep(&self, key: String, report: &Value) {
+    pub(crate) fn keep(&self, key: String, report: &Value) {
         if let Ok(mut cache) = self.cache.lock() {
             if cache.len() >= MAX_CACHED {
                 cache.retain(|_, (at, _)| at.elapsed() < CACHE_FOR);

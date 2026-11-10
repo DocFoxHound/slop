@@ -2347,7 +2347,31 @@ async fn the_admin_mcp_endpoint_speaks_json_rpc_to_staff_only(db: PgPool) {
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert!(t["description"].as_str().unwrap().len() > 10);
+        // Each says whether it only looks, only adds, or may change or remove something.
+        let hints = &t["annotations"];
+        let expected = match t["name"].as_str().unwrap() {
+            "slop_status" | "review_queue" => (true, false),
+            "add_note" | "send_admin_message" => (false, false),
+            "approve_release" | "delete_shelf" | "moderate_user" => (false, true),
+            _ => continue,
+        };
+        assert_eq!(
+            (
+                hints["readOnlyHint"].as_bool().unwrap(),
+                hints["destructiveHint"].as_bool().unwrap()
+            ),
+            expected,
+            "{t}"
+        );
     }
+    // The admin server offers no ready-made prompts.
+    let none = mcp(
+        &app,
+        &token,
+        json!({ "jsonrpc": "2.0", "id": 9, "method": "prompts/list" }),
+    )
+    .await;
+    assert_eq!(none["error"]["code"], -32601);
     let res = app
         .send(with_token(
             req(Method::POST, "/v1/admin/mcp")

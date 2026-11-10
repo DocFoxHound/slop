@@ -10,21 +10,36 @@
 //! addresses. The Content Policy's rule on code from outside SLAPorSLOP covers neither browser
 //! games nor dedicated servers ("Browser games and dedicated servers"), so code loading is never a
 //! `must` for them (`AppType`).
+//!
+//! `GET /v1/apps/{slug}/source-check` is the same before there's a release (2026-11-10): a dry
+//! run of the source check at a commit the maker has pushed, answering with the fixes a release
+//! there would get. It stores nothing and sends nothing for review. Each run downloads the
+//! repository, so an account gets a number of them an hour (limits.rs), two run at a time, and
+//! the answer for a commit is kept a few minutes (checks.rs).
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     routing::get,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{AppState, auth::session::CurrentUser, catalog, error::ApiResult};
+use crate::{
+    AppState,
+    auth::session::CurrentUser,
+    catalog,
+    error::{ApiError, ApiResult},
+    limits::{self, Action},
+    source_scan,
+};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/apps/{slug}/fixes", get(fixes))
+    Router::new()
+        .route("/apps/{slug}/fixes", get(fixes))
+        .route("/apps/{slug}/source-check", get(source_check))
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -183,6 +198,175 @@ async fn fixes(
         } else {
             "Fix the `must` items, then the `should` items; commit and push; then submit a new release (Slop Build does it on push). SLAPorSLOP's checks run again on the new release."
         },
+    }))
+}
+
+#[derive(Deserialize)]
+struct SourceCheckQuery {
+    /// The commit to check, as a release names it. Left out: the newest on the default branch,
+    /// which SLAPorSLOP can only look up on GitHub.
+    commit_sha: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SourceCheck {
+    summary: String,
+    /// `must_fix` (a release at this commit wouldn't be approved as it is), `should_fix`,
+    /// `looks_good`, or `not_checked` (SLAPorSLOP couldn't read the source: `detail` says why).
+    status: &'static str,
+    commit_sha: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    /// As `fixes` gives them for a release, most important first.
+    fixes: Vec<Fix>,
+    /// What only a release gets.
+    not_checked: &'static str,
+    next: &'static str,
+    dry_run: &'static str,
+}
+
+const ONLY_ON_A_RELEASE: &str = "Only a release gets the rest: Slop Build's own checks (secrets, packages with known vulnerabilities), the scan of the release's files, and a person's review where one is due.";
+
+/// A dry run of the source check at a commit the maker has pushed.
+async fn source_check(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+    Query(q): Query<SourceCheckQuery>,
+) -> ApiResult<Json<SourceCheck>> {
+    let (app_id, _) = crate::updates::owned(&state, &slug, &user).await?;
+    let page = source_scan::StorePage::of(&state.db, app_id).await?;
+    let commit = match q.commit_sha.as_deref().map(str::trim) {
+        Some(sha) if !sha.is_empty() => {
+            crate::releases::validate_commit(sha)?;
+            sha.to_string()
+        }
+        _ => {
+            let Some(repo) = slop_provenance::github_repo_path(&page.repo_url) else {
+                return Err(ApiError::invalid(
+                    "commit_sha",
+                    "give the commit to check (git rev-parse HEAD prints it): SLAPorSLOP can only look up the newest one on GitHub",
+                ));
+            };
+            // It costs SLAPorSLOP a GitHub request, whatever is kept for the commit.
+            limits::check(&state, user.id, Action::Lookup)?;
+            crate::media::head_commit(&state, &repo).await.map_err(|p| {
+                ApiError::invalid(
+                    "commit_sha",
+                    format!(
+                        "give the commit to check (git rev-parse HEAD prints it): SLAPorSLOP couldn't look up the newest one ({})",
+                        p.0
+                    ),
+                )
+            })?
+        }
+    };
+    // What the scan itself reads from the store page is part of the key, so a change to it is
+    // checked afresh; what's flagged afterwards is read each time.
+    let key = format!(
+        "source:{app_id}:{commit}:{}:{}:{}",
+        page.public, page.declared, page.repo_url
+    );
+    let mut scan = match state.checks.cached(&key) {
+        Some(scan) => scan,
+        None => {
+            limits::check(&state, user.id, Action::SourceCheck)?;
+            let _turn = state.checks.scans.acquire().await;
+            let (scan, _) = source_scan::scan_release(
+                &state,
+                app_id,
+                &page.repo_url,
+                &commit,
+                &page.declared,
+                page.public,
+            )
+            .await;
+            // Only what was read: a commit that wasn't pushed yet is asked for again.
+            if scan["status"] == "checked" {
+                state.checks.keep(key, &scan);
+            }
+            scan
+        }
+    };
+    source_scan::flag_for_app(&state, app_id, &page, &mut scan).await?;
+    let app_type = AppType::of(&state.db, app_id).await?;
+    let mut fixes = from_checks(&scan, &Value::Null, app_type);
+    fixes.sort_by_key(|f| match f.severity {
+        "must" => 0,
+        "should" => 1,
+        _ => 2,
+    });
+    let count = |severity: &str| fixes.iter().filter(|f| f.severity == severity).count();
+    let things = |n: usize| {
+        if n == 1 {
+            "1 thing".to_string()
+        } else {
+            format!("{n} things")
+        }
+    };
+    let short = &commit[..7];
+    let checked = scan["status"] == "checked";
+    let detail = (!checked).then(|| {
+        scan["detail"]
+            .as_str()
+            .unwrap_or("the source couldn't be read")
+            .to_string()
+    });
+    let (status, summary) = match (checked, count("must"), count("should")) {
+        (false, ..) => (
+            "not_checked",
+            format!(
+                "SLAPorSLOP couldn't read the source at commit {short}: {}",
+                detail.as_deref().unwrap_or_default()
+            ),
+        ),
+        (true, 0, 0) => (
+            "looks_good",
+            format!("SLAPorSLOP's source check finds nothing to fix at commit {short}."),
+        ),
+        (true, 0, should) => (
+            "should_fix",
+            format!(
+                "Nothing at commit {short} would stop a release, but {} should be fixed.",
+                things(should)
+            ),
+        ),
+        (true, must, should) => (
+            "must_fix",
+            format!(
+                "A release at commit {short} wouldn't be approved as it is: {} must be fixed{}.",
+                things(must),
+                if should == 0 {
+                    String::new()
+                } else {
+                    format!(", and {} should be", things(should))
+                }
+            ),
+        ),
+    };
+    let in_browser = app_type == AppType::BrowserGame;
+    Ok(Json(SourceCheck {
+        summary,
+        status,
+        commit_sha: commit,
+        detail,
+        next: match (status, in_browser) {
+            ("not_checked", _) => {
+                "Check the commit is pushed and SLAPorSLOP can read the repository (check_repository), then check again."
+            }
+            ("looks_good", true) => {
+                "Give the play address when you're ready (submit_play_address): the same check runs on the release."
+            }
+            ("looks_good", false) => {
+                "Submit the release when you're ready (Slop Build does it on push): the same check runs on it."
+            }
+            _ => {
+                "Fix the `must` items, then the `should` items; commit and push; then check the new commit. Submit the release once it's clean."
+            }
+        },
+        fixes,
+        not_checked: ONLY_ON_A_RELEASE,
+        dry_run: crate::checks::DRY_RUN,
     }))
 }
 

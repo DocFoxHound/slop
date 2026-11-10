@@ -166,7 +166,7 @@ fn validate_version(v: &str) -> ApiResult<()> {
     Ok(())
 }
 
-fn validate_commit(sha: &str) -> ApiResult<()> {
+pub(crate) fn validate_commit(sha: &str) -> ApiResult<()> {
     if sha.len() != 40
         || !sha
             .bytes()
@@ -1316,20 +1316,29 @@ async fn release_progress(
     Ok(progress)
 }
 
+#[derive(Deserialize)]
+struct ListReleasesQuery {
+    /// How many, newest first: 1 to 50 (50 when left out). Each release comes with its checks,
+    /// so a maker's AI following its newest release asks for 1.
+    limit: Option<i64>,
+}
+
 /// Makers see every release with its status; everyone else sees approved releases.
 async fn list_releases(
     State(state): State<AppState>,
     MaybeUser(user): MaybeUser,
     headers: HeaderMap,
     Path(slug): Path<String>,
+    Query(q): Query<ListReleasesQuery>,
 ) -> ApiResult<Json<Vec<ReleaseInfo>>> {
     let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
     let (app_id, is_mine) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
     let ids: Vec<Uuid> = sqlx::query_scalar(
-        "select id from releases where app_id = $1 and ($2 or status = 'approved') order by created_at desc limit 50",
+        "select id from releases where app_id = $1 and ($2 or status = 'approved') order by created_at desc limit $3",
     )
     .bind(app_id)
     .bind(is_mine)
+    .bind(q.limit.unwrap_or(50).clamp(1, 50))
     .fetch_all(&state.db)
     .await?;
     // A browser game's address shows only where Play opens it: the one release Play opens now,
