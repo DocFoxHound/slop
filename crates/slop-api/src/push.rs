@@ -177,8 +177,8 @@ async fn unsubscribe(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Pushes each new notification to its user's phones and browsers. Returns how many pushes
-/// were sent.
+/// Pushes each new notification to its user's phones and browsers, except the kinds that show
+/// under the bell only (notify.rs `BELL_ONLY`). Returns how many pushes were sent.
 pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
     let Some(config) = &state.config.push else {
         return Ok(0);
@@ -188,10 +188,12 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
          where n.id in (select n2.id from notifications n2
                         where n2.pushed_at is null and n2.read_at is null
                           and n2.created_at > now() - interval '10 minutes'
+                          and not (n2.category = any($1))
                           and exists (select 1 from push_subscriptions s where s.user_id = n2.user_id)
                         limit 200)
          returning n.id, n.user_id",
     )
+    .bind(crate::notify::bell_only())
     .fetch_all(&state.db)
     .await?;
     let mut users: Vec<Uuid> = due.iter().map(|(_, u)| *u).collect();

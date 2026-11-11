@@ -2,15 +2,15 @@
 // The library (DESIGN §6), laid out like Steam's: a sidebar listing every app you have (installed,
 // plays in your browser, not installed, Private, Interested) with a search and a filter (by kind,
 // or by the store's categories), and the selected app on the right: a wide banner, one big button
-// (Play, Install, Update…), its activity (release notes and your bug reports) and what friends
-// thought of it. The address is
+// (Play, Install, Update…), its activity (release notes, its maker's news and your bug reports)
+// and what friends thought of it. The address is
 // /library/<app>. Installing happens in the SLAPorSLOP app; the website shows the same library and
 // offers the app. Games that play in the browser play from both.
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 
-import { api, type AppDetail, type BugReport, type Release } from "../api";
+import { api, type AppDetail, type BugReport, type NewsPost, type Release } from "../api";
 import { AppIcon, appIconProps } from "../components/AppIcon";
 import { Avatar } from "../components/Avatar";
 import { checkUpdates, LIBRARY_CHANGED, useLaunched, usePlayStopped } from "../components/AppUpdates";
@@ -19,8 +19,10 @@ import { DonateButton } from "../components/Donate";
 import { downloading, DownloadsStatus, useDownloads } from "../components/Downloads";
 import { GEAR_ICON, INFO_ICON, InstallControls, Popover } from "../components/InstallControls";
 import { GameMods } from "../components/ModControls";
+import { NewsBody, NewsSwitch } from "../components/News";
 import { DedicatedServers } from "../components/DedicatedServers";
 import { RatePrompt, RatingBadge } from "../components/RatingPanel";
+import { ReportButton } from "../components/Report";
 import { Reviews } from "../components/Reviews";
 import { isOn, useSandboxStatus } from "../components/Sandbox";
 import { ErrorState, ExternalLink, Loading, StageBadge } from "../components/ui";
@@ -368,6 +370,14 @@ function Details({
   );
   // Played just now (Play on a browser game): reporting bugs opens up.
   useLaunched(entry.slug, bugs.reload);
+  // Its maker's news (a Private app has none: it's never in the store).
+  const news = useLoad(
+    () => (entry.owner ? Promise.resolve(null) : api.news.list(entry.slug, { limit: 10 }).catch(() => null)),
+    [entry.slug],
+  );
+  // "Tell me about news from this app" on the person's Interested mark: what they switched here,
+  // else what the app's page says. (This panel is keyed by the app, so it starts again for each.)
+  const [newsOn, setNewsOn] = useState<boolean>();
   const sandbox = useLoad(() => (isDesktop ? desktop.sandboxStatus().catch(() => null) : Promise.resolve(null)), []);
   const [tab, setTab] = useState<Tab>("activity");
   const tabsId = useId();
@@ -415,6 +425,9 @@ function Details({
   const maker = d?.maker.display_name ?? entry.installed?.maker;
   const latest = releases.data?.find((r) => r.status === "approved");
   const waiting = entry.interested && !entry.installed && !entry.inLibrary && entry.app?.stage !== "released";
+  const newsSwitch = detail.data?.is_interested ? (
+    <NewsSwitch slug={entry.slug} on={newsOn ?? detail.data.interested_news ?? true} onChange={setNewsOn} />
+  ) : undefined;
   const info = <AppInfo entry={entry} detail={d} latest={latest} inBrowser={inBrowser} />;
   // Donate next to Play, as on the store page (not for Coming soon or Private).
   const donate = !isPrivate && !upcoming && !isServer && (
@@ -471,7 +484,7 @@ function Details({
           <p className="notice small">Released: add it to your library to {inBrowser ? "play it" : "install it"}.</p>
         )}
         {waiting ? (
-          <InterestedBar entry={entry} info={info} donate={donate} onRemoved={onInterestRemoved} />
+          <InterestedBar entry={entry} info={info} donate={donate} news={newsSwitch} onRemoved={onInterestRemoved} />
         ) : (
           <InstallControls
             key={entry.slug}
@@ -533,7 +546,18 @@ function Details({
         <div className="lib-panel" role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${current}`}>
           {current === "activity" && (
             <div className="lib-columns">
-              <Activity entry={entry} releases={releases.data ?? []} bugs={bugs.data?.reports ?? []} upcoming={upcoming} />
+              <Activity
+                entry={entry}
+                releases={releases.data ?? []}
+                bugs={bugs.data?.reports ?? []}
+                upcoming={upcoming}
+                news={news.data?.news ?? []}
+                moreNews={news.data?.more ?? false}
+                // Unknown until the app's details are in: no Report until then.
+                isMine={d ? d.is_mine : undefined}
+                // A released app marked before release: its switch lives here (the bar has none).
+                newsSwitch={waiting ? undefined : newsSwitch}
+              />
               <div className="lib-aside">
                 <div className="lib-box">
                   <h3 className="lib-col-h">About</h3>
@@ -581,11 +605,14 @@ function InterestedBar({
   entry,
   info,
   donate,
+  news,
   onRemoved,
 }: {
   entry: Entry;
   info: ReactNode;
   donate?: ReactNode;
+  /** The switch for its maker's news, on its own row under the bar. */
+  news?: ReactNode;
   onRemoved: () => void;
 }) {
   const [error, setError] = useState<string>();
@@ -620,6 +647,7 @@ function InterestedBar({
           {info}
         </div>
       </div>
+      {news && <div className="lib-news-switch">{news}</div>}
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -714,17 +742,28 @@ const BUG_STATUS: Record<BugReport["status"], string> = {
   duplicate: "DUPLICATE",
 };
 
-/** Release notes, newest first, with the player's own bug reports and what's being checked. */
+/** Release notes and the maker's news, newest first, with the player's own bug reports and what's being checked. */
 function Activity({
   entry,
   releases,
   bugs,
   upcoming,
+  news,
+  moreNews,
+  isMine,
+  newsSwitch,
 }: {
   entry: Entry;
   releases: Release[];
   bugs: BugReport[];
   upcoming: boolean;
+  /** The maker's newest posts (news.rs). */
+  news: NewsPost[];
+  /** It has older posts than these: they're on its page. */
+  moreNews: boolean;
+  /** The app is the person's own (no Report on its news); unknown while its details load. */
+  isMine?: boolean;
+  newsSwitch?: ReactNode;
 }) {
   type Item = { at: string; key: string; body: ReactNode };
   const items: Item[] = [
@@ -745,6 +784,23 @@ function Activity({
             ) : (
               <p className="muted small">No notes for this version.</p>
             )}
+          </>
+        ),
+      })),
+    ...news
+      .filter((n) => !n.hidden)
+      .map((n) => ({
+        at: n.created_at,
+        key: `n-${n.id}`,
+        body: (
+          <>
+            <div className="lib-act-title">
+              <span className="break">
+                News: <b>{n.headline}</b>
+              </span>
+            </div>
+            <NewsBody body={n.body} />
+            {isMine === false && <ReportButton kind="news" subject={n.id} label="this news post" />}
           </>
         ),
       })),
@@ -777,6 +833,7 @@ function Activity({
   return (
     <div className="lib-activity">
       <h3 className="lib-col-h">Activity</h3>
+      {newsSwitch}
       {pending && (
         <div className="lib-act-item">
           <div className="lib-act-title">
@@ -790,7 +847,9 @@ function Activity({
       )}
       {days.length === 0 && !pending && (
         <p className="muted small">
-          {upcoming ? "Nothing yet: we tell you when it reaches beta or is released." : "No release notes yet."}
+          {upcoming
+            ? "Nothing yet: we tell you when it reaches beta or is released, and its maker's news shows here."
+            : "No release notes or news yet."}
         </p>
       )}
       {days.map((d) => (
@@ -803,6 +862,11 @@ function Activity({
           ))}
         </div>
       ))}
+      {moreNews && (
+        <p className="small">
+          <Link to={`/app/${encodeURIComponent(entry.slug)}#news`}>Older news is on its page</Link>
+        </p>
+      )}
     </div>
   );
 }

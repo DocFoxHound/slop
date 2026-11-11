@@ -313,7 +313,8 @@ struct RemovalOrder {
     authority: String,
     /// The order's own reference and what it names.
     order: String,
-    /// app (its address), app_review (its ID), profile (the creative's handle), team (its address).
+    /// app (its address), app_review (its ID), news (a news post's ID), profile (the creative's
+    /// handle), team (its address).
     subject_kind: String,
     subject: String,
 }
@@ -349,6 +350,14 @@ async fn removal_order(
         .bind(subject)
         .fetch_optional(&state.db)
         .await?,
+        // Public text SLAPorSLOP itself puts in front of the app's followers (news.rs).
+        "news" => sqlx::query_as(
+            "select n.id, a.maker_id, 'News from ' || a.title || ': ' || n.headline, to_jsonb(n)
+             from app_news n join apps a on a.id = n.app_id where n.id::text = $1",
+        )
+        .bind(subject)
+        .fetch_optional(&state.db)
+        .await?,
         "profile" => sqlx::query_as(
             "select c.user_id, c.user_id, 'People profile: ' || c.name, to_jsonb(c) from creatives c where c.handle = lower($1)",
         )
@@ -361,7 +370,12 @@ async fn removal_order(
         .bind(subject)
         .fetch_optional(&state.db)
         .await?,
-        _ => return Err(ApiError::invalid("subject_kind", "app, app_review, profile or team")),
+        _ => {
+            return Err(ApiError::invalid(
+                "subject_kind",
+                "app, app_review, news, profile or team",
+            ));
+        }
     };
     let (subject_id, owner, label, snapshot) =
         found.ok_or_else(|| ApiError::invalid("subject", "nothing on SLAPorSLOP by that name"))?;
@@ -369,6 +383,7 @@ async fn removal_order(
         "app" => "delist_app",
         "app_review" => "hide_review",
         "profile" => "hide_profile",
+        "news" => "hide_news",
         _ => "hide_team",
     };
     let request_id = Uuid::now_v7();

@@ -369,6 +369,8 @@ pub struct Generated {
     pub donations: crate::sim_donations::DonationsGenerated,
     /// Written reviews with votes.
     pub reviews: u64,
+    /// News posts from makers (news.rs), about one app in five in the store. Nobody is told.
+    pub news: u64,
     /// Community branches (DESIGN §9).
     pub branches: usize,
     /// Private apps, each shared with a few players.
@@ -1173,6 +1175,29 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
             .execute(db)
             .await?;
     }
+    // Maker news: a post from the last 20 days on about one app in five whose page is in the store
+    // (after the private apps above, which can't post; on the frozen one, only from before its
+    // freeze). No notices: nobody is told.
+    let news = sqlx::query(
+        "insert into app_news (id, app_id, headline, body, created_at, updated_at)
+         select gen_random_uuid(), a.id,
+                (array['What is in the next release', 'Fixes for the crashes you reported',
+                       'Five new levels are in', 'Thank you for the bug reports'])[1 + abs(hashtext(a.slug)) % 4],
+                (array['The next release adds saving in every area and a quieter menu. It is being checked now.',
+                       'Both crashes from last week are fixed, and loading is faster. Controller support is next.',
+                       'Five new levels and a harder mode. Old saves keep working.',
+                       'We read every report. The next release fixes the most reported ones first.'])[1 + abs(hashtext(a.slug)) % 4],
+                t.at, t.at
+         from apps a join sim_apps sa on sa.app_id = a.id
+         cross join lateral (select $1 - (1 + abs(hashtext(a.slug || 'at')) % 20) * interval '1 day' as at) t
+         where a.status = 'listed' and a.visibility = 'public' and a.branch_kind is distinct from 'server'
+           and (a.frozen_at is null or t.at < a.frozen_at)
+           and abs(hashtext(a.slug || 'news')) % 5 = 0",
+    )
+    .bind(now)
+    .execute(db)
+    .await?
+    .rows_affected();
     let teams = sim_teams(db, now).await?;
     // Friends: each player has a handful, and a few requests wait for an answer. Chats themselves
     // can't be simulated: they're encrypted on real devices (chat.rs).
@@ -1216,6 +1241,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         interests,
         donations,
         reviews,
+        news,
         branches,
         private_apps: private_apps.len(),
         teams,

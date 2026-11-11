@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // What the browser tests can't reach on the shared test server: a queue with nothing in it, a
-// report past its due date, a report about a bounty, and the inbox's quick decisions with every
-// request caught.
+// report past its due date, a report about a bounty or a news post, an appeal's hidden text, and
+// the inbox's quick decisions with every request caught.
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -115,6 +115,68 @@ describe("the admin panel", () => {
     const what = screen.getByRole("combobox", { name: "What to do" }) as HTMLSelectElement;
     expect([...what.options].map((o) => o.text)).toEqual(["Hide the bounty", "Warn them (no restriction)", "Suspend their account"]);
     expect(screen.getByRole("button", { name: "Hide the bounty" })).toBeTruthy();
+  });
+
+  it("offers to hide a reported news post", async () => {
+    vi.spyOn(api.admin, "queue").mockResolvedValue({
+      ...empty,
+      reports: [
+        report({
+          subject_kind: "news",
+          subject_label: "News from Pong: Vote Slaps for a prize",
+          quoted: "Vote Slaps for a prize\n\nEveryone who votes gets a key.",
+          actions: ["hide_news", "warn", "suspend_account"],
+        }),
+      ],
+    });
+    show("/admin?tab=queue&box=reports&item=r1");
+    expect(await screen.findByText("The post")).toBeTruthy();
+    expect(screen.getByText(/Everyone who votes gets a key\./)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Decide" }));
+    const what = screen.getByRole("combobox", { name: "What to do" }) as HTMLSelectElement;
+    expect([...what.options].map((o) => o.text)).toEqual(["Hide the news post", "Warn them (no restriction)", "Suspend their account"]);
+    expect(screen.getByRole("button", { name: "Hide the news post" })).toBeTruthy();
+  });
+
+  it("an appeal against hiding a news post shows what was hidden", async () => {
+    const appeal = {
+      id: "d1",
+      reference: "D-AAAA-BBBB",
+      subject_kind: "news",
+      subject_label: "News from Pong: Vote Slaps for a prize",
+      action: "hide_news",
+      action_label: "News post hidden",
+      rule: "misleading",
+      rule_title: "Misleading pages",
+      law: null,
+      facts: "It offers a key for votes.",
+      automated: false,
+      created_at: "2026-11-01T00:00:00Z",
+      appeal: "It was a joke.",
+      appealed_at: "2026-11-02T00:00:00Z",
+      appeal_status: "pending",
+      appeal_reason: null,
+      appeal_decided_at: null,
+      reversed_at: null,
+      can_appeal: false,
+      appeal_until: "2026-12-01T00:00:00Z",
+      decided_by: "Ada Admin",
+      counter_notice: null,
+      account: { id: "u1", name: "Bo Builder", closed: false, suspended: false, decisions: 1, copyright_strikes: 0 },
+      link: "/app/pong#news-n1",
+      quoted: "Vote Slaps for a prize\n\nEveryone who votes gets a key.",
+    };
+    vi.spyOn(api.admin, "queue").mockResolvedValue({ ...empty, appeals: [appeal] } as unknown as AdminQueue);
+    show("/admin?tab=queue&box=appeals&item=d1");
+    const label = await screen.findByText("What was hidden");
+    expect(label.nextElementSibling?.textContent).toBe("Vote Slaps for a prize\n\nEveryone who votes gets a key.");
+    cleanup();
+
+    // Other decisions have nothing quoted.
+    vi.spyOn(api.admin, "queue").mockResolvedValue({ ...empty, appeals: [{ ...appeal, quoted: null }] } as unknown as AdminQueue);
+    show("/admin?tab=queue&box=appeals&item=d1");
+    await screen.findByText("It was a joke.");
+    expect(screen.queryByText("What was hidden")).toBeNull();
   });
 
   it("denies only after Are you sure?, with the reason the maker reads; cancelling keeps it", async () => {

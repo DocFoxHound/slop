@@ -1687,6 +1687,8 @@ async fn agents_see_only_maker_notifications(db: PgPool) {
         ("chat", "New message from Sam"),
         ("friends", "Sam wants to be friends"),
         ("security", "A new sign-in from Firefox"),
+        // News about an app the person is Interested in isn't maker work.
+        ("news", "Game: news from its maker"),
     ] {
         sqlx::query(
             "insert into notifications (id, user_id, category, title, link) values ($1, $2, $3, $4, '/')",
@@ -1717,6 +1719,14 @@ async fn agents_see_only_maker_notifications(db: PgPool) {
         t
     };
 
+    // The person's bell has every kind; asked without `bell`, news is left out.
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/notifications?bell=true").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(titles(&mine).len(), 6);
+    assert_eq!(mine["unread"], 6);
     let mine = body_json(
         app.send(req(Method::GET, "/v1/me/notifications").cookie(&maker))
             .await,
@@ -1730,14 +1740,25 @@ async fn agents_see_only_maker_notifications(db: PgPool) {
         (&people, vec!["A new job request", "Release 1.0.0 approved"]),
         (&plain, vec!["Release 1.0.0 approved"]),
     ] {
-        let inbox = body_json(
-            app.send(
-                req(Method::GET, "/v1/me/notifications").header("authorization", auth.clone()),
+        for query in ["", "?bell=true", "?bell=true&category=news"] {
+            let inbox = body_json(
+                app.send(
+                    req(Method::GET, format!("/v1/me/notifications{query}"))
+                        .header("authorization", auth.clone()),
+                )
+                .await,
             )
-            .await,
-        )
-        .await;
-        assert_eq!(titles(&inbox), want);
+            .await;
+            // Even asking for news by name, with `bell`, gives none and doesn't count it.
+            let listed: Vec<&str> = if query.contains("news") {
+                vec![]
+            } else {
+                want.clone()
+            };
+            assert_eq!(titles(&inbox), listed, "{query}");
+            assert_eq!(inbox["unread"], want.len(), "{query}: {inbox}");
+            assert!(inbox["counts"].get("news").is_none(), "{query}: {inbox}");
+        }
         let (failed, text) = maker_tool(&app, auth, "whats_new", json!({})).await;
         assert!(!failed, "{text}");
         let inbox = parsed(&text);
@@ -1752,7 +1773,7 @@ async fn agents_see_only_maker_notifications(db: PgPool) {
         assert_eq!(me["unread_notifications"], want.len(), "{me}");
     }
     let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&maker)).await).await;
-    assert_eq!(me["unread_notifications"], 5);
+    assert_eq!(me["unread_notifications"], 6, "the bell counts news");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2452,7 +2473,13 @@ async fn the_maker_mcp_endpoint_speaks_json_rpc_within_the_tokens_limits(db: PgP
             a["destructiveHint"].as_bool().unwrap(),
         )
     };
-    for name in ["maker_guide", "list_releases", "find_people", "whats_new"] {
+    for name in [
+        "maker_guide",
+        "list_releases",
+        "find_people",
+        "whats_new",
+        "list_news",
+    ] {
         assert_eq!(hints(name), (true, false), "{name}");
     }
     for name in ["submit_release", "create_store_page", "send_job_message"] {
@@ -2465,6 +2492,10 @@ async fn the_maker_mcp_endpoint_speaks_json_rpc_within_the_tokens_limits(db: PgP
         "end_browser_demo",
         // Only adds, but a quote binds the person once it's accepted: ask first.
         "send_quote",
+        // News tells people and can't be unsent.
+        "post_news",
+        "edit_news",
+        "remove_news",
     ] {
         assert_eq!(hints(name), (false, true), "{name}");
     }
@@ -2725,6 +2756,79 @@ async fn agents_read_and_answer_reviews_and_bug_reports(db: PgPool) {
     let feedback = parsed(&text);
     assert_eq!(feedback[0]["version"], "1.0.0");
     assert_eq!(feedback[0]["bug_reports"], 1);
+}
+
+/// News for the maker's own apps: any token reads it with the posting state; posting, editing and
+/// removing need a publish token for that app, and the audit log says an agent did it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_post_news_only_with_a_publish_token(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "coming_soon", "").await;
+    listed_with(&app, maker_id, "castle", "coming_soon", "").await;
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (publish, _) =
+        maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let (castle_only, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Castle only", "scope": "publish", "apps": ["castle"] }),
+    )
+    .await;
+
+    let (failed, text) = maker_tool(&app, &read, "list_news", json!({ "slug": "tower" })).await;
+    assert!(!failed, "{text}");
+    let page = parsed(&text);
+    assert_eq!(page["news"], json!([]));
+    assert_eq!(page["posting"]["allowed"], true, "{page}");
+
+    let news = |headline: &str| json!({ "slug": "tower", "headline": headline, "body": "Saves work in every area now." });
+    let (failed, text) = maker_tool(&app, &read, "post_news", news("Beta on Friday")).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(&app, &castle_only, "post_news", news("Beta on Friday")).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = maker_tool(&app, &publish, "post_news", news(&"h".repeat(101))).await;
+    assert!(failed && text.contains("invalid"), "{text}");
+    let (failed, text) = maker_tool(&app, &publish, "post_news", news("Beta on Friday")).await;
+    assert!(!failed, "{text}");
+    let id = parsed(&text)["id"].as_str().unwrap().to_string();
+
+    let mut edit = news("Beta on Saturday");
+    edit["id"] = json!(id);
+    let (failed, text) = maker_tool(&app, &read, "edit_news", edit.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(&app, &publish, "edit_news", edit).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["headline"], "Beta on Saturday");
+    let (_, text) = maker_tool(&app, &read, "list_news", json!({ "slug": "tower" })).await;
+    let page = parsed(&text);
+    assert_eq!(page["news"][0]["headline"], "Beta on Saturday");
+    assert_eq!(page["posting"]["why_not"], "wait", "one a day");
+
+    let which = json!({ "slug": "tower", "id": id });
+    let (failed, text) = maker_tool(&app, &read, "remove_news", which.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(&app, &publish, "remove_news", which.clone()).await;
+    assert!(!failed, "{text}");
+    let (failed, text) = maker_tool(&app, &publish, "remove_news", which).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/news")).await).await;
+    assert_eq!(page["news"], json!([]));
+
+    let audited: Vec<(String, Value)> = sqlx::query_as(
+        "select action, detail -> 'by_agent' from audit_log where action like 'news.%' order by id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        audited,
+        [
+            ("news.post".to_string(), json!(true)),
+            ("news.edit".to_string(), json!(true)),
+            ("news.remove".to_string(), json!(true)),
+        ]
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -2,12 +2,13 @@
 //! Reports, moderation decisions and appeals (DESIGN §16; LEGAL-GUIDANCE CON-3, CON-5, CON-8,
 //! CON-9, CON-16).
 //!
-//! - **Reports:** anyone can report an app, a People profile, a review, or (as one of its two
-//!   sides) a job message. Each gets a reference number as the acknowledgement. Urgent and serious
-//!   reasons are due within 24 hours; the rest within 7 days. Signed-out reporters give a name and
-//!   email (optional for child abuse). Copyright reports collect what a DMCA notice must contain.
-//! - **Decisions:** every restriction (taking an app out of the store, hiding a review or
-//!   profile, a warning, suspending an account) is a decision with a statement of reasons: the
+//! - **Reports:** anyone can report an app, a People profile, a review, a maker's news post, or
+//!   (as one of its two sides) a job message. Each gets a reference number as the
+//!   acknowledgement. Urgent and serious reasons are due within 24 hours; the rest within 7 days.
+//!   Signed-out reporters give a name and email (optional for child abuse). Copyright reports
+//!   collect what a DMCA notice must contain.
+//! - **Decisions:** every restriction (taking an app out of the store, hiding a review, profile
+//!   or news post, a warning, suspending an account) is a decision with a statement of reasons: the
 //!   facts, the rule (a Content Policy section), the law where it's the law, whether automation
 //!   was used, and how to appeal. The affected user sees it on their account page. Reporters see
 //!   the outcome of their reports.
@@ -65,6 +66,7 @@ const ALL: &[&str] = &[
     "team",
     "chat_message",
     "bounty",
+    "news",
 ];
 
 pub const REASONS: &[Reason] = &[
@@ -86,6 +88,7 @@ pub const REASONS: &[Reason] = &[
             "message",
             "chat_message",
             "bounty",
+            "news",
         ],
         priority: 0,
         rule: Some("threat"),
@@ -142,7 +145,7 @@ pub const REASONS: &[Reason] = &[
     Reason {
         code: "copyright",
         label: "Copyright or trademark infringement",
-        kinds: &["app", "review", "app_review", "profile", "team"],
+        kinds: &["app", "review", "app_review", "profile", "team", "news"],
         priority: 1,
         rule: Some("copyright"),
     },
@@ -157,6 +160,7 @@ pub const REASONS: &[Reason] = &[
             "message",
             "chat_message",
             "bounty",
+            "news",
         ],
         priority: 2,
         rule: Some("harassment"),
@@ -172,6 +176,7 @@ pub const REASONS: &[Reason] = &[
             "message",
             "chat_message",
             "bounty",
+            "news",
         ],
         priority: 2,
         rule: Some("private_info"),
@@ -193,7 +198,9 @@ pub const REASONS: &[Reason] = &[
     Reason {
         code: "misleading",
         label: "A misleading page",
-        kinds: &["app", "profile", "team"],
+        // A news post that offers something for votes or reviews is reported here or as spam:
+        // `fake_review` isn't offered for news.
+        kinds: &["app", "profile", "team", "news"],
         priority: 2,
         rule: Some("misleading"),
     },
@@ -215,6 +222,7 @@ pub const REASONS: &[Reason] = &[
             "team",
             "message",
             "chat_message",
+            "news",
         ],
         priority: 2,
         rule: Some("spam"),
@@ -320,6 +328,7 @@ pub fn action_label(action: &str) -> &'static str {
         "hide_team" => "Team hidden",
         "remove_reply" => "Reply removed",
         "hide_bounty" => "Bounty hidden",
+        "hide_news" => "News post hidden",
         "suspend_account" => "Account suspended",
         "warn" => "Warning",
         _ => "Decision",
@@ -336,6 +345,7 @@ fn actions_for(kind: &str) -> &'static [&'static str] {
         "profile" => &["hide_profile", "warn", "suspend_account"],
         "team" => &["hide_team", "warn", "suspend_account"],
         "bounty" => &["hide_bounty", "warn", "suspend_account"],
+        "news" => &["hide_news", "warn", "suspend_account"],
         _ => &["warn", "suspend_account"],
     }
 }
@@ -576,6 +586,28 @@ async fn find_subject(
                 quoted: None,
             })
         }
+        "news" => {
+            // A maker's news post, for someone who can see its app's page (news.rs). It's quoted
+            // as it was, since its maker can edit it afterwards.
+            let id: Uuid = subject.parse().map_err(|_| ApiError::NotFound)?;
+            let row: Option<(String, Uuid, String, String, String)> = sqlx::query_as(
+                "select a.slug, a.maker_id, a.title, n.headline, n.body
+                 from app_news n join apps a on a.id = n.app_id
+                 where n.id = $1 and n.hidden_at is null",
+            )
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+            let (slug, maker, title, headline, body) = row.ok_or(ApiError::NotFound)?;
+            let policy = ViewerPolicy::resolve(&state.db, &state.config, user, headers).await?;
+            catalog::visible_app(state, &slug, user, policy).await?;
+            Ok(Subject {
+                id,
+                user_id: Some(maker),
+                label: format!("News from {title}: {headline}"),
+                quoted: Some(format!("{headline}\n\n{body}")),
+            })
+        }
         "app_review" => {
             let id: Uuid = subject.parse().map_err(|_| ApiError::NotFound)?;
             let row: Option<(Uuid, String, String)> = sqlx::query_as(
@@ -662,7 +694,7 @@ async fn find_subject(
         }
         _ => Err(ApiError::invalid(
             "kind",
-            "app, review, app_review, profile, message, chat_message or bounty",
+            "app, review, app_review, profile, message, chat_message, bounty or news",
         )),
     }
 }
@@ -980,7 +1012,7 @@ pub(crate) async fn decide(
         d.subject_id,
         d.user_id,
         d.rule,
-        false,
+        None,
     )
     .await?;
     Ok(Decided {
@@ -1001,7 +1033,8 @@ struct Applied {
 /// A bounty put back on appeal runs for the time it had left, but at least this long.
 const RESTORED_BOUNTY_RUNS: Duration = Duration::days(7);
 
-/// Puts a decision into effect, or undoes it when an appeal reverses it.
+/// Puts a decision into effect, or undoes it when an appeal reverses it (`reversing` is then the
+/// decision being reversed, which isn't marked reversed yet).
 async fn apply(
     tx: &mut sqlx::PgConnection,
     action: &str,
@@ -1009,8 +1042,9 @@ async fn apply(
     subject_id: Uuid,
     user_id: Uuid,
     rule: &str,
-    undo: bool,
+    reversing: Option<Uuid>,
 ) -> anyhow::Result<Applied> {
+    let undo = reversing.is_some();
     let why = rule_title(rule);
     let mut out = Applied::default();
     match (action, kind) {
@@ -1062,6 +1096,8 @@ async fn apply(
                 n == 1,
                 "the app isn't in the store, so there's nothing to take out"
             );
+            // Its news leaves people's bells with it (a removal order comes this way too).
+            crate::notify::news_gone_for_app(&mut *tx, subject_id).await?;
         }
         ("hide_review", "review") => {
             sqlx::query(
@@ -1096,6 +1132,47 @@ async fn apply(
             .bind(why)
             .execute(&mut *tx)
             .await?;
+        }
+        ("hide_news", "news") if undo => {
+            // Back on the page only when no other standing decision hides it too (a removal order
+            // can name a post a report already hid). Otherwise it stays hidden under the newest of
+            // those, kept for that one's appeal (news.rs cleanup counts from `hidden_at`). Either
+            // way nobody is told again. The post's row is locked first, so a second reversal at
+            // the same moment waits and then sees this one.
+            sqlx::query("select 1 from app_news where id = $1 for update")
+                .bind(subject_id)
+                .execute(&mut *tx)
+                .await?;
+            let other: Option<(String, OffsetDateTime)> = sqlx::query_as(
+                "select rule, created_at from moderation_decisions
+                 where subject_kind = 'news' and subject_id = $1 and action = 'hide_news'
+                   and reversed_at is null and id <> $2
+                 order by created_at desc limit 1",
+            )
+            .bind(subject_id)
+            .bind(reversing)
+            .fetch_optional(&mut *tx)
+            .await?;
+            sqlx::query("update app_news set hidden_at = $2, hidden_reason = $3 where id = $1")
+                .bind(subject_id)
+                .bind(other.as_ref().map(|(_, at)| *at))
+                .bind(other.as_ref().map(|(rule, _)| rule_title(rule)))
+                .execute(&mut *tx)
+                .await?;
+        }
+        ("hide_news", "news") => {
+            // The post's row first, then its notices, in the order the maker's edit and remove
+            // take them (news.rs), so the two never wait on each other in a circle. Hidden, it
+            // leaves the page and people's bells, and stays in the maker's list for the appeal.
+            // Each decision starts the 213 days again: it can be appealed for six months of its
+            // own. A post its maker removed before the decision changes nothing here; the
+            // decision is still recorded.
+            sqlx::query("update app_news set hidden_at = now(), hidden_reason = $2 where id = $1")
+                .bind(subject_id)
+                .bind(why)
+                .execute(&mut *tx)
+                .await?;
+            crate::notify::news_withdrawn(&mut *tx, subject_id).await?;
         }
         ("hide_bounty", "bounty") if undo => {
             // Back as it was, for the time it had left (at least a week). A delivery withdrawn
@@ -1505,6 +1582,14 @@ async fn link(db: &sqlx::PgPool, kind: &str, id: Uuid) -> sqlx::Result<Option<St
         .fetch_optional(db)
         .await?
         .map(|s| format!("/app/{s}#review-{id}")),
+        // Once hidden the page no longer shows the post: `quoted` is what staff read.
+        "news" => sqlx::query_scalar::<_, String>(
+            "select a.slug from app_news n join apps a on a.id = n.app_id where n.id = $1",
+        )
+        .bind(id)
+        .fetch_optional(db)
+        .await?
+        .map(|s| format!("/app/{s}#news-{id}")),
         "bounty" => Some(format!("/bounties/{id}")),
         "review" => sqlx::query_scalar::<_, String>(
             "select c.handle from creative_reviews r join creatives c on c.user_id = r.creative_id
@@ -1583,6 +1668,9 @@ pub struct QueuedAppeal {
     counter_notice: Option<serde_json::Value>,
     account: Account,
     link: Option<String>,
+    /// What was hidden, read from the hidden row itself (the page no longer shows it): a news
+    /// post's headline and text. None for every other action, and once the row is gone.
+    quoted: Option<String>,
 }
 
 /// Appeals waiting for a person, oldest first.
@@ -1605,7 +1693,17 @@ pub async fn queued_appeals(db: &sqlx::PgPool) -> ApiResult<Vec<QueuedAppeal>> {
     let mut out = Vec::with_capacity(rows.len());
     for mut r in rows {
         finish(&mut r.decision);
+        // Its maker can't remove a hidden post, so it's still there while the appeal is open.
+        let quoted = if r.decision.action == "hide_news" {
+            sqlx::query_scalar("select headline || E'\\n\\n' || body from app_news where id = $1")
+                .bind(r.subject_id)
+                .fetch_optional(db)
+                .await?
+        } else {
+            None
+        };
         out.push(QueuedAppeal {
+            quoted,
             link: link(db, &r.decision.subject_kind, r.subject_id).await?,
             account: account(db, r.user_id).await?,
             decided_by: r.decided_by,
@@ -1923,9 +2021,17 @@ async fn decide_appeal(
     let (action, kind, subject_id, user_id, rule, label) =
         row.ok_or_else(|| ApiError::Conflict("that appeal isn't pending".into()))?;
     let applied = if b.reverse {
-        apply(&mut tx, &action, &kind, subject_id, user_id, &rule, true)
-            .await
-            .map_err(refused)?
+        apply(
+            &mut tx,
+            &action,
+            &kind,
+            subject_id,
+            user_id,
+            &rule,
+            Some(id),
+        )
+        .await
+        .map_err(refused)?
     } else {
         Applied::default()
     };

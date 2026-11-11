@@ -120,7 +120,8 @@ test("the kinds down the side with what's unread in each, and the notifications 
   await expect(nav.getByRole("link", { name: "Moderation 1 unread" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Security", exact: true })).toBeVisible();
   // Every kind is there, with its friendly name.
-  await expect(nav.getByRole("listitem")).toHaveCount(13);
+  await expect(nav.getByRole("listitem")).toHaveCount(14);
+  await expect(nav.getByRole("link", { name: "News", exact: true })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Terms and policies", exact: true })).toHaveAttribute("href", "/notifications/policies");
   await expect(page.getByRole("heading", { name: "All notifications", level: 2 })).toBeVisible();
 
@@ -195,6 +196,13 @@ test("each kind says what shows up there when it's empty", async ({ page }) => {
   await expect(page.getByText("Nothing here yet.")).toBeVisible();
   await expect(page.getByText("Team invitations, game nights and verification show up here.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Mark all as read" })).toHaveCount(0);
+  await expect(page.locator(".nbox-settings")).toHaveText("Choose which of these are also emailed to you on your account page.");
+  // News is never emailed: its page says so, with no switch to look for (notify.rs BELL_ONLY).
+  await page.goto("/notifications/news");
+  await expect(page.getByText("News from the makers of apps you're Interested in shows up here.", { exact: false })).toBeVisible();
+  await expect(page.locator(".nbox-settings")).toHaveText("News is never emailed.");
+  await page.goto("/notifications");
+  await expect(page.locator(".nbox-settings")).toHaveText("Choose which of these, other than news, are also emailed to you on your account page.");
   await page.goto("/notifications/security?unread=1");
   await expect(page.getByText("Nothing unread in Security.")).toBeVisible();
   await page.getByRole("switch", { name: "Unread only" }).uncheck();

@@ -11,9 +11,9 @@
 //!   (ignoring case, spacing, punctuation and look-alike characters such as 0/o, 1/l).
 //! - **Rate limits:** accounts that keep hitting the per-account limits (limits.rs).
 //! - **Malicious dependencies:** a release using a package OSV lists as malware (dep_watch.rs).
-//! - **Known-bad links:** a store page, creative profile or review linking to an address a public
-//!   malware or phishing list names (bad_links.rs): new and changed ones every hour, everything
-//!   after the lists are refreshed (daily). A browser game's play addresses (the one Play opens,
+//! - **Known-bad links:** a store page, maker's news post, creative profile or review linking to an
+//!   address a public malware or phishing list names (bad_links.rs): new and changed ones every
+//!   hour, everything after the lists are refreshed (daily). A browser game's play addresses (the one Play opens,
 //!   ones waiting for review, and where each was found to lead) are matched every hour.
 
 use axum::{
@@ -285,7 +285,11 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
          where $1 or updated_at > now() - interval '25 hours'
          union all
          select 'account', r.user_id, u.display_name, r.body from app_reviews r join users u on u.id = r.user_id
-         where r.hidden_at is null and ($1 or r.updated_at > now() - interval '25 hours')",
+         where r.hidden_at is null and ($1 or r.updated_at > now() - interval '25 hours')
+         union all
+         select 'app', a.id, a.title || ': news “' || n.headline || '”', concat_ws(' ', n.headline, n.body)
+         from app_news n join apps a on a.id = n.app_id
+         where n.hidden_at is null and ($1 or n.updated_at > now() - interval '25 hours')",
     )
     .bind(refreshed)
     .fetch_all(db)

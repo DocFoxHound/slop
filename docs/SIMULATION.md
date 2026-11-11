@@ -29,6 +29,9 @@ unweighted, over time) and **player counts** against a truth we know. The code i
   (players, first plays and library adds per app and day) are written from the same simulated
   days; private apps get none.
 
+- **Maker news:** about one app in five in the store has a news post from its maker, from the
+  last 20 days. Nobody is told: the fill writes no notices.
+
 - **Reports and moderation** (`sim_moderation.rs`): every simulated user has accepted the
   agreements in effect. About 30 apps, reviews and People profiles get one to three reports with
   realistic reasons, spread over 9 days: recent ones are open (a few overdue), older ones were

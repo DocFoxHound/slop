@@ -445,6 +445,32 @@ export interface AppReview {
   reply_outdated: boolean;
 }
 
+/** A maker's news post on their app's store page (crates/slop-api/src/news.rs). */
+export interface NewsPost {
+  id: string;
+  /** Plain text on one line; also what the bell shows. */
+  headline: string;
+  /** Markdown, shown only through markdown.ts renderChat. */
+  body: string;
+  created_at: string;
+  /** Changed more than a minute after it was posted. */
+  edited: boolean;
+  /** Only ever true for the app's maker: removed by a moderation decision. */
+  hidden: boolean;
+  /** The rule it was hidden under, with `hidden` only. */
+  hidden_reason?: string;
+  /** With `hidden` only: whether a decision that hides it can still be appealed. */
+  can_appeal?: boolean;
+}
+
+export interface NewsPage {
+  news: NewsPost[];
+  /** Whether there are older ones (ask again with `before` = the last one's ID). */
+  more: boolean;
+  /** Only for the app's maker: whether a new post is allowed now, and if not, why. */
+  posting?: { allowed: boolean; why_not: "not_in_store" | "wait" | null; next_post_at: string | null };
+}
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -519,6 +545,7 @@ export interface Notification {
   category:
     | "jobs"
     | "interested"
+    | "news"
     | "moderation"
     | "donations"
     | "shared"
@@ -704,6 +731,8 @@ export interface AppDetail extends AppSummary {
   /** The folder it reads mods from, when its maker named one (DESIGN §9). */
   mods_folder: ModsFolder | null;
   is_interested: boolean;
+  /** Marked Interested and wants the maker's news under the bell. */
+  interested_news: boolean;
   /** For a community branch: what it branches from. */
   branch: {
     parent_slug: string;
@@ -860,7 +889,8 @@ export type ReportKind =
   | "app_review"
   | "team"
   | "chat_message"
-  | "bounty";
+  | "bounty"
+  | "news";
 
 export interface ReportReason {
   code: string;
@@ -914,6 +944,7 @@ export interface ModerationDecision {
     | "hide_profile"
     | "hide_team"
     | "hide_bounty"
+    | "hide_news"
     | "suspend_account"
     | "warn";
   action_label: string;
@@ -980,6 +1011,8 @@ export type QueuedAppeal = ModerationDecision & {
   counter_notice: CounterNotice | null;
   account: ModeratedAccount;
   link: string | null;
+  /** What was hidden, read from the hidden row (a news post's headline and text); null otherwise. */
+  quoted: string | null;
 };
 
 /** % Slaps at one point (crates/slop-api/src/votes.rs). */
@@ -3212,7 +3245,7 @@ export const api = {
       country: string;
       authority: string;
       order: string;
-      subject_kind: "app" | "app_review" | "profile" | "team";
+      subject_kind: "app" | "app_review" | "news" | "profile" | "team";
       subject: string;
     }) => request<{ reference: string; minutes: number; label: string }>("POST", "/v1/admin/removal-orders", o),
     answerLegalRequest: (id: string, a: { status: string; response: string; user_notice: string }) =>
@@ -3750,6 +3783,20 @@ export const api = {
     remove: (slug: string) =>
       request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/review`),
   },
+  /** The maker's news on an app's store page (crates/slop-api/src/news.rs): newest first. */
+  news: {
+    list: (slug: string, o: { before?: string; limit?: number } = {}) =>
+      request<NewsPage>(
+        "GET",
+        `/v1/apps/${encodeURIComponent(slug)}/news${query({ before: o.before, limit: o.limit })}`,
+      ),
+    post: (slug: string, post: { headline: string; body: string }) =>
+      request<NewsPost>("POST", `/v1/apps/${encodeURIComponent(slug)}/news`, post),
+    edit: (slug: string, id: string, post: { headline: string; body: string }) =>
+      request<NewsPost>("PUT", `/v1/apps/${encodeURIComponent(slug)}/news/${encodeURIComponent(id)}`, post),
+    remove: (slug: string, id: string) =>
+      request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/news/${encodeURIComponent(id)}`),
+  },
   private: {
     mine: () =>
       request<{
@@ -4096,6 +4143,9 @@ export const api = {
       request<void>("PUT", `/v1/me/interested/${encodeURIComponent(slug)}`),
     remove: (slug: string) =>
       request<void>("DELETE", `/v1/me/interested/${encodeURIComponent(slug)}`),
+    /** "Tell me about news from this app", on the person's own mark (also once it's released). */
+    setNews: (slug: string, on: boolean) =>
+      request<void>("PUT", `/v1/me/interested/${encodeURIComponent(slug)}/news`, { on }),
     /** Upcoming apps for this viewer, each with why; the most anticipated when not personal. */
     forYou: () =>
       request<Array<AppSummary & { reason: string }>>(
@@ -4116,6 +4166,9 @@ export const api = {
       request<NotificationInbox>(
         "GET",
         `/v1/me/notifications${query({
+          // The bell's own kinds too (notify.rs BELL_ONLY): without this the API leaves them out,
+          // so the service worker (public/sw.js), which asks without it, never gets one.
+          bell: "true",
           category: filter.category,
           unread: filter.unread ? "true" : undefined,
           before: filter.before,

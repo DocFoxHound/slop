@@ -1054,6 +1054,7 @@ const ACTION_LABEL: Record<ModerationDecision["action"], string> = {
   hide_profile: "Hide the profile",
   hide_team: "Hide the team",
   hide_bounty: "Hide the bounty",
+  hide_news: "Hide the news post",
   warn: "Warn them (no restriction)",
   suspend_account: "Suspend their account",
 };
@@ -1109,7 +1110,7 @@ export function ReportCard({
         <dd className="pre">{r.details}</dd>
         {r.quoted && (
           <>
-            <dt>The message</dt>
+            <dt>{r.subject_kind === "news" ? "The post" : "The message"}</dt>
             <dd>
               <blockquote className="pre">{r.quoted}</blockquote>
             </dd>
@@ -1327,6 +1328,15 @@ export function AppealCard({
             by {a.decided_by}, {formatDate(a.created_at)}
           </div>
         </dd>
+        {/* The page no longer shows what was hidden: this is what staff read (a news post's text). */}
+        {a.quoted && (
+          <>
+            <dt>What was hidden</dt>
+            <dd>
+              <blockquote className="pre">{a.quoted}</blockquote>
+            </dd>
+          </>
+        )}
         <dt>Appeal</dt>
         <dd className="pre">{a.appeal}</dd>
         <dt>Account</dt>

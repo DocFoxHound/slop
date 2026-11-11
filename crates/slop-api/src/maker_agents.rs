@@ -159,6 +159,11 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     // Claiming pays the maker; it's checked by the app's maker or the backers.
     ("POST", "/bounties/*/claims", true, Slug::Claim),
     ("DELETE", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
+    // News on the app's store page (news.rs): the maker's own posts, with the hidden ones.
+    ("GET", "/apps/{slug}/news", false, Slug::Own),
+    ("POST", "/apps/{slug}/news", true, Slug::Own),
+    ("PUT", "/apps/{slug}/news/*", true, Slug::Own),
+    ("DELETE", "/apps/{slug}/news/*", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/answer", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/withdraw", true, Slug::Own),
     // People: never accepting agreements or changes, paying, signing off, delivering,
@@ -1105,6 +1110,62 @@ pub(crate) const TOOLS: &[Tool] = &[
         required: &["slug", "id"],
     },
     Tool {
+        name: "list_news",
+        description: "The news your maker posted on the app's store page, newest first, each with its ID (`hidden` ones were removed by a moderation decision and can't be changed; `can_appeal` says whether your maker can still appeal that). `posting` says whether a new post is allowed now: one per app per day, and only while the app's page is in the store. When `more` is true there are older posts: ask again with `before` set to the last ID you got.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/news",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "before": s("The ID of the last post you already have, for the older ones"),
+                "limit": { "type": "integer", "description": "How many, 1 to 50; 10 when left out" },
+            })
+        },
+        required: &["slug"],
+    },
+    Tool {
+        name: "post_news",
+        description: "Posts short news on the app's store page, as its maker. People who marked the app Interested are told unless they switched news off, so it can't be unsent, and only one post per app per day is allowed. Only when your maker asks. Plain, short, no hype: what changed, or what's coming and when. Say \"scanned\" or \"checked\", never \"safe\". Never offer anything for votes or reviews.",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/news",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "headline": s("One line, up to 100 characters: it's what people see in their notifications"),
+                "body": s("The news, up to 2,000 characters. Simple Markdown (bold, lists, links); no pictures"),
+            })
+        },
+        required: &["slug", "headline", "body"],
+    },
+    Tool {
+        name: "edit_news",
+        description: "Changes a news post's headline and text (send both). Nobody is told again. Only when your maker asks.",
+        method: Method::PUT,
+        path: "/v1/apps/{slug}/news/{id}",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "id": s("The post's ID, from list_news"),
+                "headline": s("One line, up to 100 characters"),
+                "body": s("The news, up to 2,000 characters"),
+            })
+        },
+        required: &["slug", "id", "headline", "body"],
+    },
+    Tool {
+        name: "remove_news",
+        description: "Deletes a news post from the app's store page. It doesn't give the day's post back. Only when your maker asks.",
+        method: Method::DELETE,
+        path: "/v1/apps/{slug}/news/{id}",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "id": s("The post's ID, from list_news"),
+            })
+        },
+        required: &["slug", "id"],
+    },
+    Tool {
         name: "list_bug_reports",
         description: "Players' bug reports on the app, most \"me too\" first: what's wrong, the version and platform, and crash output when the player sent it. status: open (default), fixed, wont_fix, duplicate or all. File the ones worth tracking as issues on the repository yourself (e.g. gh issue create), without the player's name or anything personal from the log.",
         method: Method::GET,
@@ -1949,7 +2010,23 @@ mod tests {
             route(&Method::PUT, "/v1/apps/pong/commit-status"),
             Some((true, Slug::Own, Some("pong")))
         );
+        // News: reading needs any token of the maker's, the rest a publish token.
+        for (m, p, publish) in [
+            (Method::GET, "/v1/apps/pong/news", false),
+            (Method::POST, "/v1/apps/pong/news", true),
+            (Method::PUT, "/v1/apps/pong/news/n1", true),
+            (Method::DELETE, "/v1/apps/pong/news/n1", true),
+        ] {
+            assert_eq!(
+                route(&m, p),
+                Some((publish, Slug::Own, Some("pong"))),
+                "{m} {p}"
+            );
+        }
         for (m, p) in [
+            // The news switch on an Interested mark is the person's.
+            (Method::PUT, "/v1/me/interested/pong/news"),
+            (Method::PUT, "/v1/me/interested/pong"),
             (Method::GET, "/v1/me/export"),
             (Method::POST, "/v1/me/maker-tokens"),
             (Method::POST, "/v1/apps/pong/donate"),
@@ -2058,6 +2135,11 @@ mod tests {
                 json!({ "slug": "pong" }),
                 "/v1/apps/pong/demo",
             ),
+            (
+                "remove_news",
+                json!({ "slug": "pong", "id": "n1" }),
+                "/v1/apps/pong/news/n1",
+            ),
         ] {
             let (m, path, body) = call(name, args).unwrap();
             assert_eq!((m, path.as_str(), body), (Method::DELETE, want, None));
@@ -2083,6 +2165,38 @@ mod tests {
         assert_eq!(
             (m, path.as_str(), body),
             (Method::GET, "/v1/apps/pong/history?days=90", None)
+        );
+        // News: the headline and text are the body; the post's ID goes in the path.
+        let news =
+            json!({ "slug": "pong", "headline": "Beta on Friday", "body": "Saves work now." });
+        let (m, path, body) = call("post_news", news.clone()).unwrap();
+        assert_eq!((m, path.as_str()), (Method::POST, "/v1/apps/pong/news"));
+        assert_eq!(
+            body,
+            Some(json!({ "headline": "Beta on Friday", "body": "Saves work now." }))
+        );
+        let mut edit = news;
+        edit["id"] = json!("n1");
+        let (m, path, body) = call("edit_news", edit).unwrap();
+        assert_eq!((m, path.as_str()), (Method::PUT, "/v1/apps/pong/news/n1"));
+        assert_eq!(
+            body,
+            Some(json!({ "headline": "Beta on Friday", "body": "Saves work now." }))
+        );
+        let (m, path, body) = call("list_news", json!({ "slug": "pong" })).unwrap();
+        assert_eq!(
+            (m, path.as_str(), body),
+            (Method::GET, "/v1/apps/pong/news", None)
+        );
+        // Older posts: the page after the last one it has.
+        let (m, path, body) = call(
+            "list_news",
+            json!({ "slug": "pong", "before": "n9", "limit": 50 }),
+        )
+        .unwrap();
+        assert_eq!(
+            (m, path.as_str(), body),
+            (Method::GET, "/v1/apps/pong/news?before=n9&limit=50", None)
         );
         let (_, path, _) = call("get_person", json!({ "handle": "../me/creative" })).unwrap();
         assert_eq!(path, "/v1/people/..%2Fme%2Fcreative");

@@ -119,6 +119,20 @@ the freeze (not one SLAPorSLOP's staff placed). It doesn't check the code.
 is planned). Never argue, and never ask for or reward a better vote. `remove_review_reply` takes
 a reply down again.
 
+## News
+
+Your maker can post short news on an app's store page: a headline and a few lines. People who
+marked the app Interested are told under their bell, unless they switched news off for it.
+
+- **Only when your maker asks**, and show them the exact headline and text first. A post can't be
+  unsent, and there is one post per app per day (`list_news` says when the next is allowed).
+- Plain, short, no hype: what changed, or what's coming and when. Don't promise dates your maker
+  didn't give you.
+- Say "scanned" or "checked", never "safe". Never offer anything in exchange for votes or reviews.
+- `edit_news` fixes a mistake without telling anyone again. `remove_news` deletes a post.
+- A post SLAPorSLOP hid can't be changed or posted again. While its `can_appeal` is true, your
+  maker can appeal it from their account, where the decision is.
+
 ## Community builds and mods
 
 - **Community build** (a fix, translation, port or modded version of someone's app): fork their repository, then `register_community_build` with `kind` fix, translation, port, mod or other. Read "Publishing a community build".

@@ -267,6 +267,26 @@ async fn report_reasons_depend_on_what_is_reported(db: PgPool) {
         let (_, list) = reasons_for(&app, &format!("?kind={kind}")).await;
         assert_eq!(codes(&list), people, "{kind}");
     }
+    // A maker's news post: never a fake review (something offered for votes is spam or a
+    // misleading page).
+    let (_, news) = reasons_for(&app, "?kind=news").await;
+    assert_eq!(
+        codes(&news),
+        [
+            "child_abuse",
+            "threat",
+            "intimate_image",
+            "scam",
+            "illegal",
+            "sexual",
+            "copyright",
+            "harassment",
+            "private_info",
+            "misleading",
+            "spam",
+            "other"
+        ]
+    );
     let conversations = [
         "child_abuse",
         "threat",

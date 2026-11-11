@@ -85,7 +85,7 @@ const EXPORT: &[(&str, &str)] = &[
     ),
     (
         "interested",
-        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'since', i.created_at)), '[]')
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'since', i.created_at, 'news', i.news)), '[]')
          from interests i join apps a on a.id = i.app_id where i.user_id = $1",
     ),
     (
@@ -283,6 +283,14 @@ const EXPORT: &[(&str, &str)] = &[
                              where m.thread_id = t.id))
                 order by t.created_at), '[]')
          from admin_threads t left join users st on st.id = t.to_staff_id where t.sender_id = $1",
+    ),
+    (
+        // News the account posted on its apps' store pages, with any a moderation decision hid
+        // (news.rs).
+        "app_news",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug) || (to_jsonb(n) - 'app_id')
+                order by n.created_at), '[]')
+         from app_news n join apps a on a.id = n.app_id where a.maker_id = $1",
     ),
 ];
 
@@ -645,6 +653,13 @@ pub async fn close_account(
     .bind(user_id)
     .fetch_all(&mut *tx)
     .await?;
+    // Their news posts go, hidden ones too, and with them everyone's notices about them
+    // (`notifications.news_id` cascades). After the delist: a post sent at the same moment waits
+    // for the app's row (news.rs) and is then refused, or it was in first and goes here.
+    sqlx::query("delete from app_news where app_id in (select id from apps where maker_id = $1)")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
     admin::audit(
         &mut tx,
         actor,

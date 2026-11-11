@@ -122,6 +122,18 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "forgetting job conversations failed"),
         }
+        // Maker news: notices about apps out of the store, and posts hidden for 213 days.
+        match crate::news::cleanup(&state).await {
+            Ok((notices, posts)) if notices + posts > 0 => {
+                tracing::info!(
+                    notices,
+                    posts,
+                    "maker news out of the store or hidden too long"
+                )
+            }
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "news cleanup failed"),
+        }
         // Profile pictures last read over a day ago (avatars.rs), slowly, beside the rest.
         tokio::spawn({
             let state = state.clone();

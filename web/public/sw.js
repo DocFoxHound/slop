@@ -6,6 +6,10 @@
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
+// Kinds that only show under the bell (notify.rs BELL_ONLY) are never shown on the device. The API
+// already leaves them out when asked without ?bell=true, as here; this is a second guard.
+const BELL_ONLY = ["news"];
+
 self.addEventListener("push", (event) => {
   event.waitUntil(
     (async () => {
@@ -15,7 +19,7 @@ self.addEventListener("push", (event) => {
         const res = await fetch("/v1/me/notifications", { credentials: "include", headers: { Accept: "application/json" } });
         if (res.ok) {
           const inbox = await res.json();
-          const n = (inbox.items || []).find((i) => !i.read);
+          const n = (inbox.items || []).find((i) => !i.read && !BELL_ONLY.includes(i.category));
           if (n) {
             title = n.count > 1 ? `${n.title} (${n.count})` : n.title;
             options = { ...options, body: n.body, tag: n.id, renotify: true, data: { link: n.link || "/notifications" } };
