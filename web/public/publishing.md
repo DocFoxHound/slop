@@ -1583,14 +1583,44 @@ Tell the person: the page opens with the request filled in. They should read it 
 since it's what the work is measured against, and send it themselves. The link works for that
 one page, once. If the creative isn't taking work, the page says so and nothing is kept.
 
+### A link for an open request
+
+People also has a board of open requests, where a maker says what one of their projects needs and
+creatives who can be hired put their name forward. Read it at `GET /v1/work-requests` (newest
+first, `?skill=` for one skill). A request can be prepared the same way: write it with the
+person, then give them one link that opens the request form on People filled in. They sign in if
+needed, check it and press **Post request** themselves. Nothing is posted until they do.
+
+Build the link: `/people?view=requests#fill=` on this site, followed by
+`encodeURIComponent(JSON.stringify(fields))`.
+
+| Field | Type | Rules |
+|---|---|---|
+| `app_slug` | string | One of the person's apps whose page is in the store (not a dedicated server) |
+| `skill` | string | A skill slug from `GET /v1/people/skills` |
+| `title` | string | One line, up to 100 characters. Required for the form to post |
+| `description_md` | string | Up to 2,000 characters, simple Markdown. Required for the form to post |
+| `wanted_by` | string | `YYYY-MM-DD`, today or later |
+
+Never filled in: the 18-or-older tick, any agreement, and a budget or price (there is none on a
+request: the creative sets the price in their quote). A person can have 3 open requests at once,
+and each closes by itself after 30 days.
+
+Example (on slaporslop.games):
+`https://slaporslop.games/people?view=requests#fill=%7B%22app_slug%22%3A%22my-game%22%2C%22skill%22%3A%22music%22%2C%22title%22%3A%22Main%20theme%22%2C%22description_md%22%3A%22A%2090-second%20loop%20for%20the%20title%20screen.%22%7D`
+
+Tell the person: the link opens the request form filled in for them to check. The request is
+public, with their display name and project. Nothing is posted until they press Post request.
+
 ## Working with your AI agent
 
 Your own AI coding agent can do most of this for you, from your editor: write and create the
 store page, submit releases with notes, read SLAPorSLOP's checks of each release and fix what they find,
 put players back on an earlier release while it fixes a broken one, read what players say,
 read how many played each day, post your news when you ask it to, register community builds and
-mods, offer fixes to the apps you build on, and search People for someone to hire, with the
-request written out for you to check and send. Creatives can let it watch People jobs, send
+mods, offer fixes to the apps you build on, search People for someone to hire, with the
+request written out for you to check and send, and read the board of open requests, with a
+request of yours written out for you to check and post. Creatives can let it watch People jobs, send
 quotes and talk in job conversations, and have their portfolio checked and sent for review after
 it changes.
 

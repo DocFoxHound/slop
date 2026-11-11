@@ -23,6 +23,7 @@ don't copy it into real code.
 | History for makers: players, first plays and library adds per day on Manage; `get_history` for agents | Done |
 | Results on GitHub (commit statuses, `commit_status.rs`) | Built, off until `SLOP_GITHUB_STATUSES` is set |
 | News from makers on store pages, told under the bell to people who marked the app Interested (`news.rs`) | Done |
+| Open requests on People: makers post what a store project needs; creatives who can be hired put their name forward (`people/work_requests.rs`) | Done |
 | Public publishing guide (`/publish/guide`, `/publishing.md`, `/llms.txt`) | Done |
 | Rate limits per client IP (strictest on sign-in); hourly cleanup of expired sign-ins, sessions and tokens | Done |
 | Desktop client core (`crates/slop-client`): verified install, launch, revocation checks | Done, tested |
@@ -214,6 +215,12 @@ to run Slop Pong against the real Slop Link too.
 | `GET /v1/apps/{slug}/news?before=&limit=` | anyone who may see the app's store page | Its news, newest first (none for a Private app, except to its maker); the maker also gets hidden posts, whether each can still be appealed (`can_appeal`), and whether a new post is allowed (`posting`) |
 | `POST /v1/apps/{slug}/news`, `PUT`/`DELETE …/news/{id}` | the app's maker, or their agent (publish) | Post (one per app per 24 hours, tells people Interested under the bell), edit, remove |
 | `PUT /v1/me/interested/{slug}/news` | signed in, with a mark | `{on}`: news from this app under the bell, or not |
+| `GET /v1/work-requests?skill=&offset=` | anyone (any agent token too) | The board of open requests on People, newest first, 50 at a time |
+| `POST /v1/work-requests` | signed in | Post an open request for one of your projects in the store (3 open at most) |
+| `GET /v1/work-requests/{id}?responses_offset=` | anyone it's on the board for; its maker | One request; its maker also gets who put their name forward, 100 at a time |
+| `POST /v1/work-requests/{id}/close` | its maker | Close it |
+| `PUT`/`DELETE /v1/work-requests/{id}/response` | a creative who can be hired | Put your name forward (optionally naming a package), or take it back |
+| `GET /v1/me/work-requests` | signed in, or an agent with People access | Your requests, the ones you put your name forward for, and your projects |
 
 The signed documents are the [SLAPorSLOP open standard](standard/README.md); `slop-verify` checks them.
 

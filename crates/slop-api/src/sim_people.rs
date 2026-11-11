@@ -10,6 +10,9 @@
 //! asks the real code (people/, votes.rs) whether the credits, the badge, the "since the new
 //! work" rating and creatives' ratings tell the truth. Payments go through the real
 //! `jobs::payment_succeeded_at`, marked simulated; no money moves.
+//!
+//! The board of open requests gets six fixed requests from the simulated makers, some with names
+//! put forward by the simulated creatives (`write_requests`).
 
 use std::collections::BTreeMap;
 
@@ -764,6 +767,8 @@ pub struct PeopleGenerated {
     pub problems: usize,
     pub review_disputes: usize,
     pub conversation_texts_deleted: u64,
+    /// Open requests on the board (people/work_requests.rs).
+    pub work_requests: usize,
 }
 
 /// The truth a review follows: 👍 likelier the better and more reliable the creative.
@@ -1531,11 +1536,106 @@ pub async fn write(
         out.jobs += 1;
     }
 
+    out.work_requests = write_requests(db, app_ids, now).await?;
     // Jobs delivered over a week ago with no answer: the real hourly job completes them.
     out.auto_completed = jobs::auto_complete(db, now).await?;
     // Conversations closed over 30 days ago: the real cleanup deletes the text, keeping fingerprints.
     out.conversation_texts_deleted = jobs::forget_conversations(db, now).await?;
     Ok(out)
+}
+
+/// The board's requests: (skill, title, description).
+const REQUESTS: [(&str, &str, &str); 6] = [
+    (
+        "pixel-art",
+        "Enemy sprites for the second world",
+        "Six enemies, 32×32, idle and walk in four directions, matching the look of the first world.",
+    ),
+    (
+        "music",
+        "Title screen theme",
+        "A 90-second loop for the title screen, calm, with a version that can fade into the first level.",
+    ),
+    (
+        "ui-ux",
+        "Settings and pause menus",
+        "A cleaner settings screen and pause menu for keyboard, mouse and gamepad. Layouts and a short style sheet.",
+    ),
+    (
+        "sound",
+        "Footsteps and ambience",
+        "Footsteps on four surfaces and three ambience loops (cave, forest, town), as WAV files.",
+    ),
+    (
+        "writing",
+        "Store page text",
+        "A short description and five feature lines for the store page, in plain English.",
+    ),
+    (
+        "localization",
+        "German and French text",
+        "About 2,000 words of interface text and dialogue, into German and French.",
+    ),
+];
+
+/// A few open requests on the board, with names put forward for some. Fixed texts, no randomness
+/// (so nothing else the simulation writes changes), and no notices. Each is for a listed public
+/// app that isn't a server and has none yet; names come only from the simulation's own creatives
+/// who can be hired and list the skill.
+async fn write_requests(
+    db: &PgPool,
+    app_ids: &[Uuid],
+    now: OffsetDateTime,
+) -> anyhow::Result<usize> {
+    if app_ids.is_empty() {
+        return Ok(0);
+    }
+    let mut made = 0;
+    for (i, (skill, title, description)) in REQUESTS.iter().enumerate() {
+        let id = Uuid::now_v7();
+        let posted = now - Duration::days(3 * i as i64) - Duration::hours(5);
+        let wanted_by = (i % 2 == 0).then(|| (now + Duration::days(45)).date());
+        let inserted = sqlx::query(
+            "insert into work_requests (id, user_id, app_id, skill, title, description_md, wanted_by, created_at, expires_at)
+             select $1, a.maker_id, a.id, $3, $4, $5, $6, $7, $7 + interval '30 days'
+             from apps a
+             where a.id = $2 and a.status = 'listed' and a.visibility = 'public'
+               and a.branch_kind is distinct from 'server'
+               and not exists (select 1 from work_requests w where w.app_id = a.id)",
+        )
+        .bind(id)
+        .bind(app_ids[(i * 7) % app_ids.len()])
+        .bind(skill)
+        .bind(title)
+        .bind(description)
+        .bind(wanted_by)
+        .bind(posted)
+        .execute(db)
+        .await?
+        .rows_affected();
+        if inserted == 0 {
+            continue;
+        }
+        made += 1;
+        sqlx::query(
+            "insert into work_request_responses (request_id, creative_id, created_at)
+             select $1, c.user_id, $2 + (row_number() over (order by c.handle)) * interval '7 hours'
+             from creatives c
+             join sim_creatives sc on sc.user_id = c.user_id
+             where $3 = any(c.skills) and c.taking_work and c.stripe_status = 'active'
+               and c.portfolio_set_id is not null and c.hidden_reason is null
+               and c.user_id <> (select user_id from work_requests where id = $1)
+             order by c.handle
+             limit $4",
+        )
+        .bind(id)
+        .bind(posted)
+        .bind(skill)
+        .bind((i % 3) as i64)
+        .execute(db)
+        .await?;
+    }
+    Ok(made)
 }
 
 const LINES_CLIENT: &[&str] = &[

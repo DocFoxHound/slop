@@ -11,10 +11,11 @@
 //!   (ignoring case, spacing, punctuation and look-alike characters such as 0/o, 1/l).
 //! - **Rate limits:** accounts that keep hitting the per-account limits (limits.rs).
 //! - **Malicious dependencies:** a release using a package OSV lists as malware (dep_watch.rs).
-//! - **Known-bad links:** a store page, maker's news post, creative profile or review linking to an
-//!   address a public malware or phishing list names (bad_links.rs): new and changed ones every
-//!   hour, everything after the lists are refreshed (daily). A browser game's play addresses (the one Play opens,
-//!   ones waiting for review, and where each was found to lead) are matched every hour.
+//! - **Known-bad links:** a store page, maker's news post, creative profile, review or open request
+//!   on People linking to an address a public malware or phishing list names (bad_links.rs): new
+//!   and changed ones every hour, everything after the lists are refreshed (daily). A browser
+//!   game's play addresses (the one Play opens, ones waiting for review, and where each was found
+//!   to lead) are matched every hour.
 
 use axum::{
     Json, Router,
@@ -289,7 +290,16 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
          union all
          select 'app', a.id, a.title || ': news “' || n.headline || '”', concat_ws(' ', n.headline, n.body)
          from app_news n join apps a on a.id = n.app_id
-         where n.hidden_at is null and ($1 or n.updated_at > now() - interval '25 hours')",
+         where n.hidden_at is null and ($1 or n.updated_at > now() - interval '25 hours')
+         union all
+         -- the conditions of people::work_requests::ON_BOARD; keep them in step (the store rule
+         -- is left out: a request whose project is out of the store for a while is still read)
+         select 'account', w.user_id, u.display_name || ': request “' || w.title || '”',
+                concat_ws(' ', w.title, w.description_md)
+         from work_requests w join users u on u.id = w.user_id join apps a on a.id = w.app_id
+         where w.status = 'open' and w.expires_at > now() and w.hidden_reason is null
+           and u.suspended_at is null and u.closed_at is null and a.branch_kind is distinct from 'server'
+           and ($1 or w.created_at > now() - interval '25 hours')",
     )
     .bind(refreshed)
     .fetch_all(db)

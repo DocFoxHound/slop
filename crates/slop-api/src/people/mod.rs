@@ -17,6 +17,7 @@ pub mod jobs;
 pub mod mediation;
 pub mod portfolio;
 pub mod stripe;
+pub mod work_requests;
 
 use axum::{
     Json, Router,
@@ -99,6 +100,7 @@ pub fn routes() -> Router<AppState> {
         .route("/people/reviews/{job_id}/reply", put(reply))
         .merge(jobs::routes())
         .merge(mediation::routes())
+        .merge(work_requests::routes())
         .merge(stripe::webhook_routes())
 }
 

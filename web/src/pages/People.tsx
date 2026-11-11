@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// People: the directory of creatives and their pages (DESIGN §15.1). A creative's page is
-// built to sell a service — banner, accent colour, their own section order — so it isn't an app
-// page with a different header.
+// People: the directory of creatives and their pages (DESIGN §15.1), and its second tab, Open
+// requests (?view=requests, PeopleRequests.tsx). A creative's page is built to sell a service —
+// banner, accent colour, their own section order — so it isn't an app page with a different header.
 
 import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
@@ -9,11 +9,22 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import { api, ApiError, type AiUse, type CreativeCard, type CreativePage, type PageStatus, type PeopleQuery, type Section, type Work } from "../api";
 import { Avatar } from "../components/Avatar";
 import { HandoffError, HandoffNotice, HandoffWaiting, useHandoff } from "../components/Handoff";
-import { AI_USE, AiBadge, Lightbox, PersonCard, RatingLine, ServicesList, WorkTile, accentStyle } from "../components/People";
+import {
+  AI_USE,
+  AiBadge,
+  Lightbox,
+  PeopleNavActions,
+  PeopleTabs,
+  PersonCard,
+  RatingLine,
+  ServicesList,
+  SkillButton,
+  WorkTile,
+  accentStyle,
+} from "../components/People";
 import { DesignArea, slopParts } from "../components/PeopleDesign";
 import {
   LiveBar,
-  PageStateBadge,
   PageStatusDetails,
   PreviewBar,
   ownPageView,
@@ -30,8 +41,25 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { isDesktop, openExternal } from "../platform";
 import { useSession } from "../session";
+import { OpenRequests } from "./PeopleRequests";
 
+/**
+ * /people: the directory, or with ?view=requests the board of open requests. The page and its tab
+ * bar are the same for both views, so the tab just pressed stays where it is and keeps the focus.
+ */
 export function People() {
+  const [params] = useSearchParams();
+  const requests = params.get("view") === "requests";
+  return (
+    <div className="page">
+      <h1 className="sr-only">{requests ? "Open requests" : "People"}</h1>
+      <PeopleTabs view={requests ? "requests" : "people"} />
+      {requests ? <OpenRequests /> : <PeopleDirectory />}
+    </div>
+  );
+}
+
+function PeopleDirectory() {
   useDocumentTitle("People");
   const [params, setParams] = useSearchParams();
   const q: PeopleQuery = {
@@ -57,8 +85,7 @@ export function People() {
   const order = q.sort === "rating" ? "Best rated first" : q.sort === "clients" ? "Most clients first" : "Shuffled daily, so nobody is buried";
 
   return (
-    <div className="page">
-      <h1 className="sr-only">People</h1>
+    <>
       <nav className="store-nav people-nav" aria-label="People">
         <div className="skill-icons" role="group" aria-label="Skill">
           <SkillButton slug="" name="Everyone" on={!q.skill} onPick={() => set("skill", null)} />
@@ -67,21 +94,7 @@ export function People() {
           ))}
         </div>
         <PeopleSearch value={q.q ?? ""} onSearch={(text) => set("q", text.trim() || null)} />
-        <div className="people-nav-actions">
-          <Link className="btn small" to="/people/jobs">
-            Your jobs
-          </Link>
-          {mine.data ? (
-            <Link className="btn small slime" to={`/people/${mine.data.handle}`}>
-              Your People page
-              {mine.data.status.state !== "live" && <PageStateBadge status={mine.data.status} />}
-            </Link>
-          ) : (
-            <Link className="btn small slime" to="/people/me">
-              Offer your services
-            </Link>
-          )}
-        </div>
+        <PeopleNavActions mine={mine.data} />
       </nav>
 
       {front && <PeopleShelves />}
@@ -150,24 +163,7 @@ export function People() {
           </Link>
         </div>
       )}
-    </div>
-  );
-}
-
-/** A skill in the People bar: its icon, with its name (and how many offer it) on hover or focus. */
-function SkillButton({ slug, name, count, on, onPick }: { slug: string; name: string; count?: number; on: boolean; onPick: () => void }) {
-  const tip = count === undefined ? name : `${name} · ${count.toLocaleString()}`;
-  return (
-    <button
-      type="button"
-      className={`skill-btn ${on ? "on" : ""}`}
-      aria-pressed={on}
-      aria-label={count === undefined ? name : `${name}, ${count.toLocaleString()} ${count === 1 ? "person" : "people"}`}
-      data-tip={tip}
-      onClick={onPick}
-    >
-      <SkillIcon slug={slug || "everyone"} size={22} />
-    </button>
+    </>
   );
 }
 
@@ -289,17 +285,23 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
   const { page: p, view } = ownPageView(loaded, params.get("view") === "live");
   // Arrived here from the editor's Save: say so once (not again on reload or Back).
   const [saved] = useState(() => (location.state as { peopleSaved?: PeopleSaved } | null)?.peopleSaved);
+  // Arrived from "Ask … for a quote" on the person's own open request (PeopleRequests.tsx): its
+  // fill is theirs, not an AI assistant's. Router state, which a link from outside can't set.
+  const [cameFromRequest] = useState(() => (location.state as { fromRequest?: boolean } | null)?.fromRequest === true);
   const savedRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!saved) return;
+    if (!saved && !cameFromRequest) return;
+    // The pathname alone: the router's location still has the #fill= that takeHandoff took out.
     navigate(location.pathname, { replace: true, state: null });
-    savedRef.current?.focus({ preventScroll: true });
+    if (saved) savedRef.current?.focus({ preventScroll: true });
   }, []);
   const [hiring, setHiring] = useState<{ serviceId?: string; skill?: string }>();
   // A request prepared by the visitor's AI assistant (/people/{handle}#fill=…, handoff.ts): the
   // form opens with it. `handoffDone`: the link the form has finished with (closed), so opening
   // the form again starts empty.
   const { link: handoff, n: handoffN } = useHandoff("hire", !p.is_me, p.handle);
+  // Only the fill that came with that click: a link opened later in this tab is an assistant's.
+  const fromRequest = cameFromRequest && handoffN === 0;
   const [handoffDone, setHandoffDone] = useState<number>();
   useEffect(() => {
     if (!handoff) return;
@@ -454,7 +456,7 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
 
         {handoff && !p.can_hire && (
           <p className="notice handoff-error" role="status">
-            Your AI assistant prepared a request for {p.name}, but{" "}
+            {fromRequest ? `Your open request was ready to send to ${p.name}, but` : `Your AI assistant prepared a request for ${p.name}, but`}{" "}
             {p.closed ? "their account is closed" : p.taking_work ? "they aren't taking paid work yet" : "they're fully booked"}, so it
             can't be sent.
           </p>
@@ -465,6 +467,7 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
             p={p}
             initial={hiring}
             handoff={handoffDone === handoffN ? null : handoff}
+            source={fromRequest ? "request" : "assistant"}
             signedIn={Boolean(me)}
             adultConfirmed={Boolean(me?.adult_confirmed)}
             onClose={() => {
@@ -658,6 +661,7 @@ function HireForm({
   p,
   initial,
   handoff,
+  source,
   signedIn,
   adultConfirmed,
   onClose,
@@ -666,6 +670,8 @@ function HireForm({
   initial: { serviceId?: string; skill?: string };
   /** A request from the person's AI assistant, to fill the form in with. */
   handoff: HandoffLink | null;
+  /** Who filled it in: their AI assistant, or their own open request on People. */
+  source: "assistant" | "request";
   signedIn: boolean;
   adultConfirmed: boolean;
   onClose: () => void;
@@ -785,6 +791,7 @@ function HireForm({
               labels={HIRE_LABELS}
               check="what you're asking for, word for word"
               button="Send request"
+              source={source}
               onClear={() => {
                 setCleared(true);
                 setProject("");

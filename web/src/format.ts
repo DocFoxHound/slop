@@ -15,6 +15,11 @@ export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+/** A calendar day as the API sends it (YYYY-MM-DD), the same day in every time zone. */
+export function formatDay(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+}
+
 /** The full date and time, for a tooltip beside a relative time. */
 export function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });

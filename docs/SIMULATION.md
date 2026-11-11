@@ -58,6 +58,11 @@ unweighted, over time) and **player counts** against a truth we know. The code i
     **problem** (agreed refunds, a mediator's suggestion still open, or closed unresolved), and
     creatives dispute some bad reviews (kept, noted, removed or pending). The real cleanup deletes
     the text of conversations closed over 30 days ago, keeping the fingerprints.
+  - **Open requests:** up to six open requests on the board, from makers of listed public apps (fixed
+    texts, posted over the last 15 days), some with names put forward by the simulated creatives
+    who can be hired and list the skill. Nobody is told: the fill writes no notices. If a later
+    step makes the app private or takes it out of the store, its request leaves the board, as it
+    would for real.
 
 The truth lives in `sim_users`, `sim_apps` and `sim_creatives`. Only the report reads it; the real
 code never does.

@@ -314,7 +314,7 @@ struct RemovalOrder {
     /// The order's own reference and what it names.
     order: String,
     /// app (its address), app_review (its ID), news (a news post's ID), profile (the creative's
-    /// handle), team (its address).
+    /// handle), team (its address), work_request (an open request's ID).
     subject_kind: String,
     subject: String,
 }
@@ -370,10 +370,17 @@ async fn removal_order(
         .bind(subject)
         .fetch_optional(&state.db)
         .await?,
+        // Public text on People, shown to signed-out visitors (people/work_requests.rs).
+        "work_request" => sqlx::query_as(
+            "select w.id, w.user_id, 'Open request: ' || w.title, to_jsonb(w) from work_requests w where w.id::text = $1",
+        )
+        .bind(subject)
+        .fetch_optional(&state.db)
+        .await?,
         _ => {
             return Err(ApiError::invalid(
                 "subject_kind",
-                "app, app_review, news, profile or team",
+                "app, app_review, news, profile, team or work_request",
             ));
         }
     };
@@ -384,6 +391,7 @@ async fn removal_order(
         "app_review" => "hide_review",
         "profile" => "hide_profile",
         "news" => "hide_news",
+        "work_request" => "hide_work_request",
         _ => "hide_team",
     };
     let request_id = Uuid::now_v7();

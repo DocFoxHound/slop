@@ -127,7 +127,8 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
         Let your own AI agent (such as Claude Code, Claude or ChatGPT) publish and fix your apps: create store pages,
         submit releases with notes, read SLAPorSLOP's checks and get exact fixes, register community builds and mods, and
         offer fixes to other apps. With <b>People</b> access it can also watch your jobs, send quotes, talk in job
-        conversations, and have your portfolio checked and sent for review. It can never pay, accept agreements, change
+        conversations, have your portfolio checked and sent for review, and read your open requests and who put their name
+        forward. It can never pay, accept agreements, change
         payouts or your account. Your agent does the work on your side; SLAPorSLOP runs no AI for it. Each connection lasts
         up to 12 months: SLAPorSLOP reminds you a week and a day before it ends, and you can remove it any time.
       </p>
@@ -228,8 +229,8 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
         </fieldset>
         <label className="check">
           <input type="checkbox" checked={people} onChange={(e) => setPeople(e.target.checked)} /> People too: see job
-          requests, send quotes, propose changes, talk in job conversations, and have your portfolio checked and sent
-          for review
+          requests, send quotes, propose changes, talk in job conversations, have your portfolio checked and sent for
+          review, and see your open requests and who put their name forward
         </label>
         <label>
           Expires after

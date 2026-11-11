@@ -248,6 +248,16 @@ pub async fn combine(tx: &mut PgConnection, into: Uuid, from: Uuid) -> anyhow::R
          where c.kind = 'direct' and c.pair_key like '%' || $2::text || '%'",
         "delete from chat_backups where user_id = $2",
         "delete from push_subscriptions where user_id = $2",
+        // Open requests: nobody ends up having put their name forward for their own request (a
+        // maker account combined with the creative account that answered it), and one name per
+        // request, this account's (two names need two People pages, which `blocked` refuses).
+        "delete from work_request_responses r using work_requests w
+          where w.id = r.request_id
+            and ((w.user_id = $1 and r.creative_id = $2) or (w.user_id = $2 and r.creative_id = $1))",
+        "delete from work_request_responses r
+          where r.creative_id = $2
+            and exists (select 1 from work_request_responses k
+                         where k.request_id = r.request_id and k.creative_id = $1)",
     ] {
         sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(into)

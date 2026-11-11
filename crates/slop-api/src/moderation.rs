@@ -2,16 +2,16 @@
 //! Reports, moderation decisions and appeals (DESIGN §16; LEGAL-GUIDANCE CON-3, CON-5, CON-8,
 //! CON-9, CON-16).
 //!
-//! - **Reports:** anyone can report an app, a People profile, a review, a maker's news post, or
-//!   (as one of its two sides) a job message. Each gets a reference number as the
-//!   acknowledgement. Urgent and serious reasons are due within 24 hours; the rest within 7 days.
-//!   Signed-out reporters give a name and email (optional for child abuse). Copyright reports
-//!   collect what a DMCA notice must contain.
-//! - **Decisions:** every restriction (taking an app out of the store, hiding a review, profile
-//!   or news post, a warning, suspending an account) is a decision with a statement of reasons: the
-//!   facts, the rule (a Content Policy section), the law where it's the law, whether automation
-//!   was used, and how to appeal. The affected user sees it on their account page. Reporters see
-//!   the outcome of their reports.
+//! - **Reports:** anyone can report an app, a People profile, a review, a maker's news post, an
+//!   open request on People, or (as one of its two sides) a job message. Each gets a reference
+//!   number as the acknowledgement. Urgent and serious reasons are due within 24 hours; the rest
+//!   within 7 days. Signed-out reporters give a name and email (optional for child abuse).
+//!   Copyright reports collect what a DMCA notice must contain.
+//! - **Decisions:** every restriction (taking an app out of the store, hiding a review, profile,
+//!   news post or open request, a warning, suspending an account) is a decision with a statement
+//!   of reasons: the facts, the rule (a Content Policy section), the law where it's the law,
+//!   whether automation was used, and how to appeal. The affected user sees it on their account
+//!   page. Reporters see the outcome of their reports.
 //! - **Appeals:** within six months. A person keeps or reverses the decision, and says why. An
 //!   appeal against a copyright decision is a counter-notice, with the statements §512(g) needs.
 //!
@@ -67,6 +67,7 @@ const ALL: &[&str] = &[
     "chat_message",
     "bounty",
     "news",
+    "work_request",
 ];
 
 pub const REASONS: &[Reason] = &[
@@ -89,6 +90,7 @@ pub const REASONS: &[Reason] = &[
             "chat_message",
             "bounty",
             "news",
+            "work_request",
         ],
         priority: 0,
         rule: Some("threat"),
@@ -161,6 +163,7 @@ pub const REASONS: &[Reason] = &[
             "chat_message",
             "bounty",
             "news",
+            "work_request",
         ],
         priority: 2,
         rule: Some("harassment"),
@@ -177,6 +180,7 @@ pub const REASONS: &[Reason] = &[
             "chat_message",
             "bounty",
             "news",
+            "work_request",
         ],
         priority: 2,
         rule: Some("private_info"),
@@ -199,8 +203,9 @@ pub const REASONS: &[Reason] = &[
         code: "misleading",
         label: "A misleading page",
         // A news post that offers something for votes or reviews is reported here or as spam:
-        // `fake_review` isn't offered for news.
-        kinds: &["app", "profile", "team", "news"],
+        // `fake_review` isn't offered for news. An open request that isn't for real work on its
+        // project is reported here too.
+        kinds: &["app", "profile", "team", "news", "work_request"],
         priority: 2,
         rule: Some("misleading"),
     },
@@ -223,6 +228,7 @@ pub const REASONS: &[Reason] = &[
             "message",
             "chat_message",
             "news",
+            "work_request",
         ],
         priority: 2,
         rule: Some("spam"),
@@ -329,6 +335,7 @@ pub fn action_label(action: &str) -> &'static str {
         "remove_reply" => "Reply removed",
         "hide_bounty" => "Bounty hidden",
         "hide_news" => "News post hidden",
+        "hide_work_request" => "Request hidden",
         "suspend_account" => "Account suspended",
         "warn" => "Warning",
         _ => "Decision",
@@ -346,6 +353,7 @@ fn actions_for(kind: &str) -> &'static [&'static str] {
         "team" => &["hide_team", "warn", "suspend_account"],
         "bounty" => &["hide_bounty", "warn", "suspend_account"],
         "news" => &["hide_news", "warn", "suspend_account"],
+        "work_request" => &["hide_work_request", "warn", "suspend_account"],
         _ => &["warn", "suspend_account"],
     }
 }
@@ -608,6 +616,22 @@ async fn find_subject(
                 quoted: Some(format!("{headline}\n\n{body}")),
             })
         }
+        "work_request" => {
+            // An open request on People, for someone it's on the board for (the board's one rule,
+            // people/work_requests.rs: open, its project in the store for them, no block between
+            // them and its maker). Quoted, since it leaves the board and is deleted in time.
+            let id: Uuid = subject.parse().map_err(|_| ApiError::NotFound)?;
+            let policy = ViewerPolicy::resolve(&state.db, &state.config, user, headers).await?;
+            let row = crate::people::work_requests::on_board_for(state, id, user, policy)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+            Ok(Subject {
+                id,
+                user_id: Some(row.user_id),
+                label: format!("Open request: {}", row.title),
+                quoted: Some(format!("{}\n\n{}", row.title, row.description_md)),
+            })
+        }
         "app_review" => {
             let id: Uuid = subject.parse().map_err(|_| ApiError::NotFound)?;
             let row: Option<(Uuid, String, String)> = sqlx::query_as(
@@ -694,7 +718,7 @@ async fn find_subject(
         }
         _ => Err(ApiError::invalid(
             "kind",
-            "app, review, app_review, profile, message, chat_message, bounty or news",
+            "app, review, app_review, profile, message, chat_message, bounty, news or work_request",
         )),
     }
 }
@@ -1174,6 +1198,54 @@ async fn apply(
                 .await?;
             crate::notify::news_withdrawn(&mut *tx, subject_id).await?;
         }
+        ("hide_work_request", "work_request") if undo => {
+            // Back on the board only when no other standing decision hides it too (a removal
+            // order can name a request a report already hid); otherwise it stays hidden under the
+            // newest of those, kept for that one's appeal (`work_requests::expire` counts from
+            // `hidden_at`). Put back, it runs at least a week more, as a bounty does. Nobody is
+            // told again. The row is locked first, so a second reversal at the same moment waits
+            // and then sees this one.
+            sqlx::query("select 1 from work_requests where id = $1 for update")
+                .bind(subject_id)
+                .execute(&mut *tx)
+                .await?;
+            let other: Option<(String, OffsetDateTime)> = sqlx::query_as(
+                "select rule, created_at from moderation_decisions
+                 where subject_kind = 'work_request' and subject_id = $1
+                   and action = 'hide_work_request' and reversed_at is null and id <> $2
+                 order by created_at desc limit 1",
+            )
+            .bind(subject_id)
+            .bind(reversing)
+            .fetch_optional(&mut *tx)
+            .await?;
+            sqlx::query(
+                "update work_requests
+                    set hidden_at = $2, hidden_reason = $3,
+                        expires_at = case when $2 is null and status = 'open'
+                                          then greatest(expires_at, now() + interval '7 days')
+                                          else expires_at end
+                  where id = $1",
+            )
+            .bind(subject_id)
+            .bind(other.as_ref().map(|(_, at)| *at))
+            .bind(other.as_ref().map(|(rule, _)| rule_title(rule)))
+            .execute(&mut *tx)
+            .await?;
+        }
+        ("hide_work_request", "work_request") => {
+            // Hidden, it leaves the board and stays in its maker's list with the rule. Its status
+            // isn't touched: a hidden request stays open and doesn't run out, so an appeal can put
+            // it straight back. Each decision starts the 213 days again. A request already
+            // deleted changes nothing here; the decision is still recorded.
+            sqlx::query(
+                "update work_requests set hidden_at = now(), hidden_reason = $2 where id = $1",
+            )
+            .bind(subject_id)
+            .bind(why)
+            .execute(&mut *tx)
+            .await?;
+        }
         ("hide_bounty", "bounty") if undo => {
             // Back as it was, for the time it had left (at least a week). A delivery withdrawn
             // while it was hidden leaves it open; one being paid has nothing left to charge.
@@ -1591,6 +1663,9 @@ async fn link(db: &sqlx::PgPool, kind: &str, id: Uuid) -> sqlx::Result<Option<St
         .await?
         .map(|s| format!("/app/{s}#news-{id}")),
         "bounty" => Some(format!("/bounties/{id}")),
+        // Once hidden it answers 404 to staff as to anyone but its maker: `quoted` is what staff
+        // read.
+        "work_request" => Some(format!("/people?view=requests&request={id}")),
         "review" => sqlx::query_scalar::<_, String>(
             "select c.handle from creative_reviews r join creatives c on c.user_id = r.creative_id
              where r.job_id = $1",
@@ -1669,7 +1744,8 @@ pub struct QueuedAppeal {
     account: Account,
     link: Option<String>,
     /// What was hidden, read from the hidden row itself (the page no longer shows it): a news
-    /// post's headline and text. None for every other action, and once the row is gone.
+    /// post's headline and text, or an open request's title and text. None for every other
+    /// action, and once the row is gone.
     quoted: Option<String>,
 }
 
@@ -1693,15 +1769,26 @@ pub async fn queued_appeals(db: &sqlx::PgPool) -> ApiResult<Vec<QueuedAppeal>> {
     let mut out = Vec::with_capacity(rows.len());
     for mut r in rows {
         finish(&mut r.decision);
-        // Its maker can't remove a hidden post, so it's still there while the appeal is open.
-        let quoted = if r.decision.action == "hide_news" {
-            sqlx::query_scalar("select headline || E'\\n\\n' || body from app_news where id = $1")
+        // Its maker can't remove a hidden post, so it's still there while the appeal is open. A
+        // hidden request is kept for the appeal window too (unless its maker's account closed).
+        let quoted =
+            match r.decision.action.as_str() {
+                "hide_news" => {
+                    sqlx::query_scalar(
+                        "select headline || E'\\n\\n' || body from app_news where id = $1",
+                    )
+                    .bind(r.subject_id)
+                    .fetch_optional(db)
+                    .await?
+                }
+                "hide_work_request" => sqlx::query_scalar(
+                    "select title || E'\\n\\n' || description_md from work_requests where id = $1",
+                )
                 .bind(r.subject_id)
                 .fetch_optional(db)
-                .await?
-        } else {
-            None
-        };
+                .await?,
+                _ => None,
+            };
         out.push(QueuedAppeal {
             quoted,
             link: link(db, &r.decision.subject_kind, r.subject_id).await?,

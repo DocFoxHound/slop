@@ -9,7 +9,7 @@ use crate::*;
 // Helpers
 
 /// Simulated payments, and room for long walk-throughs under the per-IP limits.
-async fn people_app(db: PgPool) -> TestApp {
+pub(super) async fn people_app(db: PgPool) -> TestApp {
     test_app_with(db, |c| {
         c.payments.simulated = true;
         roomy(c);
@@ -54,7 +54,7 @@ pub(super) fn fetch(path: impl Into<String>, cookie: &str) -> Req {
 }
 
 /// The `error.field` of a 422.
-fn field(body: &Value) -> &str {
+pub(super) fn field(body: &Value) -> &str {
     body["error"]["field"].as_str().unwrap_or("")
 }
 
@@ -65,7 +65,7 @@ pub(super) async fn count(app: &TestApp, sql: &str) -> i64 {
         .unwrap()
 }
 
-async fn exec(app: &TestApp, sql: &str) {
+pub(super) async fn exec(app: &TestApp, sql: &str) {
     sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
         .execute(&app.db)
         .await
@@ -102,7 +102,12 @@ pub(super) async fn staff(app: &TestApp, name: &str, role: &str) -> (Uuid, Strin
 
 /// A creative whose profile is live (an approved portfolio set) and who can be paid, made
 /// straight in the database rather than through onboarding.
-async fn creative_with(app: &TestApp, handle: &str, country: &str, p: Value) -> (Uuid, String) {
+pub(super) async fn creative_with(
+    app: &TestApp,
+    handle: &str,
+    country: &str,
+    p: Value,
+) -> (Uuid, String) {
     let (id, cookie) = app.user(handle, country).await;
     let mut p = p;
     p["handle"] = json!(handle);
@@ -138,20 +143,20 @@ async fn creative_with(app: &TestApp, handle: &str, country: &str, p: Value) -> 
 
 /// A creative ("vera", a trader in the US) and a client with a project ("tavern"), on a server
 /// with simulated payments.
-struct Hiring {
-    app: TestApp,
-    creative: Uuid,
-    vera: String,
-    client: Uuid,
-    tavern: String,
+pub(super) struct Hiring {
+    pub(super) app: TestApp,
+    pub(super) creative: Uuid,
+    pub(super) vera: String,
+    pub(super) client: Uuid,
+    pub(super) tavern: String,
 }
 
-async fn hiring(db: PgPool, client_country: &str) -> Hiring {
+pub(super) async fn hiring(db: PgPool, client_country: &str) -> Hiring {
     let app = people_app(db).await;
     hiring_on(app, client_country).await
 }
 
-async fn hiring_on(app: TestApp, client_country: &str) -> Hiring {
+pub(super) async fn hiring_on(app: TestApp, client_country: &str) -> Hiring {
     let (creative, vera) = live_creative(&app, "vera", "US", true).await;
     let (client, tavern) = app.user("Tavern Dev", client_country).await;
     listed_with(&app, client, "tavern", "released", "").await;
@@ -164,7 +169,7 @@ async fn hiring_on(app: TestApp, client_country: &str) -> Hiring {
     }
 }
 
-fn hire_body(extra: Value) -> Value {
+pub(super) fn hire_body(extra: Value) -> Value {
     let mut body = json!({
         "app_slug": "tavern", "skill": "pixel-art", "request_md": "A knight, 4 directions.",
         "confirm_adult": true, "exact_wording_ack": true
@@ -185,7 +190,7 @@ const STEPS: [&str; 6] = [
 ];
 
 impl Hiring {
-    async fn hire(&self, extra: Value) -> (StatusCode, Value) {
+    pub(super) async fn hire(&self, extra: Value) -> (StatusCode, Value) {
         call(
             &self.app,
             post("/v1/people/vera/hire", &self.tavern, hire_body(extra)),
@@ -195,7 +200,7 @@ impl Hiring {
 
     /// A job taken through the steps to `step`: requested, offered, accepted (whatever accepting
     /// leads to), in_progress (paid what's due on accepting), delivered, completed.
-    async fn job(&self, payment: &str, step: &str) -> String {
+    pub(super) async fn job(&self, payment: &str, step: &str) -> String {
         self.job_with(sprite_offer(payment), step).await
     }
 

@@ -890,7 +890,8 @@ export type ReportKind =
   | "team"
   | "chat_message"
   | "bounty"
-  | "news";
+  | "news"
+  | "work_request";
 
 export interface ReportReason {
   code: string;
@@ -945,6 +946,7 @@ export interface ModerationDecision {
     | "hide_team"
     | "hide_bounty"
     | "hide_news"
+    | "hide_work_request"
     | "suspend_account"
     | "warn";
   action_label: string;
@@ -1234,6 +1236,65 @@ export interface MyProfile extends Omit<ProfileInput, "confirm_adult"> {
   /** stripe, simulated (sandbox/development) or off. */
   payments: "stripe" | "simulated" | "off";
   status: PageStatus;
+}
+
+/** An open request on People (people/work_requests.rs `WorkRequest`). */
+export interface WorkRequest {
+  id: string;
+  title: string;
+  description_md: string;
+  skill: Skill;
+  /** YYYY-MM-DD */
+  wanted_by: string | null;
+  project: { slug: string; title: string };
+  /** The maker's display name. */
+  maker: string;
+  created_at: string;
+  expires_at: string;
+  /** The viewer posted it. */
+  mine: boolean;
+  /** Set when the viewer put their name forward. */
+  put_forward: { service_id: string | null; at: string } | null;
+  /** Only for its maker, and only from `one`, `mine`, `post` and `close`. */
+  owner: WorkRequestOwner | null;
+}
+
+export interface WorkRequestOwner {
+  status: "open" | "closed" | "expired" | "hidden";
+  /** Showing on the board (its project in the store); an open request may not be. */
+  on_board: boolean;
+  ended_at: string | null;
+  hidden_reason: string | null;
+  /** In the order received: at most 100 at a time. */
+  responses: WorkRequestName[];
+  /** How many names there are in all. */
+  responses_total: number;
+}
+
+/** Someone who put their name forward: their usual card, and the package they named while it's still theirs. */
+export interface WorkRequestName {
+  person: CreativeCard;
+  service: { id: string; name: string } | null;
+  at: string;
+}
+
+export interface MyWorkRequests {
+  posted: Array<WorkRequest & { owner: WorkRequestOwner }>;
+  put_forward: WorkRequest[];
+  /** The apps a new request can be for (in the store, not a dedicated server). */
+  projects: Array<{ slug: string; title: string }>;
+  /** They have an app at all, in the store or not. */
+  has_apps: boolean;
+  max_open: number;
+}
+
+export interface NewWorkRequest {
+  app_slug: string;
+  skill: string;
+  title: string;
+  description_md: string;
+  wanted_by: string | null;
+  confirm_adult: boolean;
 }
 
 /**
@@ -3245,7 +3306,7 @@ export const api = {
       country: string;
       authority: string;
       order: string;
-      subject_kind: "app" | "app_review" | "news" | "profile" | "team";
+      subject_kind: "app" | "app_review" | "news" | "profile" | "team" | "work_request";
       subject: string;
     }) => request<{ reference: string; minutes: number; label: string }>("POST", "/v1/admin/removal-orders", o),
     answerLegalRequest: (id: string, a: { status: string; response: string; user_notice: string }) =>
@@ -3640,6 +3701,26 @@ export const api = {
       request<CreativePage>("GET", `/v1/people/${encodeURIComponent(handle)}`),
     mine: () => request<MyProfile>("GET", "/v1/me/creative"),
     save: (p: ProfileInput) => request<MyProfile>("PUT", "/v1/me/creative", p),
+    /** Open requests on People (people/work_requests.rs). */
+    requests: {
+      list: (q: { skill?: string; offset?: number } = {}) =>
+        request<WorkRequest[]>("GET", `/v1/work-requests${query(q)}`),
+      /** `responses_offset`: for its maker, the names from that place on. */
+      one: (id: string, q: { responses_offset?: number } = {}) =>
+        request<WorkRequest>("GET", `/v1/work-requests/${encodeURIComponent(id)}${query(q)}`),
+      mine: () => request<MyWorkRequests>("GET", "/v1/me/work-requests"),
+      post: (r: NewWorkRequest) => request<WorkRequest>("POST", "/v1/work-requests", r),
+      close: (id: string) =>
+        request<WorkRequest>("POST", `/v1/work-requests/${encodeURIComponent(id)}/close`),
+      putForward: (id: string, service_id: string | null) =>
+        request<{ service_id: string | null; at: string }>(
+          "PUT",
+          `/v1/work-requests/${encodeURIComponent(id)}/response`,
+          { service_id },
+        ),
+      takeBack: (id: string) =>
+        request<void>("DELETE", `/v1/work-requests/${encodeURIComponent(id)}/response`),
+    },
     portfolio: () =>
       request<PortfolioOverview>("GET", "/v1/me/creative/portfolio"),
     checkPortfolio: (repo_url?: string) =>

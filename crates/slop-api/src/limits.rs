@@ -47,6 +47,10 @@ pub enum Action {
     CommitStatus,
     /// Posting or editing an app's news (news.rs).
     News,
+    /// Posting an open request on People.
+    WorkRequest,
+    /// Putting a name forward for an open request.
+    WorkResponse,
 }
 
 impl Action {
@@ -82,6 +86,8 @@ impl Action {
             Self::History => (120, HOUR),
             Self::CommitStatus => (20, HOUR),
             Self::News => (10, HOUR),
+            Self::WorkRequest => (10, DAY),
+            Self::WorkResponse => (30, DAY),
         };
         (n, Duration::from_secs(secs))
     }
@@ -111,6 +117,8 @@ impl Action {
             Self::History => "history requests",
             Self::CommitStatus => "commit status changes",
             Self::News => "news posts",
+            Self::WorkRequest => "new requests",
+            Self::WorkResponse => "names put forward",
         }
     }
 }

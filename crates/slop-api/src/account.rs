@@ -13,7 +13,8 @@
 //! - the maker's apps leave the store (installs keep working), since nobody can answer for them;
 //!   their signing keys stop working, their repository tokens and push subscriptions go, and
 //!   results on GitHub end (commit_status.rs; statuses already on GitHub stay);
-//! - what its AI agents wrote to SLAPorSLOP's admins (admin_messages.rs) is deleted;
+//! - what its AI agents wrote to SLAPorSLOP's admins (admin_messages.rs) is deleted, and so are
+//!   its open requests on People and its names put forward for other people's requests;
 //! - agreements, job records, reviews and moderation records stay as they were.
 //!
 //! An account with an unfinished People job, a payment it owes, or a bounty pledge being charged
@@ -174,6 +175,27 @@ const EXPORT: &[(&str, &str)] = &[
                                   from job_problems p where p.job_id = j.id))
                 order by j.created_at), '[]')
          from jobs j where $1 in (j.client_id, j.creative_id)",
+    ),
+    (
+        // Open requests the account posted on People, in every state (people/work_requests.rs).
+        // Who put their name forward is the creatives' data, not in this export.
+        "work_requests",
+        "select coalesce(jsonb_agg(jsonb_build_object('project', a.slug) || (to_jsonb(w) - 'user_id' - 'app_id')
+                order by w.created_at), '[]')
+         from work_requests w join apps a on a.id = w.app_id where w.user_id = $1",
+    ),
+    (
+        // The names the account put forward, taken back ones too. A request staff hid keeps
+        // its title out of it.
+        "work_request_responses",
+        "select coalesce(jsonb_agg(jsonb_build_object(
+                    'request', case when w.hidden_reason is null then w.title end, 'project', a.slug,
+                    'package', r.service_id, 'since', r.created_at, 'taken_back', r.withdrawn_at)
+                order by r.created_at), '[]')
+         from work_request_responses r
+         join work_requests w on w.id = r.request_id
+         join apps a on a.id = w.app_id
+         where r.creative_id = $1",
     ),
     (
         "donations",
@@ -582,6 +604,14 @@ pub async fn close_account(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
+    }
+    // Open requests go, hidden ones too, and the names this person put forward for other
+    // people's (the users row stays, so nothing cascades from it).
+    for sql in [
+        "delete from work_request_responses where creative_id = $1",
+        "delete from work_requests where user_id = $1",
+    ] {
+        sqlx::query(sql).bind(user_id).execute(&mut *tx).await?;
     }
     // Their agents' messages to the admins go; ones addressed to them (as staff) reach every
     // admin instead.

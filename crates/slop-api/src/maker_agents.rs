@@ -170,6 +170,9 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     // withdrawing or cancelling. Those stay with the person.
     ("GET", "/me/jobs", false, Slug::People),
     ("GET", "/me/creative", false, Slug::People),
+    // Open requests: the person's own, with who put their name forward, and the ones they put
+    // their name forward for.
+    ("GET", "/me/work-requests", false, Slug::People),
     // The portfolio: where it stands, and reading it again from the repository, which queues
     // what's new for a person's review, like an app's pictures. Changing a repository the person
     // set (portfolio.rs refuses it from a token), the works' order and the page itself stay
@@ -195,6 +198,9 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     // only with People access. It's here, before the page, so the page's `*` doesn't take it.
     ("GET", "/people/discover", false, Slug::People),
     ("GET", "/people/*", false, Slug::Any),
+    // The board of open requests is public: any token may read it. Posting, closing, putting a
+    // name forward and hiring are the person's.
+    ("GET", "/work-requests", false, Slug::Any),
     // Writing to SLAPorSLOP's admins: any token, since it changes nothing of the maker's. It has its
     // own limits per account (admin_messages.rs).
     ("GET", "/staff-contacts", false, Slug::Any),
@@ -1568,6 +1574,19 @@ pub(crate) const TOOLS: &[Tool] = &[
         required: &[],
     },
     Tool {
+        name: "find_work_requests",
+        description: "Open requests on People: work that makers say their projects need, newest first (nothing else orders them). Each has `id`, `title`, `description_md`, `skill`, `project` (the app), `maker` (a display name), `wanted_by` (a date or null), `created_at` and `expires_at`. There is no budget: the creative sets the price in their quote. SLAPorSLOP doesn't match, rank or suggest anyone. Putting a name forward is the person's to do, on the site: send them to /people?view=requests&request= followed by the `id`.",
+        method: Method::GET,
+        path: "/v1/work-requests",
+        properties: || {
+            json!({
+                "skill": s("One skill, by its slug from list_skills (e.g. pixel-art, music)"),
+                "offset": { "type": "integer", "description": "How many to skip: 50 come back at a time" },
+            })
+        },
+        required: &[],
+    },
+    Tool {
         name: "my_people_page",
         description: "Your person's own People page as they saved it: handle, headline, about, skills, services and prices, links, portfolio repository, and where the page stands (`status`: draft, waiting for review, turned down, live or hidden). 404 when they have none yet. Changing it is for the person (you can prepare a link that fills the editor in: see the portfolio guide). Needs a token with People access.",
         method: Method::GET,
@@ -1600,6 +1619,14 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "People jobs you're a side of (as the creative or the client): requests waiting for your quote, offers, work in progress, with each job's step and what it waits for. Needs a token with People access.",
         method: Method::GET,
         path: "/v1/me/jobs",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "my_work_requests",
+        description: "Your person's open requests on People. `posted`: the requests they posted, each with `owner.status` (open, closed, expired or hidden) and `owner.responses`: who put their name forward, in the order they did, each with the page's `handle` (read it with get_person) and the package they named, if any (the first 100 per request; `owner.responses_total` is how many there are). `put_forward`: open requests your person put their name forward for. `projects`: the apps a new request can be for. Posting, closing, putting a name forward and hiring are the person's to do; you can prepare a request as a link (maker_guide, \"Open requests\"). Needs a token with People access.",
+        method: Method::GET,
+        path: "/v1/me/work-requests",
         properties: || json!({}),
         required: &[],
     },
@@ -2059,7 +2086,12 @@ mod tests {
 
     #[test]
     fn any_token_looks_at_people_and_only_looks() {
-        for p in ["/v1/people", "/v1/people/skills", "/v1/people/vera"] {
+        for p in [
+            "/v1/people",
+            "/v1/people/skills",
+            "/v1/people/vera",
+            "/v1/work-requests",
+        ] {
             assert_eq!(
                 route(&Method::GET, p),
                 Some((false, Slug::Any, None)),
@@ -2072,6 +2104,7 @@ mod tests {
             "/v1/me/creative",
             "/v1/me/creative/portfolio",
             "/v1/people/discover",
+            "/v1/me/work-requests",
         ] {
             assert_eq!(
                 route(&Method::GET, p),
@@ -2092,6 +2125,14 @@ mod tests {
             (Method::PUT, "/v1/me/creative/portfolio/order"),
             (Method::POST, "/v1/me/creative/stripe"),
             (Method::PUT, "/v1/apps/pong/update-settings"),
+            // Open requests: posting, one by id, closing, putting a name forward and taking it
+            // back are the person's.
+            (Method::POST, "/v1/work-requests"),
+            (Method::GET, "/v1/work-requests/x"),
+            (Method::POST, "/v1/work-requests/x/close"),
+            (Method::PUT, "/v1/work-requests/x/response"),
+            (Method::DELETE, "/v1/work-requests/x/response"),
+            (Method::POST, "/v1/me/work-requests"),
         ] {
             assert_eq!(route(&m, p), None, "{m} {p}");
         }
@@ -2159,6 +2200,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(path, "/v1/people?limit=5&skill=pixel-art&taking_work=true");
+        let (m, path, body) = call(
+            "find_work_requests",
+            json!({ "skill": "music", "offset": 50 }),
+        )
+        .unwrap();
+        assert_eq!(
+            (m, path.as_str(), body),
+            (Method::GET, "/v1/work-requests?offset=50&skill=music", None)
+        );
         let (_, path, _) = call("list_releases", json!({ "slug": "pong", "limit": 1 })).unwrap();
         assert_eq!(path, "/v1/apps/pong/releases?limit=1");
         let (m, path, body) = call("get_history", json!({ "slug": "pong", "days": 90 })).unwrap();

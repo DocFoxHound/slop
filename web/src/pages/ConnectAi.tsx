@@ -223,7 +223,8 @@ function ApproveForm({ id, request, apps, who }: { id: string; request: AiConnec
         </fieldset>
         <label className="check">
           <input type="checkbox" checked={people} onChange={(e) => setPeople(e.target.checked)} /> People too: see job requests,
-          send quotes, propose changes, talk in job conversations, and have your portfolio checked and sent for review
+          send quotes, propose changes, talk in job conversations, have your portfolio checked and sent for review, and
+          see your open requests and who put their name forward
         </label>
         <label>
           For how long

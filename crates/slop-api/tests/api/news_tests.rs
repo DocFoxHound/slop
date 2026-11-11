@@ -1862,7 +1862,7 @@ async fn a_removal_order_can_name_a_news_post(db: PgPool) {
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         body_json(res).await["error"]["message"],
-        "app, app_review, news, profile or team"
+        "app, app_review, news, profile, team or work_request"
     );
 
     let res = app.send(order("news", &id)).await;

@@ -1,16 +1,86 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Shared pieces for People (DESIGN §15): accent colours, the AI-use badge, ratings, portfolio
-// works and creative cards.
+// works and creative cards, and the bar both of People's views have (the directory and Open
+// requests): their tabs, the skill buttons and the person's own links.
 
 import { useState, type CSSProperties } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 
-import type { Accent, AiUse, CreativeCard, CreativePage, CreativeRating, Work } from "../api";
+import type { Accent, AiUse, CreativeCard, CreativePage, CreativeRating, MyProfile, Work } from "../api";
 import type { StoreIconName } from "../storeIcons";
 import { money } from "../format";
 import { isDesktop, openExternal } from "../platform";
 import { Avatar } from "./Avatar";
+import { PageStateBadge } from "./PeopleStatus";
 import { SkillIcon, StoreIcon } from "./StoreIcons";
+
+/**
+ * People's two views: the directory (/people) and Open requests (/people?view=requests). Switching
+ * drops the other view's filters. Inside the page, so no new link in the site's navigation.
+ */
+export function PeopleTabs({ view }: { view: "people" | "requests" }) {
+  const [, setParams] = useSearchParams();
+  return (
+    <div className="seg people-tabs" role="tablist" aria-label="People and open requests">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === "people"}
+        className={view === "people" ? "on" : ""}
+        onClick={() => setParams({}, { replace: true })}
+      >
+        People
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === "requests"}
+        className={view === "requests" ? "on" : ""}
+        onClick={() => setParams({ view: "requests" }, { replace: true })}
+      >
+        Open requests
+      </button>
+    </div>
+  );
+}
+
+/** A skill in the People bar: its icon, with its name (and how many offer it) on hover or focus. */
+export function SkillButton({ slug, name, count, on, onPick }: { slug: string; name: string; count?: number; on: boolean; onPick: () => void }) {
+  const tip = count === undefined ? name : `${name} · ${count.toLocaleString()}`;
+  return (
+    <button
+      type="button"
+      className={`skill-btn ${on ? "on" : ""}`}
+      aria-pressed={on}
+      aria-label={count === undefined ? name : `${name}, ${count.toLocaleString()} ${count === 1 ? "person" : "people"}`}
+      data-tip={tip}
+      onClick={onPick}
+    >
+      <SkillIcon slug={slug || "everyone"} size={22} />
+    </button>
+  );
+}
+
+/** The People bar's own links: the person's jobs, and their People page (with where it stands) or making one. */
+export function PeopleNavActions({ mine }: { mine: MyProfile | null | undefined }) {
+  return (
+    <div className="people-nav-actions">
+      <Link className="btn small" to="/people/jobs">
+        Your jobs
+      </Link>
+      {mine ? (
+        <Link className="btn small slime" to={`/people/${mine.handle}`}>
+          Your People page
+          {mine.status.state !== "live" && <PageStateBadge status={mine.status} />}
+        </Link>
+      ) : (
+        <Link className="btn small slime" to="/people/me">
+          Offer your services
+        </Link>
+      )}
+    </div>
+  );
+}
 
 /** Accent colours a creative can pick; each keeps dark text readable on it (A11Y-1). */
 export const ACCENTS: Record<Accent, { name: string; color: string; ink: string }> = {

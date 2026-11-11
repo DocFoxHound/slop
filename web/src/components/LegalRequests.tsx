@@ -278,7 +278,7 @@ function RemovalOrder({ onDone }: { onDone: () => void }) {
     country: "",
     authority: "",
     order: "",
-    subject_kind: "app" as "app" | "app_review" | "news" | "profile" | "team",
+    subject_kind: "app" as "app" | "app_review" | "news" | "profile" | "team" | "work_request",
     subject: "",
   });
   const [done, setDone] = useState<string>();
@@ -347,6 +347,7 @@ function RemovalOrder({ onDone }: { onDone: () => void }) {
             <option value="news">A news post (its ID)</option>
             <option value="profile">A People profile (the handle)</option>
             <option value="team">A team (its address)</option>
+            <option value="work_request">An open request on People (its ID)</option>
           </select>
         </label>
         <label>

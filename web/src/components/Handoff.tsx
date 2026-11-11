@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // What the forms show for a handoff link from someone's AI assistant (handoff.ts): what it filled
 // in and what it left out, that it couldn't be read, or, signed out, that it waits for sign-in.
+// The hire form also opens filled in from the person's own open request on People.
 
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -33,7 +34,11 @@ function names(fields: string[], labels: Record<string, string>): string {
   return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
 }
 
-/** At the top of a form an AI assistant filled in: check it all, then press the button yourself. */
+/**
+ * At the top of a form an AI assistant filled in: check it all, then press the button yourself.
+ * `source` "request": the hire form filled in from the person's own open request on People (the
+ * click that opened it said so, in the router's state; a link can't).
+ */
 export function HandoffNotice<T>({
   fill,
   labels,
@@ -41,6 +46,7 @@ export function HandoffNotice<T>({
   button,
   onClear,
   clearLabel,
+  source = "assistant",
   children,
 }: {
   fill: Fill<T>;
@@ -51,13 +57,14 @@ export function HandoffNotice<T>({
   button: string;
   onClear: () => void;
   clearLabel: string;
+  source?: "assistant" | "request";
   children?: ReactNode;
 }) {
+  const from = source === "request" ? "Filled in from your open request" : "Filled in by your AI assistant";
   return (
-    <section className="notice handoff-notice" role="status" aria-label="Filled in by your AI assistant">
+    <section className="notice handoff-notice" role="status" aria-label={from}>
       <p>
-        <b>Filled in by your AI assistant.</b> Check everything, especially {check}, then press <b>{button}</b>. Nothing is sent
-        until you do.
+        <b>{from}.</b> Check everything, especially {check}, then press <b>{button}</b>. Nothing is sent until you do.
       </p>
       {fill.filled.length > 0 ? (
         <p className="handoff-filled">Filled in: {names(fill.filled, labels)}.</p>
