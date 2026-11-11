@@ -1,16 +1,16 @@
 ---
 title: Content Policy
-version: 2026-11-08
-summary: Dedicated servers are now published with the game they're for, and shown on its store page. As before, the rule on code from outside SLAPorSLOP doesn't cover them or browser games, browser games (which have no build) aren't covered by the rule on builds, and every other rule applies to both.
+version: 2026-11-11
+summary: News posts and open requests on People are now covered: the rules for each, and that we can hide one. The policy now also names teams and bounties, which we could already hide. Nothing else changes.
 ---
 > **Draft for legal review.** This policy hasn't been reviewed by a lawyer yet.
 
-This policy says what isn't allowed on SLAPorSLOP, in apps, store pages, reviews, profiles and messages, and how we act on it.
+This policy says what isn't allowed on SLAPorSLOP, in apps, store pages, news posts, reviews, profiles, teams, bounties, open requests on People and messages, and how we act on it.
 
 ## How moderation works
 - **Anyone can report** something with the Report button. You get a reference number.
 - **People review reports.** Urgent reports (child abuse, threats to someone's life or safety, intimate images shared without consent) are handled first, within 24 hours. Other serious reports (malware, scams, illegal content, builds that don't match their source, apps that run code from outside SLAPorSLOP) are also reviewed within 24 hours. Intimate images are removed within 48 hours of a valid request at the latest.
-- **What we can do:** take an app out of the store, hide a review or profile, remove a maker's reply under a review, warn someone, or suspend an account. We never hide a review because it's negative.
+- **What we can do:** take an app out of the store, hide a review, a profile, a team, a bounty, a news post or an open request on People, remove a maker's reply under a review, warn someone, or suspend an account. We never hide a review because it's negative.
 - **You're told why.** Each decision comes with a statement of reasons: what we did, the facts, the rule or law, whether automated tools were used, and how to appeal.
 - **Appeals.** Within six months, from your account page. A person reviews the appeal and either keeps or reverses the decision.
 - **Repeat breaches** lead to suspension. Three upheld copyright decisions end an account (our repeat-infringer policy).
@@ -33,6 +33,12 @@ An app may only run code that came in a release or mod SLAPorSLOP checked. It mu
 ### Browser games and dedicated servers
 - **Browser games** play on their maker's own website instead of being downloaded. SLAPorSLOP checks the address before players see it and again whenever it changes, but not what the site serves. The rules on builds and on code from outside SLAPorSLOP don't apply to them. Every other rule does: the site must match its store page, mustn't sell anything in the game, and mustn't carry malware, scams, phishing or anything else this policy bans.
 - **Dedicated servers** are programs people run on their own computer or a host so others can play a game. Each is published by the game's maker with the game it's for, and shown on that game's store page (some from before then are apps in the Servers category). A server may download and run mods, maps and plugins from other places, so the rule on code from outside SLAPorSLOP doesn't cover it. It's still built from its source and checked like any other release, and every other rule applies.
+
+### News posts
+A maker can post short news on their app's store page. People who marked the app Interested and left news on are told. A news post is part of the app's page: every rule here applies to it, in particular "Misleading pages" and "Spam". A news post must not offer anything for votes, reviews or placement. While a post we hid stays hidden, it can't be edited, and a post with the same headline and text can't be posted on that app.
+
+### Open requests on People
+A maker can post an open request on People for work that one of their projects in the store needs. A request is for real work on the project it names, described truthfully. No requests posted to advertise something else and no repeats of the same request (see "Misleading pages" and "Spam"), and nothing that this policy doesn't allow anywhere else. On the board, requests are listed newest first, and nobody can pay to have one shown higher or longer.
 
 ### Scams and fraud
 No scams, phishing, impersonation or fake offers.
@@ -68,7 +74,7 @@ Apps on SLAPorSLOP are open source, and must follow the licences of everything t
 No gambling, loot boxes, paid random rewards, or anything sold inside an app.
 
 ### Misleading pages
-Store pages and profiles must describe what they offer truthfully, including how AI was used.
+Store pages, news posts, profiles, teams and open requests on People must describe what they offer or ask for truthfully, including how AI was used.
 
 ### Fake, paid or off-topic reviews
 Reviews must be honest and about the thing reviewed. Nobody may offer anything for a vote or a review.
