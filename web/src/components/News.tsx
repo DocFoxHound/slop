@@ -236,17 +236,25 @@ export function NewsPanel({ slug }: { slug: string }) {
   const [gone, setGone] = useState<string[]>([]);
   const panel = useRef<HTMLElement>(null);
   const focusTo = useRef<FocusTo | undefined>(undefined);
+  // Counts focus requests, so the move below runs after the render that has the change in it,
+  // not in an effect still due from an earlier render (a press right after the list came in).
+  const [focusAsked, setFocusAsked] = useState(0);
+  const focusOn = (to: FocusTo) => {
+    focusTo.current = to;
+    setFocusAsked((n) => n + 1);
+  };
   useEffect(() => {
     const to = focusTo.current;
-    if (!to || !panel.current) return;
-    if (typeof to === "object" && "older" in to) {
-      // Once the older posts are in: the first of them, or the heading if none came.
-      if (page.loading || page.data === to.from) return;
-      focusTo.current = undefined;
-      const rows = panel.current.querySelectorAll<HTMLElement>("[data-post]");
-      (rows[to.older] ?? panel.current.querySelector<HTMLElement>("h2"))?.focus();
-      return;
-    }
+    if (!to || !panel.current || typeof to !== "object" || !("older" in to)) return;
+    // Once the older posts are in: the first of them, or the heading if none came.
+    if (page.loading || page.data === to.from) return;
+    focusTo.current = undefined;
+    const rows = panel.current.querySelectorAll<HTMLElement>("[data-post]");
+    (rows[to.older] ?? panel.current.querySelector<HTMLElement>("h2"))?.focus();
+  });
+  useEffect(() => {
+    const to = focusTo.current;
+    if (!to || !panel.current || (typeof to === "object" && "older" in to)) return;
     focusTo.current = undefined;
     const selector =
       to === "write"
@@ -261,7 +269,7 @@ export function NewsPanel({ slug }: { slug: string }) {
                 ? `[data-focus="confirm-${to.confirm}"]`
                 : `[data-focus="keep-${to.keep}"]`;
     (panel.current.querySelector<HTMLElement>(selector) ?? panel.current.querySelector<HTMLElement>("h2"))?.focus();
-  });
+  }, [focusAsked]);
 
   if (page.error && !page.data) {
     return (
@@ -278,7 +286,7 @@ export function NewsPanel({ slug }: { slug: string }) {
   if (outOfStore && posts.length === 0) return null;
 
   const close = (to: FocusTo) => {
-    focusTo.current = to;
+    focusOn(to);
     setWriting(false);
     setEditing(undefined);
   };
@@ -290,12 +298,12 @@ export function NewsPanel({ slug }: { slug: string }) {
       setGone((g) => [...g, n.id]);
       setConfirming(undefined);
       setSaid("Removed.");
-      focusTo.current = "heading";
+      focusOn("heading");
       page.reload();
     } catch (err) {
       setRowError({ id: n.id, message: err instanceof ApiError ? err.message : String(err) });
       // The button was disabled while it worked, which loses the keyboard's focus: back to it.
-      focusTo.current = { confirm: n.id };
+      focusOn({ confirm: n.id });
     } finally {
       setBusy(false);
     }
@@ -409,7 +417,7 @@ export function NewsPanel({ slug }: { slug: string }) {
                         className="btn small ghost"
                         data-focus={`keep-${n.id}`}
                         onClick={() => {
-                          focusTo.current = { remove: n.id };
+                          focusOn({ remove: n.id });
                           setRowError(undefined);
                           setConfirming(undefined);
                         }}
@@ -440,7 +448,7 @@ export function NewsPanel({ slug }: { slug: string }) {
                         data-focus={`remove-${n.id}`}
                         aria-label={`Remove: ${n.headline}`}
                         onClick={() => {
-                          focusTo.current = { keep: n.id };
+                          focusOn({ keep: n.id });
                           setRowError(undefined);
                           setConfirming(n.id);
                         }}

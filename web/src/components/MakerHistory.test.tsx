@@ -106,16 +106,18 @@ describe("HistoryPanel", () => {
     expect(days90.getAttribute("aria-pressed")).toBe("true");
     expect(days30.getAttribute("aria-pressed")).toBe("false");
     // The open table stays open and fills with the new range; focus stays on the button.
-    await waitFor(() => expect(within(within(panel()).getByRole("table")).getAllByRole("row")).toHaveLength(91));
+    // Rows are counted with a plain selector: a role query over hundreds of rows is slow in jsdom.
+    const tableRows = () => within(panel()).getByRole("table").querySelectorAll("tr");
+    await waitFor(() => expect(tableRows()).toHaveLength(91));
     expect(document.activeElement).toBe(days90);
     expect(panel().getAttribute("aria-busy")).toBe("false");
     // 90 days are MM-DD; a year names the year too, so the same MM-DD can't be read as the wrong year.
-    expect(within(panel()).getAllByRole("row")[1].firstElementChild?.textContent).toBe("08-13");
+    expect(tableRows()[1].firstElementChild?.textContent).toBe("08-13");
 
     fireEvent.click(screen.getByRole("button", { name: "A year" }));
     expect(history).toHaveBeenLastCalledWith("pong", 365);
-    await waitFor(() => expect(within(within(panel()).getByRole("table")).getAllByRole("row")).toHaveLength(366));
-    const rows = within(panel()).getAllByRole("row");
+    await waitFor(() => expect(tableRows()).toHaveLength(366));
+    const rows = tableRows();
     expect(rows[1].firstElementChild?.textContent).toBe("2025-11-11");
     expect(rows[365].firstElementChild?.textContent).toBe("2026-11-10");
   });
