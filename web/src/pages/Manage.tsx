@@ -16,6 +16,7 @@ import { DemoPanel } from "../components/Demo";
 import { BugReportsPanel, ReleaseFeedbackPanel } from "../components/BugReports";
 import { CommitStatusPanel } from "../components/CommitStatus";
 import { HistoryPanel } from "../components/MakerHistory";
+import { NewsPanel } from "../components/News";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, playsInBrowser } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -91,6 +92,9 @@ export function Manage() {
           {!app.data.private && !server && app.data.stage !== "coming_soon" && <RatingBreakdown slug={slug} />}
           <BugReportsPanel slug={slug} repoUrl={app.data.repo_url} accepting={app.data.bug_reports} />
           {!app.data.private && <ReleaseFeedbackPanel slug={slug} />}
+          {/* News is for an app whose own page is in the store: never a Private app or a dedicated
+              server (crates/slop-api/src/news.rs). A frozen app's Frozen box above says how to fix it. */}
+          {!app.data.private && !server && <NewsPanel slug={slug} />}
           <Requests slug={slug} changes={m.changes} onChanged={changed} />
         </div>
         <div className="maker-side">

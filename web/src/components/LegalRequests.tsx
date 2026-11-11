@@ -278,7 +278,7 @@ function RemovalOrder({ onDone }: { onDone: () => void }) {
     country: "",
     authority: "",
     order: "",
-    subject_kind: "app" as "app" | "app_review" | "profile" | "team",
+    subject_kind: "app" as "app" | "app_review" | "news" | "profile" | "team",
     subject: "",
   });
   const [done, setDone] = useState<string>();
@@ -344,6 +344,7 @@ function RemovalOrder({ onDone }: { onDone: () => void }) {
           <select value={f.subject_kind} onChange={(e) => set("subject_kind", e.target.value as typeof f.subject_kind)}>
             <option value="app">An app (its address)</option>
             <option value="app_review">A review (its ID)</option>
+            <option value="news">A news post (its ID)</option>
             <option value="profile">A People profile (the handle)</option>
             <option value="team">A team (its address)</option>
           </select>

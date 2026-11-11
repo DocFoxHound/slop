@@ -260,6 +260,8 @@ pub async fn end_grace(state: &AppState) -> anyhow::Result<usize> {
     .fetch_all(&mut *tx)
     .await?;
     for (id, maker, slug, title, browser) in &gone {
+        // Its news leaves people's bells with it.
+        notify::news_gone_for_app(&mut tx, *id).await?;
         notify::send(
             &mut tx,
             Notice {

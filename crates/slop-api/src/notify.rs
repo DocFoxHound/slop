@@ -7,8 +7,9 @@
 //! outbox. Signed-out reporters, who have no account, get their report's outcome through
 //! `email` straight into the outbox.
 //!
-//! Only product messages: job steps, Interested apps moving on, moderation decisions, report
-//! outcomes and changes to the terms and policies. Never marketing (LEGAL-GUIDANCE TERMS-3).
+//! Only product messages: job steps, Interested apps moving on, news from the makers of
+//! Interested apps (under the bell only), moderation decisions, report outcomes and changes to the
+//! terms and policies. Never marketing (LEGAL-GUIDANCE TERMS-3).
 
 use std::time::Duration as StdDuration;
 
@@ -74,6 +75,19 @@ pub const CATEGORIES: &[(&str, &str)] = &[
         "Changes to SLAPorSLOP's terms and policies, before they take effect",
     ),
 ];
+
+/// Kinds that show under the bell only: never emailed, never pushed to a device, and no email
+/// switch on the account page. Maker news is here until the lawyer has answered whether emailing
+/// it is a product message or marketing (LEGAL-GUIDANCE TERMS-3). To switch email on for a kind
+/// later, move its entry to `CATEGORIES`. Moving a kind out of here makes `Notifications.tsx`
+/// KINDS and the Privacy Policy false: change both, and publish a new policy version, in the same
+/// change.
+pub const BELL_ONLY: &[(&str, &str)] = &[("news", "News from makers of apps you're Interested in")];
+
+/// The bell-only kinds' names, for binding.
+pub fn bell_only() -> Vec<&'static str> {
+    BELL_ONLY.iter().map(|(k, _)| *k).collect()
+}
 
 /// Pending notifications older than this aren't emailed (e.g. when email is switched on later).
 const EMAIL_WITHIN: time::Duration = time::Duration::hours(24);
@@ -214,6 +228,109 @@ pub(crate) async fn email_user(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Maker news (news.rs): under the bell only
+
+/// Tells everyone with a current Interested mark and news on for this app, under the bell only:
+/// written as already pushed and never emailed. Unread news from one app is one notice with a
+/// count, showing the newest post. Returns how many people were told.
+///
+/// One statement in the poster's transaction, one row per person who is told. With the index
+/// `interests_app` this is the same work as `interested::stage_moved` does for the same people,
+/// and it happens at most once per app per 24 hours. Ordered by person, so two statements on the
+/// same notices take their locks in one order.
+pub(crate) async fn news_posted(
+    conn: &mut sqlx::PgConnection,
+    app_id: Uuid,
+    post_id: Uuid,
+    app_title: &str,
+    slug: &str,
+    headline: &str,
+) -> sqlx::Result<u64> {
+    // Open, not suspended, not the maker, and the app is in their age view (policy.rs).
+    let sql = format!(
+        "insert into notifications (id, user_id, category, title, body, link, collapse_key, email_status, pushed_at, news_id)
+         select gen_random_uuid(), i.user_id, 'news', $2, $3, $4, $5, 'skipped', now(), $6
+         from interests i
+         join users u on u.id = i.user_id
+         join apps a on a.id = i.app_id
+         where i.app_id = $1 and i.news
+           and u.closed_at is null and u.suspended_at is null
+           and u.id <> a.maker_id
+           and a.min_age <= {}
+         order by i.user_id
+         on conflict (user_id, collapse_key) where read_at is null and collapse_key is not null
+         do update set count = notifications.count + 1, title = excluded.title, body = excluded.body,
+                       created_at = now(), news_id = excluded.news_id",
+        crate::policy::account_max_min_age_sql("u")
+    );
+    Ok(sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(app_id)
+        .bind(clip(&format!("{app_title}: news from its maker"), 200))
+        .bind(clip(headline, 1000))
+        .bind(format!("/app/{slug}#news"))
+        .bind(format!("news:{app_id}"))
+        .bind(post_id)
+        .execute(conn)
+        .await?
+        .rows_affected())
+}
+
+// The functions below take a post's notices in person order, as `news_posted` does, so two of
+// them never wait on each other's rows in a circle. Their callers hold the post's row (or the
+// app's) first.
+
+/// A post was hidden (or is about to be removed): its notices go.
+pub(crate) async fn news_withdrawn(
+    conn: &mut sqlx::PgConnection,
+    post_id: Uuid,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "delete from notifications where id in (
+             select id from notifications where news_id = $1 order by user_id, id for update)",
+    )
+    .bind(post_id)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// A post's headline changed: its notices say the new one. Nobody is told again.
+pub(crate) async fn news_reworded(
+    conn: &mut sqlx::PgConnection,
+    post_id: Uuid,
+    headline: &str,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "update notifications set body = $2 where id in (
+             select id from notifications where news_id = $1 order by user_id, id for update)",
+    )
+    .bind(post_id)
+    .bind(clip(headline, 1000))
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// The app's page left the store: every notice about its news goes. Nobody is told again if it
+/// comes back. Called by a staff delisting (moderation.rs) and at the end of a frozen app's grace
+/// (frozen.rs); every other way out of the store is swept within the hour (news.rs `cleanup`).
+pub(crate) async fn news_gone_for_app(
+    conn: &mut sqlx::PgConnection,
+    app_id: Uuid,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "delete from notifications where id in (
+             select id from notifications
+             where news_id in (select id from app_news where app_id = $1)
+             order by user_id, id for update)",
+    )
+    .bind(app_id)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
 // The bell
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -254,21 +371,21 @@ struct YourToken {
 }
 
 /// The categories a caller doesn't see: a maker's AI agent reads only what's about maker work,
-/// never chats, friends or account security, and People jobs only with a token allowed to
-/// handle them.
+/// never chats, friends or account security, nor news about apps the person follows (that isn't
+/// maker work), and People jobs only with a token allowed to handle them.
 fn hidden_for(user: &CurrentUser) -> Vec<&'static str> {
     match &user.agent {
-        Some(agent) if agent.people => vec!["chat", "friends", "security"],
-        Some(_) => vec!["chat", "friends", "security", "jobs"],
+        Some(agent) if agent.people => vec!["chat", "friends", "security", "news"],
+        Some(_) => vec!["chat", "friends", "security", "jobs", "news"],
         None => Vec::new(),
     }
 }
 
-/// A kind of notification named in a request: one of `CATEGORIES`.
+/// A kind of notification named in a request: one of `CATEGORIES` or `BELL_ONLY`.
 fn known_category(category: Option<&str>) -> ApiResult<Option<&str>> {
     match category {
         None | Some("") => Ok(None),
-        Some(c) if CATEGORIES.iter().any(|(k, _)| *k == c) => Ok(Some(c)),
+        Some(c) if CATEGORIES.iter().chain(BELL_ONLY).any(|(k, _)| *k == c) => Ok(Some(c)),
         Some(c) => Err(ApiError::invalid(
             "category",
             format!("\"{c}\" isn't a kind of notification"),
@@ -300,6 +417,10 @@ struct ListQuery {
     before: Option<Uuid>,
     /// How many, 1 to 100 (60 when left out).
     limit: Option<i64>,
+    /// The bell and the notifications page send true. Without it the answer leaves out the
+    /// bell-only kinds, so a service worker (which sends no query, web/public/sw.js) can never
+    /// show one on a device.
+    bell: Option<bool>,
 }
 
 async fn list(
@@ -309,7 +430,10 @@ async fn list(
 ) -> ApiResult<Json<Inbox>> {
     let category = known_category(q.category.as_deref())?;
     let limit = q.limit.unwrap_or(PAGE).clamp(1, 100);
-    let hidden = hidden_for(&user);
+    let mut hidden = hidden_for(&user);
+    if q.bell != Some(true) {
+        hidden.extend(bell_only());
+    }
     // Newest first; a page continues from the row it names, which must be the caller's.
     let mut items: Vec<Item> = sqlx::query_as(
         "select id, category, title, body, link, count, created_at, read_at is not null as read
@@ -567,21 +691,26 @@ fn smtp_url(raw: &str) -> String {
 /// Pending notifications → outbox rows for users who want that category by email.
 pub async fn queue_emails(db: &PgPool, config: &Config) -> anyhow::Result<usize> {
     let mut tx = db.begin().await?;
-    // Too old to be news, or for users who don't want them: skipped.
+    // Too old to be news, bell-only kinds, or for users who don't want them: skipped.
     sqlx::query(
         "update notifications n set email_status = 'skipped'
          from users u where u.id = n.user_id and n.email_status = 'pending'
            and (n.created_at < now() - $1 or u.email is null or u.closed_at is not null
+                or n.category = any($2)
                 or coalesce((u.email_prefs->>n.category)::boolean, true) = false)",
     )
     .bind(EMAIL_WITHIN)
+    .bind(bell_only())
     .execute(&mut *tx)
     .await?;
     let rows: Vec<(Uuid, String, String, String, String, String)> = sqlx::query_as(
         "select n.id, u.email, u.display_name, n.title, n.body, n.link from notifications n
          join users u on u.id = n.user_id where n.email_status = 'pending'
+           and not (n.category = any($1))
          order by n.created_at limit 200 for update of n skip locked",
     )
+    // A bell-only kind written since the skip above is still never emailed.
+    .bind(bell_only())
     .fetch_all(&mut *tx)
     .await?;
     for (id, to, name, title, body, link) in &rows {
@@ -679,4 +808,23 @@ pub async fn cleanup(db: &PgPool) -> sqlx::Result<()> {
     .execute(db)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BELL_ONLY, CATEGORIES, bell_only, known_category};
+
+    #[test]
+    fn bell_only_kinds_are_not_email_kinds() {
+        for (kind, _) in BELL_ONLY {
+            assert!(
+                !CATEGORIES.iter().any(|(c, _)| c == kind),
+                "{kind} would get an email switch"
+            );
+        }
+        assert_eq!(bell_only(), ["news"]);
+        assert_eq!(known_category(Some("news")).unwrap(), Some("news"));
+        assert_eq!(known_category(Some("jobs")).unwrap(), Some("jobs"));
+        assert!(known_category(Some("spam")).is_err());
+    }
 }

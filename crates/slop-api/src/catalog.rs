@@ -883,6 +883,8 @@ struct AppDetail {
     is_mine: bool,
     /// The viewer marked it Interested.
     is_interested: bool,
+    /// The viewer marked it Interested and wants its maker's news under the bell (news.rs).
+    interested_news: bool,
     /// For a community branch: the app it branches from, and what it changes (DESIGN §9).
     branch: Option<crate::branches::BranchInfo>,
     /// For an app: its community builds in the store.
@@ -1087,6 +1089,17 @@ async fn load_detail(
         .play_address
         .filter(|_| is_mine || summary.stage != AppStage::ComingSoon);
     let in_browser = summary.plays_in_browser;
+    // The viewer's Interested mark, if any, and whether it brings the maker's news.
+    let news: Option<bool> = match user {
+        Some(u) => {
+            sqlx::query_scalar("select news from interests where user_id = $1 and app_id = $2")
+                .bind(u.id)
+                .bind(extra.id)
+                .fetch_optional(&state.db)
+                .await?
+        }
+        None => None,
+    };
     Ok(AppDetail {
         summary,
         description_md: extra.description_md,
@@ -1140,18 +1153,8 @@ async fn load_detail(
         community,
         server_game: crate::branches::server_for(&state.db, extra.id).await?,
         servers: crate::branches::servers(state, extra.id, user.map(|u| u.id), policy).await?,
-        is_interested: match user {
-            Some(u) => {
-                sqlx::query_scalar(
-                    "select exists (select 1 from interests where user_id = $1 and app_id = $2)",
-                )
-                .bind(u.id)
-                .bind(extra.id)
-                .fetch_one(&state.db)
-                .await?
-            }
-            None => false,
-        },
+        is_interested: news.is_some(),
+        interested_news: news.unwrap_or(false),
     })
 }
 

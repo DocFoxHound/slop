@@ -49,6 +49,7 @@ pub mod maker_keys;
 pub mod manage;
 pub mod media;
 pub mod moderation;
+pub mod news;
 pub mod next_steps;
 pub mod notify;
 pub mod offers;
@@ -333,6 +334,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         } else {
             Router::new()
         })
+        .merge(news::routes())
         // Everything except the routes merged below (uploads, webhooks, legal documents, SLAPorSLOP
         // Build submissions): small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))

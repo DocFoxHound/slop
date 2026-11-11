@@ -22,6 +22,7 @@ don't copy it into real code.
 | Slop Pulse (optional): launch tokens, heartbeats, playing now, monthly peaks, playtime; "Share my playtime" | Done |
 | History for makers: players, first plays and library adds per day on Manage; `get_history` for agents | Done |
 | Results on GitHub (commit statuses, `commit_status.rs`) | Built, off until `SLOP_GITHUB_STATUSES` is set |
+| News from makers on store pages, told under the bell to people who marked the app Interested (`news.rs`) | Done |
 | Public publishing guide (`/publish/guide`, `/publishing.md`, `/llms.txt`) | Done |
 | Rate limits per client IP (strictest on sign-in); hourly cleanup of expired sign-ins, sessions and tokens | Done |
 | Desktop client core (`crates/slop-client`): verified install, launch, revocation checks | Done, tested |
@@ -210,6 +211,9 @@ to run Slop Pong against the real Slop Link too.
 | `GET /v1/auth/desktop/requests/{id}`, `POST …/approve` | signed in (website) | Approve a desktop device |
 | `POST /v1/auth/desktop/token` | desktop app | Code or refresh token → access + refresh tokens |
 | `PUT /v1/apps/{slug}/commit-status` | the app's maker, or their agent (publish) | Switches results on GitHub on or off; 404 unless `SLOP_GITHUB_STATUSES` and the GitHub App are set |
+| `GET /v1/apps/{slug}/news?before=&limit=` | anyone who may see the app's store page | Its news, newest first (none for a Private app, except to its maker); the maker also gets hidden posts, whether each can still be appealed (`can_appeal`), and whether a new post is allowed (`posting`) |
+| `POST /v1/apps/{slug}/news`, `PUT`/`DELETE …/news/{id}` | the app's maker, or their agent (publish) | Post (one per app per 24 hours, tells people Interested under the bell), edit, remove |
+| `PUT /v1/me/interested/{slug}/news` | signed in, with a mark | `{on}`: news from this app under the bell, or not |
 
 The signed documents are the [SLAPorSLOP open standard](standard/README.md); `slop-verify` checks them.
 

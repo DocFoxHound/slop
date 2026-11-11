@@ -19,6 +19,13 @@ type Kind = Notification["category"];
 export const KINDS: Array<{ id: Kind; label: string; icon: string; about: string }> = [
   { id: "jobs", label: "People jobs", icon: "M2.5 5.5h11v7.5h-11z M6 5.5V3.5h4v2 M2.5 9h11", about: "Offers, payments, deliveries, messages and problems in your People jobs show up here." },
   { id: "interested", label: "Interested", icon: "M8 2.2l1.8 3.6 4 .6-2.9 2.8.7 4L8 11.3l-3.6 1.9.7-4-2.9-2.8 4-.6z", about: "When an app you're Interested in reaches beta or release, it shows up here." },
+  // Bell only (notify.rs BELL_ONLY): if it's ever emailed, this text and the Privacy Policy change with it.
+  {
+    id: "news",
+    label: "News",
+    icon: "M2.5 3.5h8.5v9h-8.5z M11 6h2.5v5.2a1.3 1.3 0 0 1-2.5 0 M4.5 6h4.5 M4.5 8.2h4.5 M4.5 10.4h3",
+    about: "News from the makers of apps you're Interested in shows up here. It's never emailed. You switch it off for an app on that app's page.",
+  },
   {
     id: "apps",
     label: "Your apps",
@@ -41,6 +48,22 @@ export const KINDS: Array<{ id: Kind; label: string; icon: string; about: string
   { id: "security", label: "Security", icon: "M8 2l5 2v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V4z M6 8l1.5 1.5L10.2 7", about: "Passkeys added, sign-ins linked and accounts combined show up here." },
 ];
 const KIND = Object.fromEntries(KINDS.map((k) => [k.id, k])) as Record<Kind, (typeof KINDS)[number]>;
+
+/** Kinds that show under the bell only, never emailed and with no email switch (notify.rs BELL_ONLY). */
+export const BELL_ONLY: Kind[] = ["news"];
+
+/** Where the person chooses what is emailed, under the list: not for a kind that never is. */
+export function EmailNote({ kind }: { kind?: Kind }) {
+  if (kind && BELL_ONLY.includes(kind)) {
+    return <p className="muted small nbox-settings">{KIND[kind].label} is never emailed.</p>;
+  }
+  return (
+    <p className="muted small nbox-settings">
+      Choose which of these{kind ? "" : `, other than ${BELL_ONLY.map((k) => KIND[k].label.toLowerCase()).join(" and ")},`} are also emailed to
+      you on <Link to="/account/notifications">your account page</Link>.
+    </p>
+  );
+}
 const PAGE = 30;
 const BELL = "M4 11V7a4 4 0 0 1 8 0v4l1.2 1.5H2.8z M6.5 13.5a1.5 1.5 0 0 0 3 0";
 
@@ -421,9 +444,7 @@ export function Notifications() {
               )}
             </div>
           )}
-          <p className="muted small nbox-settings">
-            Choose which of these are also emailed to you on <Link to="/account/notifications">your account page</Link>.
-          </p>
+          <EmailNote kind={known ? kind : undefined} />
         </section>
       </div>
     </div>

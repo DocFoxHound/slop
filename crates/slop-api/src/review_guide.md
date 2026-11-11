@@ -348,7 +348,7 @@ let your admin decide, unless they told you to handle a kind of case yourself.
   `GET /v1/admin/users/{id}`: one account with its apps, reports and decisions (reading it is
   logged).
 - Reports: `POST /v1/admin/reports/{id}/act` with `{"action", "rule", "facts", "outcome"}`
-  (`action` is `delist_app`, `hide_review`, `hide_profile`, `hide_team`, `warn` or
+  (`action` is `delist_app`, `hide_review`, `hide_profile`, `hide_team`, `hide_news`, `warn` or
   `suspend_account`), or `POST /v1/admin/reports/{id}/dismiss` with `{"outcome"}`. `facts` is
   the statement of reasons the person gets, so state what happened, plainly; `outcome` is what
   the reporter is told.

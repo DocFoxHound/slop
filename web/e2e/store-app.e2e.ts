@@ -413,7 +413,7 @@ test("Interested: players mark upcoming apps, the maker sees the count, visitors
 
   await on.click();
   await expect(button).toHaveAttribute("aria-pressed", "false");
-  await expect(pat.getByText(/0 people are interested\. Mark it to hear when it's out\./)).toBeVisible();
+  await expect(pat.getByText(/0 people are interested\. Mark it to hear when it's out and to get news from its maker\./)).toBeVisible();
 
   await failApi(pat, path(`/v1/me/interested/${soon}`), { status: 409, message: "It's already released." });
   await button.click();

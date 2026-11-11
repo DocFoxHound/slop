@@ -67,6 +67,30 @@ describe("public/sw.js", () => {
     expect(self.registration.showNotification).toHaveBeenCalledWith("SLAPorSLOP", expect.objectContaining({ data: { link: "/notifications" } }));
   });
 
+  it("a bell-only kind is never shown on the device", async () => {
+    // The API leaves them out when asked without ?bell=true; should one come anyway, it's skipped.
+    const { self, fire } = load(
+      inbox([
+        { id: "n3", category: "news", title: "Pong: news from its maker", body: "Beta opens on Friday", link: "/app/pong#news", count: 1, read: false },
+        { id: "n2", category: "jobs", title: "Cleo paid for Pixel art", body: "", link: "/jobs/j1", count: 1, read: false },
+      ]),
+    );
+    await fire("push");
+    expect(self.registration.showNotification).toHaveBeenCalledWith(
+      "Cleo paid for Pixel art",
+      expect.objectContaining({ tag: "n2", data: { link: "/jobs/j1" } }),
+    );
+    // Only news unread: the general notice, never the headline.
+    const only = load(
+      inbox([{ id: "n3", category: "news", title: "Pong: news from its maker", body: "Beta opens on Friday", link: "/app/pong#news", count: 1, read: false }]),
+    );
+    await only.fire("push");
+    expect(only.self.registration.showNotification).toHaveBeenCalledWith(
+      "SLAPorSLOP",
+      expect.objectContaining({ body: "You have something new on SLAPorSLOP.", data: { link: "/notifications" } }),
+    );
+  });
+
   it("a click opens the notification's page in SLAPorSLOP's open window", async () => {
     const win = { url: "https://slop.example/library", focus: vi.fn(async () => {}), navigate: vi.fn(async () => {}) };
     const other = { url: "https://elsewhere.example/", focus: vi.fn(async () => {}), navigate: vi.fn(async () => {}) };

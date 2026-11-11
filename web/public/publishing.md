@@ -115,8 +115,9 @@ from) and 4, and an https address instead of 2, 5 and 6: see [Browser games](#br
 **Moving on** is up to you: the stage bar at the top of your app's Manage, Edit store page and
 Releases tabs has **Move to Beta** and **Release it** (straight from Coming soon to Released is fine). It
 needs an approved release (for a browser game, an approved play address), since that's what
-players get; it happens at once, and everyone who marked the app Interested is told. Stages only
-move forward: to go back, contact SLAPorSLOP.
+players get; it happens at once, and everyone who marked the app Interested is told. They also
+get your news posts under their bell, unless they switch that off for your app. Stages only move
+forward: to go back, contact SLAPorSLOP.
 
 A Coming soon or Beta project with **no commits for 90 days** is labelled a dead project. It stays
 visible but isn't recommended, and comes back with your next commit. Missing a stage deadline
@@ -514,6 +515,10 @@ Each app has a **Manage** page (Publish → **Manage**):
   before their SLAPorSLOP app takes updates from the new one.
 - **Updates.** The same **Pick up new GitHub releases** and **Approve updates automatically**
   settings as on Releases & progress.
+- **News.** Post short news on your app's page (a headline and up to 2,000 characters). People
+  who marked the app Interested are told under their bell, unless they switched news off for it.
+  One new post per app per day; you can edit or remove a post. News must follow the Content Policy
+  like the rest of your page: never offer anything for votes or reviews.
 - **Requests.** Every change you asked for, with its decision and any reason. You can cancel
   one that's still waiting.
 - **Results on GitHub.** If your app is public, its repository is on GitHub and SLAPorSLOP's
@@ -1583,10 +1588,11 @@ one page, once. If the creative isn't taking work, the page says so and nothing 
 Your own AI coding agent can do most of this for you, from your editor: write and create the
 store page, submit releases with notes, read SLAPorSLOP's checks of each release and fix what they find,
 put players back on an earlier release while it fixes a broken one, read what players say,
-read how many played each day, register community builds and mods, offer fixes to the apps you
-build on, and search People for someone to hire, with the request written out for you to check
-and send. Creatives can let it watch People jobs, send quotes and talk in job conversations, and
-have their portfolio checked and sent for review after it changes.
+read how many played each day, post your news when you ask it to, register community builds and
+mods, offer fixes to the apps you build on, and search People for someone to hire, with the
+request written out for you to check and send. Creatives can let it watch People jobs, send
+quotes and talk in job conversations, and have their portfolio checked and sent for review after
+it changes.
 
 **The easy way: approve it in your browser.** There's no token to copy or keep safe.
 

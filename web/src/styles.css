@@ -965,6 +965,26 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .review-list li:last-child { border-bottom: 0; }
 .review-list p { margin: 6px 0; }
 .review-who { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* Maker news (components/News.tsx): the app page's section, the switch, the maker's panel. */
+.app-news { margin-top: 14px; }
+.app-news h2 { margin: 0; }
+.news-list { list-style: none; margin: 10px 0; padding: 0; }
+.news-list li { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.news-list li:last-child { border-bottom: 0; }
+/* A headline can be one long word (an address, a version): it wraps rather than widen the page. */
+.news-list h3 { font-size: 14px; font-weight: 700; margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.news-list .prose { margin: 6px 0; }
+label.check.news-switch { display: flex; gap: 8px; align-items: center; margin-top: 8px; font-size: 13px; font-weight: 400; cursor: pointer; }
+label.check.news-switch input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--slime); }
+.interested .news-switch { flex-basis: 100%; margin-top: 2px; }
+.lib-news-switch { margin: -4px 0 12px; }
+.lib-activity > .news-switch { margin: 0 0 10px; }
+.news-panel .news-rows .prose { margin: 4px 0; }
+.news-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; overflow-wrap: anywhere; }
+.news-form { gap: 10px; margin-top: 10px; }
+.news-form p { margin: 0; }
+.news-form label + p { margin-top: -6px; }
+.news-form [aria-invalid="true"] { border-color: var(--bad); }
 .profile-head { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; }
 .profile-head > div { min-width: 0; }
 .profile-head .avatar { width: 64px; height: 64px; min-width: 64px; border-radius: 14px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; font-size: 28px; flex: none; }

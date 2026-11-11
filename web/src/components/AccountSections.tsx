@@ -564,7 +564,8 @@ export function AccountNotifications() {
         <p className="muted small">
           Everything shows under the <InlineIcon name="bell" /> in SLAPorSLOP. Choose what's also emailed to you
           {p.has_email ? "" : " (you don't have an email on your account, so nothing is emailed)"}
-          {p.email_on ? "" : ". This server doesn't send email yet"}. SLAPorSLOP never sends marketing.
+          {p.email_on ? "" : ". This server doesn't send email yet"}. SLAPorSLOP never sends marketing. News from makers of
+          apps you're Interested in shows under the bell only.
         </p>
         {!isDesktop && <PushSwitch />}
         {p.categories.map((c) => (
@@ -975,7 +976,8 @@ function PushSwitch() {
           <span>
             <b>Notifications on this phone or browser</b>
             <span className="muted small" style={{ display: "block" }}>
-              Everything that shows under the <InlineIcon name="bell" />. SLAPorSLOP's push says nothing until your device fetches it from SLAPorSLOP.
+              Everything that shows under the <InlineIcon name="bell" />, except news from makers. SLAPorSLOP's push says nothing until your
+              device fetches it from SLAPorSLOP.
             </span>
           </span>
         </label>

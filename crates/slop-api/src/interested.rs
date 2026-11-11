@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Interested (DESIGN §5, §6, §8): people mark Coming soon and Beta apps they want. It puts them
 //! in their library, counts publicly as the app's demand signal ("Most anticipated"), feeds "For
-//! you", and tells them when the app moves to Beta or is released.
+//! you", and tells them when the app moves to Beta or is released. They are also told the maker's
+//! news under the bell (news.rs), unless they switch it off for that app.
 
 use std::collections::HashMap;
 
@@ -11,7 +12,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{get, put},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -30,6 +31,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/me/interested", get(list))
         .route("/me/interested/{slug}", put(add).delete(remove))
+        .route("/me/interested/{slug}/news", put(set_news))
         .route("/upcoming/for-you", get(upcoming_for_you))
 }
 
@@ -99,6 +101,36 @@ async fn remove(
     .bind(&slug)
     .execute(&state.db)
     .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewsSwitch {
+    on: bool,
+}
+
+/// "Tell me about news from this app": the person's own switch on their own mark, so it works
+/// whatever the app's state now (released, out of the store, private). No mark: not found.
+async fn set_news(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+    Json(b): Json<NewsSwitch>,
+) -> ApiResult<StatusCode> {
+    crate::limits::check(&state, user.id, crate::limits::Action::Interest)?;
+    let done = sqlx::query(
+        "update interests i set news = $3 from apps a
+         where a.id = i.app_id and a.slug = $2 and i.user_id = $1",
+    )
+    .bind(user.id)
+    .bind(&slug)
+    .bind(b.on)
+    .execute(&state.db)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

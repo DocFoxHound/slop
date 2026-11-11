@@ -45,6 +45,8 @@ pub enum Action {
     History,
     /// Switching results on GitHub or checking again: each one asks GitHub for a token.
     CommitStatus,
+    /// Posting or editing an app's news (news.rs).
+    News,
 }
 
 impl Action {
@@ -79,6 +81,7 @@ impl Action {
             Self::LibraryAdd => (60, HOUR),
             Self::History => (120, HOUR),
             Self::CommitStatus => (20, HOUR),
+            Self::News => (10, HOUR),
         };
         (n, Duration::from_secs(secs))
     }
@@ -107,6 +110,7 @@ impl Action {
             Self::LibraryAdd => "library adds",
             Self::History => "history requests",
             Self::CommitStatus => "commit status changes",
+            Self::News => "news posts",
         }
     }
 }

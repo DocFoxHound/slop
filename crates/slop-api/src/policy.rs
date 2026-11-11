@@ -34,6 +34,11 @@ impl ViewerPolicy {
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v.trim().to_ascii_uppercase()),
         };
+        Self::for_country(db, country.as_deref()).await
+    }
+
+    /// The view in this country; with none, the under-18 view.
+    async fn for_country(db: &PgPool, country: Option<&str>) -> ApiResult<Self> {
         let Some(country) = country else {
             return Ok(Self::UNDER_18_VIEW);
         };
@@ -42,7 +47,7 @@ impl ViewerPolicy {
         let under18_default: Option<bool> = sqlx::query_scalar(
             "select under18_view_default from country_policies where country_code = $1",
         )
-        .bind(&country)
+        .bind(country)
         .fetch_optional(db)
         .await?;
 
@@ -50,5 +55,46 @@ impl ViewerPolicy {
             Some(false) => Self::FULL_VIEW,
             _ => Self::UNDER_18_VIEW,
         })
+    }
+}
+
+/// SQL: the highest `min_age` the account in `users` row `{u}` may see. The SQL form of
+/// `resolve` for a signed-in account; the ages come from the constants above, nowhere else.
+/// `u` is always an alias written in the code, never input.
+pub(crate) fn account_max_min_age_sql(u: &str) -> String {
+    format!(
+        "(case when (select cp.under18_view_default from country_policies cp
+                     where cp.country_code = {u}.country_code) is false then {} else {} end)",
+        ViewerPolicy::FULL_VIEW.max_min_age,
+        ViewerPolicy::UNDER_18_VIEW.max_min_age
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::PgPool;
+
+    use super::{ViewerPolicy, account_max_min_age_sql};
+
+    /// A full-view country, an under-18-view one, and one with no policy row.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_sql_form_agrees_with_resolve(db: PgPool) {
+        for (country, view) in [
+            ("US", ViewerPolicy::FULL_VIEW),
+            ("GB", ViewerPolicy::UNDER_18_VIEW),
+            ("ZZ", ViewerPolicy::UNDER_18_VIEW),
+        ] {
+            let sql: i32 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "select {} from (select $1::text as country_code) u",
+                account_max_min_age_sql("u")
+            )))
+            .bind(country)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            let resolved = ViewerPolicy::for_country(&db, Some(country)).await.unwrap();
+            assert_eq!(resolved, view, "{country}");
+            assert_eq!(sql, i32::from(resolved.max_min_age), "{country}");
+        }
     }
 }

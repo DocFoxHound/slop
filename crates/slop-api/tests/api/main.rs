@@ -36,6 +36,7 @@ mod history_tests;
 mod icons_tests;
 mod messages_tests;
 mod money_tests;
+mod news_tests;
 mod oauth_tests;
 mod people_tests;
 mod pictures_tests;
@@ -5915,6 +5916,17 @@ async fn the_simulation_scores_the_real_code_against_its_truth(db: PgPool) {
     assert_eq!(r.monthly_matching_now, r.ratings_checked);
     assert!(r.rating_truth_correlation > 0.4, "{r:#?}");
     assert_eq!(r.players_matching, r.players_checked);
+    // Maker news on some apps in the store: none on a private app or a server, nobody told.
+    assert!(made.news > 0, "{made:?}");
+    let (outside, notices): (i64, i64) = sqlx::query_as(
+        "select (select count(*) from app_news n join apps a on a.id = n.app_id
+                 where a.visibility = 'private' or a.branch_kind = 'server'),
+                (select count(*) from notifications where category = 'news')",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((outside, notices), (0, 0));
     // History for makers: daily totals for public apps from the day each was made, none for a
     // private one. Later steps of the simulation may remove usage and library rows, never add.
     assert!(made.history_days > 0, "{made:?}");

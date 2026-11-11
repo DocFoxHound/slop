@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { Link, Navigate, useParams } from "react-router";
 
 import { api, type AppDetail, type AppPlatform, type Credit } from "../api";
@@ -25,6 +25,7 @@ import { ModControls } from "../components/ModControls";
 import { DedicatedServers } from "../components/DedicatedServers";
 import { DonateButton } from "../components/Donate";
 import { InterestedButton } from "../components/Interested";
+import { AppNews } from "../components/News";
 import { workflowName } from "./Releases";
 import { isDesktop, openExternal } from "../platform";
 import { useSession } from "../session";
@@ -95,9 +96,31 @@ function AppView({ app }: { app: AppDetail }) {
       <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} donate={donate} servers={servers} />
     );
   const getIt = getItWith(donate);
+  // The viewer's Interested mark and its news switch: the checkbox under the Interested button and
+  // the one in the News section are the same switch, so they never disagree.
+  const [marked, setMarked] = useState(app.is_interested);
+  const [newsOn, setNewsOn] = useState(app.interested_news);
+  useEffect(() => {
+    // Another app's page: start from its own answer.
+    setMarked(app.is_interested);
+    setNewsOn(app.interested_news);
+  }, [app.slug]); // eslint-disable-line react-hooks/exhaustive-deps
   // Coming soon: Interested goes with "Ratings open when it's playable" at the top; in Beta it's
-  // in the Get it box.
-  const interested = !app.private && <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />;
+  // in the Get it box. A mark starts with news on (also marked again after taking it back).
+  const interested = !app.private && (
+    <InterestedButton
+      key={app.slug}
+      app={app}
+      isInterested={app.is_interested}
+      isMine={app.is_mine}
+      news={newsOn}
+      onNews={setNewsOn}
+      onMarked={(on) => {
+        setMarked(on);
+        if (on) setNewsOn(true);
+      }}
+    />
+  );
 
   // Links inside the maker's Markdown leave SLAPorSLOP.
   const onDescriptionClick = (e: MouseEvent) => {
@@ -304,6 +327,10 @@ function AppView({ app }: { app: AppDetail }) {
             />
           ) : (
             <p className="muted">The maker hasn't written a description yet.</p>
+          )}
+          {/* A dedicated server has no page of its own, so no news (it's shown on its game's page). */}
+          {!app.private && !app.server_game && (
+            <AppNews key={app.slug} app={app} marked={marked} newsOn={newsOn} onNewsOn={setNewsOn} />
           )}
           {!app.private && <RatingPanel slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} browser={inBrowser} />}
           {!app.private && <Reviews slug={app.slug} />}
