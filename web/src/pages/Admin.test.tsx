@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // What the browser tests can't reach on the shared test server: a queue with nothing in it, a
-// report past its due date, a report about a bounty or a news post, an appeal's hidden text, and
-// the inbox's quick decisions with every request caught.
+// report past its due date, a report about a bounty, a news post or an open request, an appeal's
+// hidden text, and the inbox's quick decisions with every request caught.
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -177,6 +177,28 @@ describe("the admin panel", () => {
     show("/admin?tab=queue&box=appeals&item=d1");
     await screen.findByText("It was a joke.");
     expect(screen.queryByText("What was hidden")).toBeNull();
+  });
+
+  it("offers to hide a reported request", async () => {
+    vi.spyOn(api.admin, "queue").mockResolvedValue({
+      ...empty,
+      reports: [
+        report({
+          subject_kind: "work_request",
+          subject_label: "Open request: Rooftop theme",
+          link: "/people?view=requests&request=w1",
+          quoted: "Rooftop theme\n\nA calm 60-second loop for the rooftops.",
+          actions: ["hide_work_request", "warn", "suspend_account"],
+        }),
+      ],
+    });
+    show("/admin?tab=queue&box=reports&item=r1");
+    expect(await screen.findByText("The request")).toBeTruthy();
+    expect(screen.getByText(/A calm 60-second loop for the rooftops\./)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Decide" }));
+    const what = screen.getByRole("combobox", { name: "What to do" }) as HTMLSelectElement;
+    expect([...what.options].map((o) => o.text)).toEqual(["Hide the request", "Warn them (no restriction)", "Suspend their account"]);
+    expect(screen.getByRole("button", { name: "Hide the request" })).toBeTruthy();
   });
 
   it("denies only after Are you sure?, with the reason the maker reads; cancelling keeps it", async () => {

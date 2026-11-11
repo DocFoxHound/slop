@@ -4,7 +4,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
-import { expect, signIn, test } from "./fixtures";
+import { expect, ids, signIn, test } from "./fixtures";
 import { call, delist, listedApp, tryCall } from "./store-helpers";
 
 const pages: Array<[string, "player" | "maker" | "admin" | null]> = [
@@ -29,6 +29,9 @@ const pages: Array<[string, "player" | "maker" | "admin" | null]> = [
   ["/verify", null],
   ["/source", null],
   ["/bounties", null],
+  // Open requests on People: the board and the seeded request (people-requests.e2e.ts scans the form).
+  ["/people?view=requests", null],
+  [`/people?view=requests&request=${ids.seededRequest}`, null],
   ["/admin", "admin"],
   ["/admin?tab=apps&app=castle-rock", "admin"],
   ["/admin?tab=money", "admin"],

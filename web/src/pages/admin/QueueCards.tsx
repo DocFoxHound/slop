@@ -1055,6 +1055,7 @@ const ACTION_LABEL: Record<ModerationDecision["action"], string> = {
   hide_team: "Hide the team",
   hide_bounty: "Hide the bounty",
   hide_news: "Hide the news post",
+  hide_work_request: "Hide the request",
   warn: "Warn them (no restriction)",
   suspend_account: "Suspend their account",
 };
@@ -1110,7 +1111,7 @@ export function ReportCard({
         <dd className="pre">{r.details}</dd>
         {r.quoted && (
           <>
-            <dt>{r.subject_kind === "news" ? "The post" : "The message"}</dt>
+            <dt>{r.subject_kind === "news" ? "The post" : r.subject_kind === "work_request" ? "The request" : "The message"}</dt>
             <dd>
               <blockquote className="pre">{r.quoted}</blockquote>
             </dd>

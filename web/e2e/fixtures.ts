@@ -26,6 +26,10 @@
 //   client          Cleo Client: owns Cleo's Tavern (cleos-tavern), hired Vera; pays a monthly
 //                   server donation to Lantern Keep; opened the "A Linux build" bounty; in Night
 //                   Owls and Open Crew.
+//   requester       Rhea Requester: owns Rhea's Rooftops (rheas-rooftops, listed) and one open
+//                   request on People, "Rooftop theme" (music), which no test changes. Only
+//                   people-requests.e2e.ts signs in as her, and each of its tests ends with that
+//                   request her only open one.
 //   pendingCreative Remy Pending: People page remy-sounds, portfolio waiting for review.
 //   inboxCreative   Ivy Inbox: People page ivy-inbox, first portfolio waiting for review; the
 //                   review inbox's test (admin-inbox.e2e.ts) approves it, so it's live after.
@@ -68,13 +72,14 @@
 //   communityBuild "lantern-keep-linux", mod "lantern-keep-more-lanterns", draftApp
 //     "starship-draft", frozenApp "frozen-fjord", delistedApp "delisted-dash", maker2App
 //     "pocket-golf", releaseInReview (on releaseInReviewApp, "pocket-golf"), clientApp
-//     "cleos-tavern".
+//     "cleos-tavern", requesterApp "rheas-rooftops".
 //   People: creativeHandle "vera-pixels", pendingCreativeHandle "remy-sounds", inboxCreativeHandle
 //     "ivy-inbox", previewerHandle "pip-preview". Jobs, all Cleo
 //     hiring Vera: deliveredJob (talked over in its conversation; delivered, Cleo to pay),
 //     workingJob (paid up front through Stripe, in progress), requestedJob (just asked),
 //     problemJob (in progress; Cleo opened a problem), completedJob (paid and done; Cleo's review
-//     is disputed by Vera).
+//     is disputed by Vera). Open requests: seededRequest, Rhea's "Rooftop theme" (music, nobody
+//     has put their name forward).
 //   Teams: inviteTeam "night-owls" (Pat owns it; Bo and Cleo are members, Tia is invited; a pick
 //     and a game night), openTeam "open-crew" (Bo's; Cleo joined). Chat is in the desktop app
 //     only, end-to-end encrypted: directChat (Pat and Bo), teamChat (Night Owls). The seed's chat
@@ -103,6 +108,7 @@ export type Who =
   | "maker2"
   | "creative"
   | "client"
+  | "requester"
   | "pendingCreative"
   | "inboxCreative"
   | "designer"
@@ -146,6 +152,8 @@ export type Id =
   | "designerHandle"
   | "previewerHandle"
   | "clientApp"
+  | "requesterApp"
+  | "seededRequest"
   | "deliveredJob"
   | "workingJob"
   | "requestedJob"

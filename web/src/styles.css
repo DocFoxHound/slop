@@ -220,6 +220,26 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .skill-btn:hover::after, .skill-btn:focus-visible::after { opacity: 1; }
 .people-nav-actions { display: flex; gap: 6px; flex: none; }
 .people-nav-actions .btn .badge { margin-left: 8px; }
+/* People's two tabs, the directory and Open requests (pages/PeopleRequests.tsx), above the bar. */
+.people-tabs { margin: 0 0 16px; }
+/* The order is said on phones too (the other section subtitles hide there). */
+.requests-head { flex-wrap: wrap; }
+.section-h .sub.requests-order { display: inline; }
+.request-owner .section-h h3 { font-size: 15px; }
+.request-list, .request-names { list-style: none; padding: 0; margin: 0 0 20px; display: grid; gap: 12px; }
+.request-card { padding: 14px 16px; }
+.request-card h3, .request-card h4 { font-size: 16px; margin: 0 0 4px; }
+.request-card p { margin: 4px 0 0; }
+.request-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.request-names { grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+.request-names li { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.request-names .person-card { align-self: stretch; }
+.request-detail { max-width: 760px; }
+.request-detail .request-title { font-size: 24px; margin: 0 0 6px; }
+.request-put, .request-owner, .request-signin { margin: 16px 0; }
+.request-form { margin: 12px 0 20px; }
+.your-requests .request-list { margin-top: 14px; }
+.request-report { margin-top: 16px; }
 .section-h .section-icon { flex: none; align-self: center; color: var(--text-2); }
 .people-shelf-section { margin-bottom: 8px; }
 .people-shelf { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, calc((100% - 3 * 14px) / 4)); gap: 14px; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; }

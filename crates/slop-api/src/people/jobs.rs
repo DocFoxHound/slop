@@ -127,7 +127,7 @@ pub struct Offer {
     pub refund_policy: String,
 }
 
-fn parse_due(field: &'static str, text: &str, today: Date) -> ApiResult<Date> {
+pub(crate) fn parse_due(field: &'static str, text: &str, today: Date) -> ApiResult<Date> {
     let due = Date::parse(text, &Iso8601::DATE)
         .map_err(|_| ApiError::invalid(field, "a date, YYYY-MM-DD"))?;
     if due < today || due > today + Duration::days(730) {
@@ -1280,6 +1280,31 @@ struct HireBody {
     confirm_adult: bool,
 }
 
+/// Pay what you owe before hiring anyone again or posting an open request (DESIGN §15.2).
+/// `before` ends the sentence: "… pay it from your jobs before {before}".
+pub(crate) async fn require_nothing_owed(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    before: &'static str,
+) -> ApiResult<()> {
+    let owing: Option<(String, i64, String)> = sqlx::query_as(
+        "select c.name, sum(p.amount_minor)::int8, p.currency from jobs j join job_payments p on p.job_id = j.id
+         join creatives c on c.user_id = j.creative_id
+         where j.client_id = $1 and j.status in ('completed', 'final_files') and p.status = 'due'
+         group by c.name, p.currency limit 1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+    if let Some((name, amount, currency)) = owing {
+        return Err(ApiError::Conflict(format!(
+            "you still owe {name} {} for finished work; pay it from your jobs before {before}",
+            money(amount, &currency)
+        )));
+    }
+    Ok(())
+}
+
 async fn hire(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -1326,22 +1351,7 @@ async fn hire(
             "they aren't taking paid work right now".into(),
         ));
     }
-    // Pay what you owe before hiring anyone again (DESIGN §15.6).
-    let owing: Option<(String, i64, String)> = sqlx::query_as(
-        "select c.name, sum(p.amount_minor)::int8, p.currency from jobs j join job_payments p on p.job_id = j.id
-         join creatives c on c.user_id = j.creative_id
-         where j.client_id = $1 and j.status in ('completed', 'final_files') and p.status = 'due'
-         group by c.name, p.currency limit 1",
-    )
-    .bind(user.id)
-    .fetch_optional(&state.db)
-    .await?;
-    if let Some((name, amount, currency)) = owing {
-        return Err(ApiError::Conflict(format!(
-            "you still owe {name} {} for finished work; pay it from your jobs before hiring again",
-            money(amount, &currency)
-        )));
-    }
+    require_nothing_owed(&state.db, user.id, "hiring again").await?;
     if !skills.contains(&body.skill) {
         return Err(ApiError::invalid("skill", "pick one of their skills"));
     }

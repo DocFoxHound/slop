@@ -134,6 +134,13 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "news cleanup failed"),
         }
+        // Open requests on People: run out after 30 days; deleted once kept long enough.
+        match crate::people::work_requests::expire(&state.db, time::OffsetDateTime::now_utc()).await
+        {
+            Ok(n) if n > 0 => tracing::info!(n, "open requests ran out"),
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "open requests expiry failed"),
+        }
         // Profile pictures last read over a day ago (avatars.rs), slowly, beside the rest.
         tokio::spawn({
             let state = state.clone();

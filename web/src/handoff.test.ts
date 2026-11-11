@@ -11,6 +11,7 @@ import {
   keptPortfolioRepo,
   KEEP_FOR_MS,
   peopleFill,
+  requestFill,
   takeHandoff,
 } from "./handoff";
 
@@ -442,6 +443,90 @@ describe("filling in a request to hire someone", () => {
     expect(hireFill({ request_md: "a\u0000b" }, VERA).left).toEqual([{ field: "request_md", why: "has characters that aren't allowed" }]);
     // Names every object has aren't projects, packages or skills.
     expect(hireFill({ app_slug: "toString", skill: "constructor" }, VERA).values).toEqual({});
+  });
+});
+
+describe("filling in an open request", () => {
+  // Rhea's two projects in the store, and the skills People has.
+  const RHEA = { projects: ["rheas-rooftops", "night-ferry"], skills: ["pixel-art", "music", "writing"] };
+  const TODAY = "2030-01-15";
+  const REQUEST = {
+    app_slug: "night-ferry",
+    skill: "music",
+    title: "Main theme",
+    description_md: "A 90-second loop for the title screen.\n\nCalm, with a version that fades out.",
+    wanted_by: "2030-02-01",
+  };
+
+  it("takes the form's fields, in the form's order", () => {
+    const fill = requestFill(REQUEST, RHEA, TODAY);
+    expect(fill.values).toEqual(REQUEST);
+    expect(fill.filled).toEqual(["app_slug", "skill", "title", "description_md", "wanted_by"]);
+    expect(fill.left).toEqual([]);
+    expect(fill.unknown).toBe(0);
+    // Today itself is fine.
+    expect(requestFill({ wanted_by: TODAY }, RHEA, TODAY).values).toEqual({ wanted_by: TODAY });
+  });
+
+  it("leaves out what the form wouldn't take, with why", () => {
+    const fill = requestFill(
+      {
+        app_slug: "someone-elses",
+        skill: "juggling",
+        title: "x".repeat(101),
+        description_md: "x".repeat(2001),
+        wanted_by: "2030-01-14",
+      },
+      RHEA,
+      TODAY,
+    );
+    expect(fill.values).toEqual({});
+    expect(Object.fromEntries(fill.left.map((l) => [l.field, l.why]))).toEqual({
+      app_slug: "isn't one of your projects in the store",
+      skill: "isn't a skill on People",
+      title: "is over 100 characters",
+      description_md: "is over 2,000 characters",
+      wanted_by: "is in the past",
+    });
+    expect(requestFill({ title: "Main\ntheme" }, RHEA, TODAY).left).toEqual([{ field: "title", why: "should be one line" }]);
+    expect(requestFill({ title: "  " }, RHEA, TODAY).left).toEqual([{ field: "title", why: "is empty" }]);
+    expect(requestFill({ description_md: "a\u0007b" }, RHEA, TODAY).left).toEqual([{ field: "description_md", why: "has characters that aren't allowed" }]);
+    for (const bad of ["31/01/2030", "2030-1-31", "soon", 20300131, "2030-02-30", ""]) {
+      expect(requestFill({ wanted_by: bad }, RHEA, TODAY).left).toEqual([{ field: "wanted_by", why: "should be a date, like 2030-01-31" }]);
+    }
+    // Exactly 100 and 2,000 go in.
+    expect(requestFill({ title: "x".repeat(100), description_md: "x".repeat(2000) }, RHEA, TODAY).filled).toEqual(["title", "description_md"]);
+    // Names every object has aren't projects or skills.
+    expect(requestFill({ app_slug: "toString", skill: "constructor" }, RHEA, TODAY).values).toEqual({});
+  });
+
+  it("never fills in the 18+ tick, an agreement, a budget or a price, and says so; other fields are unknown", () => {
+    const fill = requestFill(
+      { title: "Main theme", confirm_adult: true, adult: true, accept_terms: true, budget: 500, price: 500, currency: "usd", deadline: "2030-02-01" },
+      RHEA,
+      TODAY,
+    );
+    expect(fill.values).toEqual({ title: "Main theme" });
+    expect(Object.fromEntries(fill.left.map((l) => [l.field, l.why]))).toEqual({
+      confirm_adult: "only you can say you're 18 or older",
+      adult: "only you can say you're 18 or older",
+      accept_terms: "accepting an agreement is yours to do",
+      budget: "there's no budget on a request: the creative sets the price in their quote",
+      price: "there's no budget on a request: the creative sets the price in their quote",
+    });
+    expect(fill.unknown).toBe(2);
+  });
+
+  it("is kept for its own form", () => {
+    window.history.replaceState(null, "", `/people?view=requests${link(REQUEST)}`);
+    expect(takeHandoff("request")).toEqual({ fields: REQUEST });
+    expect(window.location.hash).toBe("");
+    expect(window.location.pathname + window.location.search).toBe("/people?view=requests");
+    expect(sessionStorage.getItem("slop.handoff.request")).toContain("Main theme");
+    expect(takeHandoff("hire")).toBeNull();
+    forgetHandoff("request");
+    expect(takeHandoff("request")).toBeNull();
+    window.history.replaceState(null, "", "/");
   });
 });
 

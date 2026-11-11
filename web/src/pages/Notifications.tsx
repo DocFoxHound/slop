@@ -17,7 +17,7 @@ type Kind = Notification["category"];
 
 /** Each kind: its name, icon (a 16×16 line drawing), and what shows up under it (as on the server's CATEGORIES). */
 export const KINDS: Array<{ id: Kind; label: string; icon: string; about: string }> = [
-  { id: "jobs", label: "People jobs", icon: "M2.5 5.5h11v7.5h-11z M6 5.5V3.5h4v2 M2.5 9h11", about: "Offers, payments, deliveries, messages and problems in your People jobs show up here." },
+  { id: "jobs", label: "People jobs", icon: "M2.5 5.5h11v7.5h-11z M6 5.5V3.5h4v2 M2.5 9h11", about: "Offers, payments, deliveries, messages and problems in your People jobs show up here, and names put forward for your open requests." },
   { id: "interested", label: "Interested", icon: "M8 2.2l1.8 3.6 4 .6-2.9 2.8.7 4L8 11.3l-3.6 1.9.7-4-2.9-2.8 4-.6z", about: "When an app you're Interested in reaches beta or release, it shows up here." },
   // Bell only (notify.rs BELL_ONLY): if it's ever emailed, this text and the Privacy Policy change with it.
   {

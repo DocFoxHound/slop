@@ -29,7 +29,7 @@ export function ReportButton({
   className = "link-btn small muted",
 }: {
   kind: ReportKind;
-  /** An app's address, a creative's handle, a review's job ID, a message ID or a news post's ID. */
+  /** An app's address, a creative's handle, a review's job ID, a message ID, a news post's ID or an open request's ID. */
   subject: string;
   /** What's being reported, in words: "this app", "this review". */
   label: string;

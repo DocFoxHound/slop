@@ -176,6 +176,26 @@ theirs to say (that they've understood this, that they're 18 or older, whether t
 business, whether it's a request or a question first): those are ignored. They check it, tick
 the boxes and press Send request themselves; nothing is sent before that. A link is used once.
 
+## Open requests
+
+People has a board of open requests: a maker says what one of their projects needs (one skill, a
+title, a description, an optional date) and creatives put their name forward. Any token can read
+it: `find_work_requests`, newest first, optionally one `skill`. There is no budget on a request:
+the creative sets the price in their quote. Nothing ranks, matches or suggests anyone.
+
+With People access, `my_work_requests` shows your person's own requests and who put their name
+forward (in the order they did), and the requests your person put their name forward for.
+
+Posting a request, closing one, putting a name forward and hiring are the person's to do. You can
+prepare a request for them as a link: `/people?view=requests#fill=` plus
+`encodeURIComponent(JSON.stringify(fields))`, with `app_slug` (one of `projects` from
+`my_work_requests`, or one of their apps in the store), `skill` (a slug from `list_skills`),
+`title` (one line, up to 100 characters), `description_md` (up to 2,000 characters) and
+`wanted_by` (YYYY-MM-DD, optional). Never a budget or a price, the 18-or-older tick or an
+agreement: the form refuses them. Tell the person the request is public, with their display name
+and project, and that nothing is posted until they press "Post request". A person may have 3 open
+requests at once; each closes by itself after 30 days.
+
 ## People jobs (with People access)
 
 If your token has People access you can watch and help with jobs, as the creative or the client:

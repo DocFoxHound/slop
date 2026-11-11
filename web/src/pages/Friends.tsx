@@ -110,7 +110,10 @@ export function FriendsPage() {
       {blocks.data && blocks.data.length > 0 && (
         <>
           <h2 className="section-title">Blocked</h2>
-          <p className="muted small">Blocked people can't message you or send friend requests, and their chats leave your list.</p>
+          <p className="muted small">
+            Blocked people can't message you or send friend requests, and their chats leave your list. On People, neither of you is shown
+            the other's open requests.
+          </p>
           <ul className="panel report-list">
             {blocks.data.map((p) => (
               <li key={p.id}>

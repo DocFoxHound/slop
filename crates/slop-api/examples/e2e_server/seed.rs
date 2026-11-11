@@ -374,6 +374,10 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     s.ids.insert("creativeHandle", json!("vera-pixels"));
     s.ids.insert("client", json!(p.client.id));
     s.ids.insert("clientApp", json!("cleos-tavern"));
+    s.cookies.insert("requester", p.requester.cookie.clone());
+    s.ids.insert("requester", json!(p.requester.id));
+    s.ids.insert("requesterApp", json!("rheas-rooftops"));
+    s.ids.insert("seededRequest", json!(p.seeded_request));
     s.ids
         .insert("pendingCreative", json!(p.pending_creative.id));
     s.ids.insert("pendingCreativeHandle", json!("remy-sounds"));
@@ -734,6 +738,10 @@ async fn creative_profile(ctx: &Ctx, who: &Who, handle: &str, name: &str) -> any
 pub struct People {
     pub creative: Who,
     pub client: Who,
+    /// Rhea, a maker with an open request on People (people-requests.e2e.ts).
+    pub requester: Who,
+    /// Rhea's seeded open request, which no test changes.
+    pub seeded_request: Uuid,
     pub pending_creative: Who,
     /// Another creative whose first portfolio waits (for the review inbox's test).
     pub inbox_creative: Who,
@@ -823,6 +831,23 @@ async fn people(ctx: &Ctx, admin: &Who) -> anyhow::Result<People> {
     // The client and their app.
     let client = ctx.adult("Cleo Client", "US").await?;
     listed(ctx, client.id, "cleos-tavern", "Cleo's Tavern", "").await?;
+    // A maker who posts open requests on People (people-requests.e2e.ts only), with one seeded
+    // request that no test changes.
+    let requester = ctx.adult("Rhea Requester", "US").await?;
+    listed(ctx, requester.id, "rheas-rooftops", "Rhea's Rooftops", "").await?;
+    let seeded_request: Uuid = ctx
+        .post(
+            &requester,
+            "/v1/work-requests",
+            json!({
+                "app_slug": "rheas-rooftops", "skill": "music", "title": "Rooftop theme",
+                "description_md": "A calm 60-second loop for the rooftops.", "confirm_adult": true,
+            }),
+        )
+        .await?["id"]
+        .as_str()
+        .context("request id")?
+        .parse()?;
     let hire = |request: &str, inquiry: bool| {
         json!({
             "app_slug": "cleos-tavern", "skill": "pixel-art", "service_id": null,
@@ -1026,6 +1051,8 @@ async fn people(ctx: &Ctx, admin: &Who) -> anyhow::Result<People> {
     Ok(People {
         creative,
         client,
+        requester,
+        seeded_request,
         pending_creative,
         inbox_creative,
         designer,

@@ -287,6 +287,25 @@ async fn report_reasons_depend_on_what_is_reported(db: PgPool) {
             "other"
         ]
     );
+    // An open request on People: no copyright (it's a description of wanted work) and never a
+    // fake review.
+    let (_, request) = reasons_for(&app, "?kind=work_request").await;
+    assert_eq!(
+        codes(&request),
+        [
+            "child_abuse",
+            "threat",
+            "intimate_image",
+            "scam",
+            "illegal",
+            "sexual",
+            "harassment",
+            "private_info",
+            "misleading",
+            "spam",
+            "other"
+        ]
+    );
     let conversations = [
         "child_abuse",
         "threat",

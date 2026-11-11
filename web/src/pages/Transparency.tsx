@@ -32,6 +32,7 @@ const LABEL: Record<string, string> = {
   hide_team: "Team hidden",
   hide_bounty: "Bounty hidden",
   hide_news: "News post hidden",
+  hide_work_request: "Request hidden",
   suspend_account: "Account suspended",
   warn: "Warning",
   pending: "Waiting",

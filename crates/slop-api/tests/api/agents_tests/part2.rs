@@ -2479,6 +2479,8 @@ async fn the_maker_mcp_endpoint_speaks_json_rpc_within_the_tokens_limits(db: PgP
         "find_people",
         "whats_new",
         "list_news",
+        "find_work_requests",
+        "my_work_requests",
     ] {
         assert_eq!(hints(name), (true, false), "{name}");
     }
@@ -4071,6 +4073,265 @@ async fn agents_search_people_and_only_people_access_shows_a_page_that_isnt_live
             .await;
         assert_eq!(res.status(), status);
     }
+}
+
+/// The board of open requests (people/work_requests.rs): any token reads it, as a visitor would;
+/// with People access a token also reads its person's own requests and names; no token writes.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agent_tokens_read_the_board_and_write_nothing(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        c.rate_limits.write_per_minute = 1000;
+    })
+    .await;
+    let (vera_id, vera) = live_creative(&app, "vera", "US", true).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tavern", "released", "").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/work-requests")
+                .cookie(&maker)
+                .json(json!({
+                    "app_slug": "tavern", "skill": "pixel-art", "title": "Sign",
+                    "description_md": "A tavern sign.", "confirm_adult": true
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let res = app
+        .send(
+            req(Method::PUT, format!("/v1/work-requests/{id}/response"))
+                .cookie(&vera)
+                .json(json!({ "service_id": null })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let (apps_only, _) =
+        maker_token(&app, &maker, json!({ "name": "Apps", "scope": "read" })).await;
+    let (people, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "People", "scope": "read", "people": true }),
+    )
+    .await;
+    let (publish, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Publish", "scope": "publish", "people": true }),
+    )
+    .await;
+    let (veras, _) = maker_token(
+        &app,
+        &vera,
+        json!({ "name": "Vera's", "scope": "read", "people": true }),
+    )
+    .await;
+
+    // Without People access: the board as a visitor sees it, even the person's own request.
+    let (failed, text) = maker_tool(
+        &app,
+        &apps_only,
+        "find_work_requests",
+        json!({ "skill": "pixel-art" }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let board = parsed(&text);
+    assert_eq!(board.as_array().unwrap().len(), 1);
+    assert_eq!(
+        (
+            &board[0]["id"],
+            &board[0]["mine"],
+            &board[0]["put_forward"],
+            &board[0]["owner"]
+        ),
+        (&json!(id), &json!(false), &Value::Null, &Value::Null)
+    );
+    let (_, text) = maker_tool(
+        &app,
+        &apps_only,
+        "find_work_requests",
+        json!({ "skill": "music" }),
+    )
+    .await;
+    assert_eq!(parsed(&text), json!([]));
+    let (failed, text) = maker_tool(&app, &apps_only, "my_work_requests", json!({})).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    // Nor does it see the notice that a name came in.
+    let inbox = |token: &str| {
+        let r = req(Method::GET, "/v1/me/notifications").header("authorization", token.to_string());
+        let app = &app;
+        async move { body_json(app.send(r).await).await.to_string() }
+    };
+    assert!(!inbox(&apps_only).await.contains("New names put forward"));
+    assert!(inbox(&people).await.contains("New names put forward"));
+
+    // With People access: the person's own, with who put their name forward.
+    let (failed, text) = maker_tool(&app, &people, "my_work_requests", json!({})).await;
+    assert!(!failed, "{text}");
+    let mine = parsed(&text);
+    assert_eq!(mine["posted"][0]["id"], json!(id));
+    assert_eq!(
+        mine["posted"][0]["owner"]["responses"][0]["person"]["handle"],
+        "vera"
+    );
+    assert_eq!(mine["posted"][0]["owner"]["responses_total"], 1);
+    assert_eq!(
+        mine["projects"],
+        json!([{ "slug": "tavern", "title": "tavern" }])
+    );
+    let (_, text) = maker_tool(&app, &people, "find_work_requests", json!({})).await;
+    assert_eq!(parsed(&text)[0]["mine"], true);
+    // A creative's: what she put her name forward for.
+    let (failed, text) = maker_tool(&app, &veras, "my_work_requests", json!({})).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["put_forward"][0]["id"], json!(id));
+    let (_, text) = maker_tool(&app, &veras, "find_work_requests", json!({})).await;
+    assert!(parsed(&text)[0]["put_forward"]["at"].is_string(), "{text}");
+
+    // A token for some of its person's apps reads only those apps' requests and projects
+    // (`posted`, `projects`, `has_apps`); what its person put their name forward for is about
+    // other people's apps, so it isn't cut.
+    listed_with(&app, maker_id, "mill", "released", "").await;
+    listed_with(&app, maker_id, "sketch", "released", "status = 'draft'").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/work-requests")
+                .cookie(&maker)
+                .json(json!({
+                    "app_slug": "mill", "skill": "music", "title": "Theme",
+                    "description_md": "A loop.", "confirm_adult": true
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let mill = body_json(res).await["id"].as_str().unwrap().to_string();
+    let posted = |mine: &Value| -> Vec<String> {
+        mine["posted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (_, text) = maker_tool(&app, &people, "my_work_requests", json!({})).await;
+    let all = parsed(&text);
+    assert_eq!(posted(&all), [mill.clone(), id.clone()]);
+    assert_eq!(
+        all["projects"],
+        json!([{ "slug": "mill", "title": "mill" }, { "slug": "tavern", "title": "tavern" }])
+    );
+    for (apps, ids, projects) in [
+        (
+            json!(["tavern"]),
+            vec![id.clone()],
+            json!([{ "slug": "tavern", "title": "tavern" }]),
+        ),
+        (
+            json!(["mill"]),
+            vec![mill.clone()],
+            json!([{ "slug": "mill", "title": "mill" }]),
+        ),
+        // An app that isn't in the store: nothing to post for, but the person has apps.
+        (json!(["sketch"]), vec![], json!([])),
+    ] {
+        let (token, _) = maker_token(
+            &app,
+            &maker,
+            json!({ "name": "Some apps", "scope": "read", "people": true, "apps": apps }),
+        )
+        .await;
+        let (failed, text) = maker_tool(&app, &token, "my_work_requests", json!({})).await;
+        assert!(!failed, "{text}");
+        let some = parsed(&text);
+        assert_eq!(posted(&some), ids, "{apps}");
+        assert_eq!(some["projects"], projects, "{apps}");
+        assert_eq!(some["has_apps"], true, "{apps}");
+    }
+    // The one app a token was for is gone: its person still has apps, the token none.
+    let (sketch, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Sketch", "scope": "read", "people": true, "apps": ["sketch"] }),
+    )
+    .await;
+    sqlx::query("delete from apps where slug = 'sketch'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (_, text) = maker_tool(&app, &sketch, "my_work_requests", json!({})).await;
+    assert_eq!(parsed(&text)["has_apps"], false, "{text}");
+    let (_, text) = maker_tool(&app, &people, "my_work_requests", json!({})).await;
+    assert_eq!(parsed(&text)["has_apps"], true, "{text}");
+    listed_with(&app, vera_id, "vera-game", "released", "status = 'draft'").await;
+    let (veras_game, _) = maker_token(
+        &app,
+        &vera,
+        json!({ "name": "Vera's game", "scope": "read", "people": true, "apps": ["vera-game"] }),
+    )
+    .await;
+    let (_, text) = maker_tool(&app, &veras_game, "my_work_requests", json!({})).await;
+    let hers = parsed(&text);
+    assert_eq!(hers["put_forward"][0]["id"], json!(id), "{text}");
+    assert_eq!(
+        (&hers["posted"], &hers["projects"], &hers["has_apps"]),
+        (&json!([]), &json!([]), &json!(true))
+    );
+
+    // Posting, reading one by id, closing, putting a name forward and taking it back are the
+    // person's: refused for every token, and nothing changes.
+    for token in [&apps_only, &people, &publish, &veras] {
+        for (m, path, body) in [
+            (
+                Method::POST,
+                "/v1/work-requests".to_string(),
+                Some(json!({
+                    "app_slug": "tavern", "skill": "music", "title": "Theme",
+                    "description_md": "A loop.", "confirm_adult": true
+                })),
+            ),
+            (Method::GET, format!("/v1/work-requests/{id}"), None),
+            (Method::POST, format!("/v1/work-requests/{id}/close"), None),
+            (
+                Method::PUT,
+                format!("/v1/work-requests/{id}/response"),
+                Some(json!({ "service_id": null })),
+            ),
+            (
+                Method::DELETE,
+                format!("/v1/work-requests/{id}/response"),
+                None,
+            ),
+        ] {
+            let mut r = req(m.clone(), path.clone()).header("authorization", token.to_string());
+            if let Some(b) = body {
+                r = r.json(b);
+            }
+            assert_eq!(
+                app.send(r).await.status(),
+                StatusCode::FORBIDDEN,
+                "{m} {path}"
+            );
+        }
+    }
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from work_requests where status = 'open'"
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from work_request_responses where withdrawn_at is null"
+        )
+        .await,
+        1
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

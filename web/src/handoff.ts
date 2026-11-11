@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Handoff links (DESIGN §8 and §15.1): someone's AI assistant prepares a new app's store page, a
-// People page or a request to hire someone, and gives them one link, /publish/new#fill=…,
-// /people/me#fill=… or /people/{handle}#fill=…, with the fields as URL-encoded JSON
+// Handoff links (DESIGN §8, §15.1 and §15.9): someone's AI assistant prepares a new app's store
+// page, a People page, a request to hire someone or an open request on People, and gives them one
+// link, /publish/new#fill=…, /people/me#fill=…, /people/{handle}#fill=… or
+// /people?view=requests#fill=…, with the fields as URL-encoded JSON
 // (`encodeURIComponent(JSON.stringify(fields))`, named as the API names them). The fill rides in
 // the fragment, so it never reaches the server or its logs. The form opens filled in; the person
-// checks it and presses Create (or Send request) themselves.
+// checks it and presses Create (or Send request, or Post request) themselves.
 //
 // The link is untrusted: only the form's own fields, of the right type and within the form's
 // limits, go into the form, and only as the values of its inputs. Nothing that's the person's own
@@ -26,7 +27,7 @@ import {
 } from "./api";
 import { CONTENT_LABEL, ONLINE_LABEL } from "./format";
 
-export type HandoffForm = "app" | "people" | "hire";
+export type HandoffForm = "app" | "people" | "hire" | "request";
 
 /** A link's fields as sent, or why the link couldn't be read. */
 export type HandoffLink = { fields: Record<string, unknown> } | { error: string };
@@ -662,4 +663,73 @@ export const HIRE_LABELS: Record<string, string> = {
   adult: "I'm 18 or older",
   client_is_business: "I'm hiring as a business",
   inquiry: "Ask about it first",
+};
+
+// ---- An open request on People (/people?view=requests) -------------------------------------------
+
+export const REQUEST_LIMITS = { title: 100, description_md: 2000 } as const;
+
+/** The request form's fields a link can fill in (the API's new request, without the 18+ tick). */
+export interface RequestFields {
+  app_slug: string;
+  skill: string;
+  title: string;
+  description_md: string;
+  wanted_by: string;
+}
+
+/** What the request form can take right now. */
+export interface RequestContext {
+  /** Slugs of the person's projects a request can be for (in the store). */
+  projects: readonly string[];
+  /** Every skill slug People has. */
+  skills: readonly string[];
+}
+
+/**
+ * An open request (the API's new request), checked against the form: the project is one of the
+ * person's own in the store, the skill is one People has, the date isn't past (`today`, UTC, as the
+ * API counts it). Never filled in: being 18 or older, agreements, and a budget or price, which a
+ * request doesn't have.
+ */
+export function requestFill(
+  fields: Record<string, unknown>,
+  to: RequestContext,
+  today: string = new Date().toISOString().slice(0, 10),
+): Fill<RequestFields> {
+  const fromToday: Check<string> = (v) => {
+    const r = day(v);
+    return typeof r === "string" && r < today ? new Skip("is in the past") : r;
+  };
+  const noBudget = "there's no budget on a request: the creative sets the price in their quote";
+  return read<RequestFields>(
+    fields,
+    {
+      app_slug: among(to.projects, "isn't one of your projects in the store"),
+      skill: among(to.skills, "isn't a skill on People"),
+      title: text(REQUEST_LIMITS.title, { required: true }),
+      description_md: text(REQUEST_LIMITS.description_md, { lines: true, required: true }),
+      wanted_by: fromToday,
+    },
+    {
+      ...AGREEMENTS,
+      confirm_adult: "only you can say you're 18 or older",
+      adult: "only you can say you're 18 or older",
+      budget: noBudget,
+      price: noBudget,
+    },
+  );
+}
+
+/** The request form's labels, for saying what was filled in. */
+export const REQUEST_LABELS: Record<string, string> = {
+  app_slug: "Project",
+  skill: "Skill",
+  title: "Title",
+  description_md: "What you need",
+  wanted_by: "Hoping to have it by",
+  confirm_adult: "I'm 18 or older",
+  adult: "I'm 18 or older",
+  budget: "Budget",
+  price: "Price",
 };
