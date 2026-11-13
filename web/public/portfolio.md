@@ -419,7 +419,7 @@ self-closing custom tags (anything inside one is moved after it, with a warning)
 
 | Tag | Attributes | Shows |
 | --- | --- | --- |
-| `<slop-works></slop-works>` | none | All your works as a grid, in the order you set in your editor; pictures open large |
+| `<slop-works></slop-works>` | none | All your works as a grid, in the order you set in your editor; a picture opens in a full-screen viewer that steps through the pictures your page shows |
 | `<slop-work ref="1"></slop-work>` | `ref`: the work's number in `portfolio.json`'s `works` list, counting from 1 | One work |
 | `<slop-video youtube="https://youtu.be/…" title="Showreel"></slop-video>` | `youtube`: a YouTube link or 11-character video ID; `title` (optional, up to 80 characters) | A YouTube video, played from youtube-nocookie.com when pressed |
 | `<slop-track src="tracks/theme.ogg" title="Main theme"></slop-track>` | `src`: an MP3, Ogg, WAV, FLAC or M4A file up to 15 MB, a path like an `<img>`'s; `title` (optional) | SLAPorSLOP's audio player |

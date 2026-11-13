@@ -11,6 +11,7 @@ import type { StoreIconName } from "../storeIcons";
 import { money } from "../format";
 import { isDesktop, openExternal } from "../platform";
 import { Avatar } from "./Avatar";
+import { MediaViewer, isPixelArt, type ViewerItem } from "./MediaViewer";
 import { PageStateBadge } from "./PeopleStatus";
 import { SkillIcon, StoreIcon } from "./StoreIcons";
 
@@ -181,15 +182,18 @@ export function PersonCard({ c }: { c: CreativeCard }) {
   );
 }
 
+/** A work's name, and a picture's text alternative. */
+const workLabel = (w: Work) => w.title ?? (w.kind === "audio" ? "Track" : w.kind === "video" ? "Video" : "Picture");
+
 /** One portfolio work: a picture, a video (YouTube, loaded on press) or a track. */
-export function WorkTile({ w, onOpen }: { w: Work; onOpen?: (w: Work) => void }) {
+export function WorkTile({ w, onOpen }: { w: Work; onOpen?: (w: Work, from: HTMLElement) => void }) {
   const [playing, setPlaying] = useState(false);
-  const label = w.title ?? (w.kind === "audio" ? "Track" : w.kind === "video" ? "Video" : "Picture");
+  const label = workLabel(w);
   return (
     <figure className={`work work-${w.kind}`}>
       {w.kind === "image" && (
-        <button type="button" className="work-pic" onClick={() => onOpen?.(w)} aria-label={`View larger: ${label}`}>
-          <img src={w.url ?? ""} alt={label} loading="lazy" className={(w.width ?? 999) < 200 ? "pixelated" : ""} />
+        <button type="button" className="work-pic" onClick={(e) => onOpen?.(w, e.currentTarget)} aria-label={`View larger: ${label}`}>
+          <img src={w.url ?? ""} alt={label} loading="lazy" className={isPixelArt(w.width) ? "pixelated" : ""} />
         </button>
       )}
       {w.kind === "video" &&
@@ -232,14 +236,37 @@ export function WorkTile({ w, onOpen }: { w: Work; onOpen?: (w: Work) => void })
   );
 }
 
-export function Lightbox({ w, onClose }: { w: Work; onClose: () => void }) {
+/** A picture opened full size, and the "View larger" button it was opened from. */
+export interface OpenWork {
+  w: Work;
+  from: HTMLElement;
+}
+
+/**
+ * A creative's pictures full size (MediaViewer.tsx), opened at `open` from its "View larger"
+ * button; the arrows step through their other pictures. `works` is what their page shows (with a
+ * design, only the works it places). Focus goes back to the button it was opened from.
+ */
+export function WorksViewer({ works, open, name, onClose }: { works: Work[]; open: OpenWork; name: string; onClose: () => void }) {
+  const pictures = works.filter((w) => w.kind === "image");
+  const items: ViewerItem[] = (pictures.some((w) => w.key === open.w.key) ? pictures : [open.w]).map((w) => ({
+    id: w.key,
+    kind: "image",
+    url: w.url,
+    label: workLabel(w),
+    title: w.title,
+    caption: w.caption,
+    width: w.width,
+    height: w.height,
+  }));
   return (
-    <div className="lightbox" role="dialog" aria-modal="true" aria-label={w.title ?? "Picture"} onClick={onClose}>
-      <img src={w.url ?? ""} alt={w.title ?? ""} className={(w.width ?? 999) < 200 ? "pixelated" : ""} />
-      <button type="button" className="btn" onClick={onClose} autoFocus>
-        Close
-      </button>
-    </div>
+    <MediaViewer
+      items={items}
+      start={Math.max(0, items.findIndex((it) => it.id === open.w.key))}
+      label={`${name}: portfolio`}
+      returnFocus={() => (open.from.isConnected ? open.from : null)}
+      onClose={onClose}
+    />
   );
 }
 

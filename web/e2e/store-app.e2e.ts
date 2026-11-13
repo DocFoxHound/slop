@@ -3,6 +3,7 @@
 // maker's replies, what it does and its accessibility, the library and Interested buttons,
 // drafts, Private and its share panel, community builds, and what's shown around them.
 // The apps changed here are the test's own (store-helpers.ts); the seeded ones are only read.
+import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 import { expect, ids, server, signIn, test } from "./fixtures";
 import { call, delist, draftApp, failApi, listedApp, patchJson, path, played, released, tryCall } from "./store-helpers";
@@ -654,18 +655,257 @@ test("the store page's gallery steps with the arrow keys", async ({ page }) => {
   const gallery = page.getByRole("region", { name: "Lantern Keep: screenshots and videos" });
   const strip = gallery.getByRole("tablist", { name: "Choose a screenshot or video" });
   await strip.getByRole("tab", { name: "The keep at dusk" }).focus();
-  await expect(gallery.getByRole("img", { name: "The keep at dusk" })).toBeVisible();
+  await expect(gallery.getByRole("button", { name: "View full size: The keep at dusk" })).toBeVisible();
   await page.keyboard.press("ArrowRight");
   await expect(strip.getByRole("tab", { name: "Lighting the first lantern" })).toHaveAttribute("aria-selected", "true");
-  await expect(gallery.getByRole("img", { name: "Lighting the first lantern" })).toBeVisible();
+  await expect(gallery.getByRole("button", { name: "View full size: Lighting the first lantern" })).toBeVisible();
   await page.keyboard.press("ArrowRight");
   await expect(gallery.getByRole("button", { name: /Play video: Video 3 of 3/ })).toBeVisible();
   // It wraps around, both ways.
   await page.keyboard.press("ArrowRight");
-  await expect(gallery.getByRole("img", { name: "The keep at dusk" })).toBeVisible();
+  await expect(gallery.getByRole("button", { name: "View full size: The keep at dusk" })).toBeVisible();
   await page.keyboard.press("ArrowLeft");
   await expect(gallery.getByRole("button", { name: /Play video/ })).toBeVisible();
-  await expect(gallery.locator("iframe")).toHaveCount(0);
+  // Nothing from YouTube anywhere on the page (the full-size viewer is outside the region).
+  await expect(page.locator("iframe")).toHaveCount(0);
+  // Choosing a thumbnail only changes the stage, as on Steam.
+  await strip.getByRole("tab", { name: "The keep at dusk" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+const fullSize = (page: Page) => page.getByRole("dialog", { name: "Lantern Keep: screenshots and videos" });
+
+test("a screenshot opens full size from the stage: it steps, Escape closes, and the stage shows the last one viewed", async ({ page }) => {
+  await page.goto(`/app/${ids.listedApp}`);
+  const gallery = page.getByRole("region", { name: "Lantern Keep: screenshots and videos" });
+  const stage = gallery.getByRole("button", { name: "View full size: The keep at dusk" });
+  await expect(stage).toHaveCSS("cursor", "zoom-in");
+  await stage.click();
+  const viewer = fullSize(page);
+  await expect(viewer).toBeVisible();
+  const shot = viewer.getByRole("img", { name: "The keep at dusk" });
+  await expect(shot).toBeVisible();
+  await expect(viewer.getByText("1 of 3", { exact: true })).toBeVisible();
+  await expect(viewer.getByRole("button", { name: "Close" })).toBeFocused();
+  // As large as the window allows, never above its own size (1280×720), nothing cut off.
+  await expect.poll(() => shot.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1280);
+  const box = (await shot.boundingBox())!;
+  const view = page.viewportSize()!;
+  expect(box.width).toBeGreaterThan(900);
+  expect(box.width).toBeLessThanOrEqual(1280);
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(view.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(view.height);
+  // The page behind doesn't scroll while it's open.
+  expect(await page.locator("main.view").evaluate((m) => getComputedStyle(m).overflowY)).toBe("hidden");
+
+  // Arrow keys and the buttons step, wrapping around.
+  await page.keyboard.press("ArrowRight");
+  await expect(viewer.getByRole("img", { name: "Lighting the first lantern" })).toBeVisible();
+  await expect(viewer.getByText("2 of 3", { exact: true })).toBeVisible();
+  await viewer.getByRole("button", { name: "Next" }).click();
+  await expect(viewer.getByRole("button", { name: "Play video: Video 3 of 3" })).toBeVisible();
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await page.keyboard.press("ArrowRight");
+  await expect(viewer.getByText("1 of 3", { exact: true })).toBeVisible();
+  await viewer.getByRole("button", { name: "Previous" }).click();
+  await page.keyboard.press("ArrowLeft");
+  await expect(viewer.getByText("2 of 3", { exact: true })).toBeVisible();
+
+  // Focus stays in the viewer: Tab visits its controls and never reaches the page behind it. (After
+  // the last control the browser may pass focus to its own toolbar for one press: the body here.)
+  const reached: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.press("Tab");
+    reached.push(
+      await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!el || el === document.body) return "body";
+        if (!el.closest("dialog.viewer")) return `outside: ${el.outerHTML.slice(0, 80)}`;
+        return el.getAttribute("aria-label") ?? el.textContent?.trim() ?? el.tagName;
+      }),
+    );
+  }
+  expect(reached.filter((r) => r.startsWith("outside"))).toEqual([]);
+  expect(reached.filter((r) => r === "body").length).toBeLessThanOrEqual(2);
+  expect(reached).toEqual(expect.arrayContaining(["✕ Close", "Previous", "Next"]));
+
+  // With the video's Play button focused, the arrow keys keep stepping (focus never drops out).
+  await viewer.getByRole("button", { name: "Next" }).click();
+  const viewerPlay = viewer.getByRole("button", { name: "Play video: Video 3 of 3. Plays from YouTube" });
+  await viewerPlay.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(viewer.getByText("1 of 3", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement?.closest("dialog.viewer") != null)).toBe(true);
+  await page.keyboard.press("ArrowRight");
+  await expect(viewer.getByText("2 of 3", { exact: true })).toBeVisible();
+  // A click on the picture (not a control) keeps the keys working too.
+  await viewer.getByRole("img", { name: "Lighting the first lantern" }).click();
+  await page.keyboard.press("ArrowLeft");
+  await expect(viewer.getByText("1 of 3", { exact: true })).toBeVisible();
+  await page.keyboard.press("ArrowRight");
+  await expect(viewer.getByText("2 of 3", { exact: true })).toBeVisible();
+
+  // Escape closes; focus is back on the stage, which shows the picture last viewed.
+  await page.keyboard.press("Escape");
+  await expect(viewer).toBeHidden();
+  const back = gallery.getByRole("button", { name: "View full size: Lighting the first lantern" });
+  await expect(back).toBeFocused();
+  await expect(gallery.getByRole("tab", { name: "Lighting the first lantern" })).toHaveAttribute("aria-selected", "true");
+  expect(await page.locator("main.view").evaluate((m) => getComputedStyle(m).overflowY)).toBe("auto");
+
+  // A click on the dark area beside the picture closes it too; a click on the picture doesn't.
+  await back.click();
+  const lit = viewer.getByRole("img", { name: "Lighting the first lantern" });
+  await lit.click();
+  await expect(viewer).toBeVisible();
+  const at = (await lit.boundingBox())!;
+  expect(at.x).toBeGreaterThan(20);
+  await page.mouse.click(at.x - 10, at.y + 10);
+  await expect(viewer).toBeHidden();
+  await expect(back).toBeFocused();
+});
+
+test("in a window bigger than the picture, the viewer draws it at its own size, never larger", async ({ page }) => {
+  await page.setViewportSize({ width: 2000, height: 1400 });
+  await page.goto(`/app/${ids.listedApp}`);
+  const gallery = page.getByRole("region", { name: "Lantern Keep: screenshots and videos" });
+  await gallery.getByRole("button", { name: "View full size: The keep at dusk" }).click();
+  const shot = fullSize(page).getByRole("img", { name: "The keep at dusk" });
+  await expect.poll(() => shot.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1280);
+  const natural = await shot.evaluate((img: HTMLImageElement) => [img.naturalWidth, img.naturalHeight]);
+  const box = (await shot.boundingBox())!;
+  expect(Math.abs(box.width - natural[0])).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(box.height - natural[1])).toBeLessThanOrEqual(0.5);
+  // A click on the dark area beside it closes.
+  await page.mouse.click(box.x - 20, box.y + box.height / 2);
+  await expect(fullSize(page)).toBeHidden();
+});
+
+test("a video opened from the store page's stage plays full size; YouTube loads only then", async ({ page }) => {
+  // No real YouTube in tests: its privacy-enhanced player answers with a stand-in page, counted.
+  let players = 0;
+  await page.route("https://www.youtube-nocookie.com/**", (route) => {
+    players++;
+    return route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Player</title><p>Player</p>" });
+  });
+  // Every host the page asks anything of: nothing YouTube's until Play is pressed.
+  const youtube: string[] = [];
+  page.on("request", (r) => {
+    const host = new URL(r.url()).host;
+    if (/youtube|ytimg|googlevideo|ggpht/.test(host)) youtube.push(r.url());
+  });
+  await page.goto(`/app/${ids.listedApp}`);
+  const gallery = page.getByRole("region", { name: "Lantern Keep: screenshots and videos" });
+  await gallery.getByRole("tab", { name: "Video 3 of 3" }).click();
+  const play = gallery.getByRole("button", { name: "Play video: Video 3 of 3. Plays from YouTube" });
+  await expect(play).toContainText("Video 3 of 3");
+  await expect(play).toContainText("Plays from YouTube");
+  await expect(page.locator("iframe")).toHaveCount(0);
+  expect(youtube).toEqual([]);
+  // The stage's Play passes the accessibility check too (its name holds the words it shows).
+  const stageScan = await new AxeBuilder({ page }).include(".gallery").withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  expect(stageScan.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  await play.click();
+  const viewer = fullSize(page);
+  await expect(viewer.getByText("3 of 3", { exact: true })).toBeVisible();
+  const player = viewer.locator("iframe");
+  await expect(player).toHaveAttribute("src", /^https:\/\/www\.youtube-nocookie\.com\/embed\/dQw4w9WgXcQ\?autoplay=1/);
+  await expect(player).toHaveAttribute("title", "Video 3 of 3");
+  await expect(player).toBeVisible();
+  expect(players).toBe(1);
+  // Stepping away removes the player; back on the video, it waits for Play again.
+  await viewer.getByRole("button", { name: "Next" }).click();
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await viewer.getByRole("button", { name: "Previous" }).click();
+  const again = viewer.getByRole("button", { name: "Play video: Video 3 of 3. Plays from YouTube" });
+  await expect(again).toBeVisible();
+  await expect(page.locator("iframe")).toHaveCount(0);
+  expect(players).toBe(1);
+  // Played from the keyboard: focus stays in the viewer, and the arrows step on and remove the player.
+  await again.focus();
+  await page.keyboard.press("Enter");
+  await expect(viewer.locator("iframe")).toHaveCount(1);
+  await expect.poll(() => players).toBe(2);
+  expect(await page.evaluate(() => document.activeElement?.closest("dialog.viewer") != null)).toBe(true);
+  await page.keyboard.press("ArrowRight");
+  await expect(viewer.getByText("1 of 3", { exact: true })).toBeVisible();
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await page.keyboard.press("ArrowLeft");
+  await expect(viewer.getByText("3 of 3", { exact: true })).toBeVisible();
+  await again.click();
+  await expect(viewer.locator("iframe")).toHaveCount(1);
+  await expect.poll(() => players).toBe(3);
+  // Closing removes it too, and focus goes back to the stage's Play.
+  await viewer.getByRole("button", { name: "Close" }).click();
+  await expect(viewer).toBeHidden();
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await expect(play).toBeFocused();
+  // Only the player, only when pressed: nothing else from YouTube (no thumbnails, no preconnects).
+  expect(youtube.every((u) => u.startsWith("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?"))).toBe(true);
+  expect(youtube.filter((u) => u.startsWith("https://www.youtube-nocookie.com/embed/")).length).toBe(3);
+});
+
+test("the full-size viewer passes an accessibility check and fits a phone", async ({ page }) => {
+  await page.goto(`/app/${ids.listedApp}`);
+  const gallery = page.getByRole("region", { name: "Lantern Keep: screenshots and videos" });
+  await gallery.getByRole("button", { name: "View full size: The keep at dusk" }).click();
+  const viewer = fullSize(page);
+  await expect(viewer.getByRole("img", { name: "The keep at dusk" })).toBeVisible();
+  const scan = async () => {
+    const results = await new AxeBuilder({ page }).include("dialog.viewer").withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+    expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  };
+  await scan();
+  // The video's poster and Play, too.
+  await viewer.getByRole("button", { name: "Previous" }).click();
+  const play = viewer.getByRole("button", { name: "Play video: Video 3 of 3. Plays from YouTube" });
+  await expect(play).toBeVisible();
+  await scan();
+
+  // The video's card at phone width, and in a short window (400% zoom of 1280×1024): its name is
+  // inside the button and clear of the Play mark, or left out where there's no room.
+  const cardFits = async (named: boolean) => {
+    const button = (await play.boundingBox())!;
+    const mark = (await play.locator(".play-mark").boundingBox())!;
+    const name = play.locator(".play-card > span");
+    expect(button.x).toBeGreaterThanOrEqual(0);
+    expect(button.y + button.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+    expect(await name.isVisible()).toBe(named);
+    if (!named) return;
+    const text = (await name.boundingBox())!;
+    expect(text.y).toBeGreaterThanOrEqual(mark.y + mark.height);
+    expect(text.y + text.height).toBeLessThanOrEqual(button.y + button.height);
+    expect(await name.evaluate((n) => n.scrollHeight <= n.clientHeight + 1)).toBe(true);
+  };
+  await cardFits(true);
+  await page.setViewportSize({ width: 320, height: 256 });
+  await cardFits(false);
+  await page.setViewportSize({ width: 375, height: 700 });
+  await cardFits(false);
+
+  // At phone width: no sideways scroll, everything inside the window with its gutter, buttons big enough.
+  await viewer.getByRole("button", { name: "Next" }).click();
+  const shot = viewer.getByRole("img", { name: "The keep at dusk" });
+  await expect.poll(() => shot.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1280);
+  const pic = (await shot.boundingBox())!;
+  expect(pic.width).toBeGreaterThan(300);
+  expect(pic.x).toBeGreaterThanOrEqual(15.5);
+  expect(pic.x + pic.width).toBeLessThanOrEqual(375 - 15.5);
+  for (const name of ["Close", "Previous", "Next"]) {
+    const b = (await viewer.getByRole("button", { name }).boundingBox())!;
+    expect(b.x).toBeGreaterThanOrEqual(0);
+    expect(b.x + b.width).toBeLessThanOrEqual(375);
+    expect(b.y + b.height).toBeLessThanOrEqual(700);
+    expect(b.width).toBeGreaterThanOrEqual(44);
+    expect(b.height).toBeGreaterThanOrEqual(44);
+  }
+  expect(await viewer.evaluate((d) => d.scrollWidth <= d.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+  await scan();
+  await page.keyboard.press("Escape");
+  await expect(viewer).toBeHidden();
 });
 
 test("Private: its owner shares it with friends, people and invite-only teams, and stops", async ({ browser }) => {

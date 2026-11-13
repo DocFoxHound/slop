@@ -871,6 +871,7 @@ function DesignReview({ set, name, services }: { set: PortfolioSet; name: string
         works={set.works.map(portfolioWork)}
         services={services}
         label={`Preview of ${name}'s page design`}
+        name={name}
       />
       <details>
         <summary className="muted small">The HTML and CSS, as SLAPorSLOP will show them</summary>

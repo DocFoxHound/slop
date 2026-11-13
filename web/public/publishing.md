@@ -228,6 +228,8 @@ Rules:
   SLAPorSLOP.
 - You choose the **order** players see the gallery in on **Edit store page**. That isn't reviewed,
   and pictures added later go at the end. The order in `media.json` is only the starting order.
+- Players can press the big picture on your store page to see it full size, and step through the
+  whole gallery there.
 
 ### 3. Submit a release
 
