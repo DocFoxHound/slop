@@ -80,3 +80,18 @@ export function useChosen<T>(saved: T): [T, (choice: T | undefined) => void] {
   }, [saved, chosen]);
   return [chosen ?? saved, setChosen];
 }
+
+/** Whether a CSS media query matches, kept up to date as the window changes. */
+export function useMediaQuery(query: string): boolean {
+  const get = () => typeof window !== "undefined" && Boolean(window.matchMedia?.(query).matches);
+  const [matches, setMatches] = useState(get);
+  useEffect(() => {
+    const list = window.matchMedia?.(query);
+    if (!list) return;
+    const changed = () => setMatches(list.matches);
+    changed();
+    list.addEventListener("change", changed);
+    return () => list.removeEventListener("change", changed);
+  }, [query]);
+  return matches;
+}

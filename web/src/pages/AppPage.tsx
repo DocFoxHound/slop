@@ -16,7 +16,7 @@ import { Reviews } from "../components/Reviews";
 import { AppIcon, appIconProps } from "../components/AppIcon";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
 import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LABEL, playsInBrowser, STAGE_LABEL } from "../format";
-import { useDocumentTitle, useLoad } from "../hooks";
+import { useDocumentTitle, useLoad, useMediaQuery } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { BrowserPlayLink, InstallControls } from "../components/InstallControls";
 import { StoreNav } from "../components/StoreNav";
@@ -50,8 +50,12 @@ export function AppPage() {
   return <AppView app={app.data} />;
 }
 
+/** The width where the store page becomes one column (styles.css, "smaller windows"). */
+const useNarrow = () => useMediaQuery("(max-width: 900px)");
+
 function AppView({ app }: { app: AppDetail }) {
   const { me } = useSession();
+  const narrow = useNarrow();
   // A game that plays on its maker's website: nothing to install, here or in the SLAPorSLOP app.
   const inBrowser = playsInBrowser(app);
   // The desktop app adds to the library by installing; a browser game is added with its own button there too.
@@ -131,6 +135,86 @@ function AppView({ app }: { app: AppDetail }) {
     }
   };
 
+  // The side panels after "Get it": in the right column on a wide window; on a narrow one they
+  // come after the description, so it isn't pushed far down the page.
+  const sidePanels = (
+    <>
+      <div className="panel panel-pad trust">
+        {/* A browser game: SLAPorSLOP checks its address, never what the site serves, so no build,
+            scan or sale claims for it (DESIGN A6). */}
+        {inBrowser && (
+          <div className="trust-row">
+            <span className="ic">
+              <StoreIcon name="browser" />
+            </span>
+            <span>
+              <b>Runs on the maker's website.</b> SLAPorSLOP checked the address, not what the site serves.
+            </span>
+          </div>
+        )}
+        {provenance && (
+          <div className="trust-row">
+            <span className="ic">
+              <StoreIcon name="signing" />
+            </span>
+            <span>
+              <b>{provenance.built_by_slop_build ? "Built by Slop Build from source" : "Built from source"}</b> · signed by{" "}
+              {provenance.run_url ? (
+                <ExternalLink href={provenance.run_url}>{workflowName(provenance.signer_workflow)}</ExternalLink>
+              ) : (
+                workflowName(provenance.signer_workflow)
+              )}{" "}
+              at <code>{provenance.commit.slice(0, 7)}</code>
+            </span>
+          </div>
+        )}
+        {(scannedWith || windowsFile) && (
+          <div className="trust-row">
+            <span className="ic">
+              <StoreIcon name="verify" />
+            </span>
+            <span>
+              <b>Scanned</b>
+              {scannedWith && ` with ${scannedWith}`}
+              {windowsFile?.defender && windowsFile.defender.detections.length === 0 && " · Microsoft Defender found nothing"}
+              {windowsFile?.defender?.signed_by && ` · Windows program signed by ${windowsFile.defender.signed_by}`}
+            </span>
+          </div>
+        )}
+        <div className="trust-row">
+          <span className="ic">
+            <StoreIcon name="source" />
+          </span>
+          <span>
+            <b>Open source</b> · {app.license_spdx} · <ExternalLink href={app.repo_url}>view code</ExternalLink>
+          </span>
+        </div>
+        {!inBrowser && (
+          <div className="trust-row">
+            <span className="ic">
+              <StoreIcon name="bag" />
+            </span>
+            <span>
+              <b>Nothing for sale</b> · donations never unlock anything
+            </span>
+          </div>
+        )}
+      </div>
+      <DedicatedServers
+        servers={app.servers ?? []}
+        isMine={app.is_mine}
+        library={(library.data ?? []).map((e) => e.slug)}
+      />
+      {/* Mods and community builds are installed beside a game: a browser game can't have them yet. */}
+      {!app.branch && !app.private && !inBrowser && <CommunityBuilds app={app} />}
+      {!app.is_mine && (
+        <p className="report-row">
+          <ReportButton kind="app" subject={app.slug} label="this app" />
+        </p>
+      )}
+    </>
+  );
+
   return (
     <div className="page">
       <StoreNav />
@@ -173,151 +257,183 @@ function AppView({ app }: { app: AppDetail }) {
       {/* A browser game runs on its maker's website, which the trust panel says; no sandbox advice for it. */}
       {app.online.length > 0 && !inBrowser && <OnlineNotice app={app} />}
 
+      {/* Two columns that run down the page, as on Steam: the pictures and then the description
+          on the left; the title, "Get it" and the side panels on the right. On a narrow window it
+          is one column in this order. */}
       <div className="app-head">
-        {hasGallery ? <Gallery items={app.gallery} title={app.title} /> : <Art app={app} withName={false} className="hero-art" />}
-        <div className="app-side">
-          {hasGallery && app.thumbnail_url && <Art app={app} withName={false} className="capsule" />}
-          <div>
-            <div className="title-row">
-              <AppIcon {...appIconProps(app)} size={48} className="app-head-icon" />
-              <h1>{app.title}</h1>
-              <StageBadge app={app} />
-              {age && <span className="badge neutral" title={`Rated ${age}`}>{age}</span>}
-              {inBrowser && (
-                <span className="badge official">
-                  <StoreIcon name="browser" size={12} />
-                  PLAYS IN YOUR BROWSER
-                </span>
+        <div className="app-media">
+          {hasGallery ? <Gallery items={app.gallery} title={app.title} /> : <Art app={app} withName={false} className="hero-art" />}
+        </div>
+        <div className="app-rail">
+          <div className="app-side">
+            {hasGallery && app.thumbnail_url && <Art app={app} withName={false} className="capsule" />}
+            <div>
+              <div className="title-row">
+                <AppIcon {...appIconProps(app)} size={48} className="app-head-icon" />
+                <h1>{app.title}</h1>
+                <StageBadge app={app} />
+                {age && <span className="badge neutral" title={`Rated ${age}`}>{age}</span>}
+                {inBrowser && (
+                  <span className="badge official">
+                    <StoreIcon name="browser" size={12} />
+                    PLAYS IN YOUR BROWSER
+                  </span>
+                )}
+              </div>
+              {app.content_labels.length > 0 && (
+                <div className="label-chips" aria-label="Content labels">
+                  {app.content_labels.map((l) => (
+                    <span key={l} className="badge neutral">
+                      {CONTENT_LABEL[l].toUpperCase()}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="muted">
+                by <b className="text">{app.maker.display_name}</b>
+                {app.official_team && (
+                  <>
+                    {" "}
+                    of{" "}
+                    <Link to={`/teams/${app.official_team.slug}`} className="official-team">
+                      {app.official_team.name} <span className="badge official" title="A studio verified through its GitHub organization">✓ OFFICIAL</span>
+                    </Link>
+                  </>
+                )}{" "}
+                · {app.kind === "game" ? "Game" : "App"}
+              </div>
+              {!app.private && (
+                <RatingHeader
+                  slug={app.slug}
+                  title={app.title}
+                  isMine={app.is_mine}
+                  signedIn={Boolean(me)}
+                  play={inBrowser ? <BrowserPlayLink slug={app.slug} address={app.play_address} /> : getItWith(null)}
+                  interested={app.stage === "coming_soon" ? interested : undefined}
+                  browser={inBrowser}
+                />
               )}
             </div>
-            {app.content_labels.length > 0 && (
-              <div className="label-chips" aria-label="Content labels">
-                {app.content_labels.map((l) => (
-                  <span key={l} className="badge neutral">
-                    {CONTENT_LABEL[l].toUpperCase()}
-                  </span>
-                ))}
+            {upcoming && (
+              <div className="panel panel-pad stage-panel">
+                {app.is_dead ? (
+                  <>
+                    <b className="bad">Dead project</b>
+                    <div className="muted">
+                      No code changes in {app.last_commit_at ? daysSince(app.last_commit_at) : "90+"} days
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <b>{deadline}</b>
+                    <div className="muted">
+                      {STAGE_LABEL[app.stage]} since {formatDate(app.stage_entered_at)}
+                    </div>
+                  </>
+                )}
               </div>
             )}
-            <div className="muted">
-              by <b className="text">{app.maker.display_name}</b>
-              {app.official_team && (
-                <>
-                  {" "}
-                  of{" "}
-                  <Link to={`/teams/${app.official_team.slug}`} className="official-team">
-                    {app.official_team.name} <span className="badge official" title="A studio verified through its GitHub organization">✓ OFFICIAL</span>
-                  </Link>
-                </>
-              )}{" "}
-              · {app.kind === "game" ? "Game" : "App"}
-            </div>
-            {!app.private && (
-              <RatingHeader
-                slug={app.slug}
-                title={app.title}
-                isMine={app.is_mine}
-                signedIn={Boolean(me)}
-                play={inBrowser ? <BrowserPlayLink slug={app.slug} address={app.play_address} /> : getItWith(null)}
-                interested={app.stage === "coming_soon" ? interested : undefined}
-                browser={inBrowser}
-              />
+            {counted && players.data && (
+              <div className="playing" title="Counted by Slop Pulse: players who launched it from SLAPorSLOP">
+                <b>{players.data.playing_now.toLocaleString()}</b> playing now ·{" "}
+                {players.data.peak_this_month.toLocaleString()} peak this month
+              </div>
             )}
-          </div>
-          {upcoming && (
-            <div className="panel panel-pad stage-panel">
-              {app.is_dead ? (
+            <p className="lede">{app.summary}</p>
+            {app.credits.length > 0 && (
+              <div className="credits">
+                <span className="badge official" title="This app's maker hired these creatives through People">
+                  <StoreIcon name="made" size={12} />
+                  MADE WITH PEOPLE
+                </span>
+                <span className="small">
+                  {creditsByRole(app.credits).map(([role, people], i) => (
+                    <span key={role}>
+                      {i > 0 && " · "}
+                      {role} by{" "}
+                      {people.map((c, k) => (
+                        <span key={c.handle}>
+                          {k > 0 && (k === people.length - 1 ? " and " : ", ")}
+                          <Link to={`/people/${c.handle}`}>{c.name}</Link>
+                        </span>
+                      ))}
+                    </span>
+                  ))}
+                </span>
+              </div>
+            )}
+            <div className="chips">
+              {app.tag_details.map((t) => (
+                <Link className="chip" key={t.slug} to={`/tag/${t.slug}`}>
+                  {t.name}
+                </Link>
+              ))}
+            </div>
+            {app.is_mine && (
+              <div className="row-actions">
+                <Link className="btn" to={`/publish/${app.slug}`}>
+                  <InlineIcon name="edit" /> Edit store page &amp; media
+                </Link>
+                <Link className="btn" to={`/publish/${app.slug}/releases`}>
+                  <InlineIcon name="publish" /> Releases
+                </Link>
+              </div>
+            )}
+            <dl className="kv">
+              <dt>Source</dt>
+              <dd>
+                <ExternalLink href={app.repo_url}>{app.repo_url.replace(/^https:\/\//, "")}</ExternalLink>
+              </dd>
+              <dt>Licence</dt>
+              <dd>
+                <code>{app.license_spdx}</code>
+              </dd>
+              <dt>Stage</dt>
+              <dd>{STAGE_LABEL[app.stage]}</dd>
+              {app.platforms.length > 0 && (
                 <>
-                  <b className="bad">Dead project</b>
-                  <div className="muted">
-                    No code changes in {app.last_commit_at ? daysSince(app.last_commit_at) : "90+"} days
-                  </div>
-                </>
-              ) : (
-                <>
-                  <b>{deadline}</b>
-                  <div className="muted">
-                    {STAGE_LABEL[app.stage]} since {formatDate(app.stage_entered_at)}
-                  </div>
+                  <dt>Runs on</dt>
+                  <dd>{runsOn(app.platforms)}</dd>
                 </>
               )}
-            </div>
-          )}
-          {counted && players.data && (
-            <div className="playing" title="Counted by Slop Pulse: players who launched it from SLAPorSLOP">
-              <b>{players.data.playing_now.toLocaleString()}</b> playing now ·{" "}
-              {players.data.peak_this_month.toLocaleString()} peak this month
-            </div>
-          )}
-          <p className="lede">{app.summary}</p>
-          {app.credits.length > 0 && (
-            <div className="credits">
-              <span className="badge official" title="This app's maker hired these creatives through People">
-                <StoreIcon name="made" size={12} />
-                MADE WITH PEOPLE
-              </span>
-              <span className="small">
-                {creditsByRole(app.credits).map(([role, people], i) => (
-                  <span key={role}>
-                    {i > 0 && " · "}
-                    {role} by{" "}
-                    {people.map((c, k) => (
-                      <span key={c.handle}>
-                        {k > 0 && (k === people.length - 1 ? " and " : ", ")}
-                        <Link to={`/people/${c.handle}`}>{c.name}</Link>
-                      </span>
-                    ))}
-                  </span>
-                ))}
-              </span>
-            </div>
-          )}
-          <div className="chips">
-            {app.tag_details.map((t) => (
-              <Link className="chip" key={t.slug} to={`/tag/${t.slug}`}>
-                {t.name}
-              </Link>
-            ))}
+              {app.last_commit_at && (
+                <>
+                  <dt>Last commit</dt>
+                  <dd>{formatDate(app.last_commit_at)}</dd>
+                </>
+              )}
+            </dl>
           </div>
-          {app.is_mine && (
-            <div className="row-actions">
-              <Link className="btn" to={`/publish/${app.slug}`}>
-                <InlineIcon name="edit" /> Edit store page &amp; media
-              </Link>
-              <Link className="btn" to={`/publish/${app.slug}/releases`}>
-                <InlineIcon name="publish" /> Releases
-              </Link>
+          <aside className="side-col">
+            <div className="panel panel-pad install-box">
+              <h3>{app.stage === "coming_soon" ? "Coming soon" : inBrowser ? "Play it" : "Get it"}</h3>
+              {app.stage === "coming_soon" ? (
+                <p className="muted">{inBrowser ? "Not playable yet." : "No builds yet."} This is a Coming soon page.</p>
+              ) : (
+                getIt
+              )}
+              {/* Sandbox mode and demos are for what the SLAPorSLOP app installs; a browser game already plays in the browser. */}
+              {app.stage !== "coming_soon" && !app.platforms.includes("any") && !inBrowser && <SandboxNote app={app} />}
+              {!inBrowser && <DemoButton demo={app.demo} />}
+              {app.stage !== "coming_soon" && <LabelNotes slug={app.slug} browser={inBrowser} />}
+              {app.stage !== "coming_soon" && interested}
+              {packages.length > 0 && (
+                <p className="muted small packages">
+                  Linux packages:{" "}
+                  {packages.map((f, i) => (
+                    <span key={f.platform}>
+                      {i > 0 && " · "}
+                      <ExternalLink href={f.url}>{f.platform === "linux-deb" ? ".deb" : ".rpm"}</ExternalLink>
+                    </span>
+                  ))}{" "}
+                  <span className="faint">(installed by your system, not by SLAPorSLOP)</span>
+                </p>
+              )}
             </div>
-          )}
-          <dl className="kv">
-            <dt>Source</dt>
-            <dd>
-              <ExternalLink href={app.repo_url}>{app.repo_url.replace(/^https:\/\//, "")}</ExternalLink>
-            </dd>
-            <dt>Licence</dt>
-            <dd>
-              <code>{app.license_spdx}</code>
-            </dd>
-            <dt>Stage</dt>
-            <dd>{STAGE_LABEL[app.stage]}</dd>
-            {app.platforms.length > 0 && (
-              <>
-                <dt>Runs on</dt>
-                <dd>{runsOn(app.platforms)}</dd>
-              </>
-            )}
-            {app.last_commit_at && (
-              <>
-                <dt>Last commit</dt>
-                <dd>{formatDate(app.last_commit_at)}</dd>
-              </>
-            )}
-          </dl>
+            {!narrow && sidePanels}
+          </aside>
         </div>
-      </div>
-
-      <div className="two-col">
-        <div>
+        <div className="app-body">
           {app.description_md.trim() ? (
             <div
               className="prose"
@@ -338,106 +454,7 @@ function AppView({ app }: { app: AppDetail }) {
           {me && app.stage !== "coming_soon" && <BugReports slug={app.slug} browser={inBrowser} />}
           {!app.private && !app.platforms.includes("any") && <AppBounties slug={app.slug} title={app.title} />}
         </div>
-        <aside className="side-col">
-          <div className="panel panel-pad install-box">
-            <h3>{app.stage === "coming_soon" ? "Coming soon" : inBrowser ? "Play it" : "Get it"}</h3>
-            {app.stage === "coming_soon" ? (
-              <p className="muted">{inBrowser ? "Not playable yet." : "No builds yet."} This is a Coming soon page.</p>
-            ) : (
-              getIt
-            )}
-            {/* Sandbox mode and demos are for what the SLAPorSLOP app installs; a browser game already plays in the browser. */}
-            {app.stage !== "coming_soon" && !app.platforms.includes("any") && !inBrowser && <SandboxNote app={app} />}
-            {!inBrowser && <DemoButton demo={app.demo} />}
-            {app.stage !== "coming_soon" && <LabelNotes slug={app.slug} browser={inBrowser} />}
-            {app.stage !== "coming_soon" && interested}
-            {packages.length > 0 && (
-              <p className="muted small packages">
-                Linux packages:{" "}
-                {packages.map((f, i) => (
-                  <span key={f.platform}>
-                    {i > 0 && " · "}
-                    <ExternalLink href={f.url}>{f.platform === "linux-deb" ? ".deb" : ".rpm"}</ExternalLink>
-                  </span>
-                ))}{" "}
-                <span className="faint">(installed by your system, not by SLAPorSLOP)</span>
-              </p>
-            )}
-          </div>
-          <div className="panel panel-pad trust">
-            {/* A browser game: SLAPorSLOP checks its address, never what the site serves, so no build,
-                scan or sale claims for it (DESIGN A6). */}
-            {inBrowser && (
-              <div className="trust-row">
-                <span className="ic">
-                  <StoreIcon name="browser" />
-                </span>
-                <span>
-                  <b>Runs on the maker's website.</b> SLAPorSLOP checked the address, not what the site serves.
-                </span>
-              </div>
-            )}
-            {provenance && (
-              <div className="trust-row">
-                <span className="ic">
-                  <StoreIcon name="signing" />
-                </span>
-                <span>
-                  <b>{provenance.built_by_slop_build ? "Built by Slop Build from source" : "Built from source"}</b> · signed by{" "}
-                  {provenance.run_url ? (
-                    <ExternalLink href={provenance.run_url}>{workflowName(provenance.signer_workflow)}</ExternalLink>
-                  ) : (
-                    workflowName(provenance.signer_workflow)
-                  )}{" "}
-                  at <code>{provenance.commit.slice(0, 7)}</code>
-                </span>
-              </div>
-            )}
-            {(scannedWith || windowsFile) && (
-              <div className="trust-row">
-                <span className="ic">
-                  <StoreIcon name="verify" />
-                </span>
-                <span>
-                  <b>Scanned</b>
-                  {scannedWith && ` with ${scannedWith}`}
-                  {windowsFile?.defender && windowsFile.defender.detections.length === 0 && " · Microsoft Defender found nothing"}
-                  {windowsFile?.defender?.signed_by && ` · Windows program signed by ${windowsFile.defender.signed_by}`}
-                </span>
-              </div>
-            )}
-            <div className="trust-row">
-              <span className="ic">
-                <StoreIcon name="source" />
-              </span>
-              <span>
-                <b>Open source</b> · {app.license_spdx} · <ExternalLink href={app.repo_url}>view code</ExternalLink>
-              </span>
-            </div>
-            {!inBrowser && (
-              <div className="trust-row">
-                <span className="ic">
-                  <StoreIcon name="bag" />
-                </span>
-                <span>
-                  <b>Nothing for sale</b> · donations never unlock anything
-                </span>
-              </div>
-            )}
-          </div>
-          <DedicatedServers
-            servers={app.servers ?? []}
-            isMine={app.is_mine}
-            library={(library.data ?? []).map((e) => e.slug)}
-          />
-          {/* Mods and community builds are installed beside a game: a browser game can't have them yet. */}
-          {!app.branch && !app.private && !inBrowser && <CommunityBuilds app={app} />}
-          {!app.is_mine && (
-            <p className="report-row">
-              <ReportButton kind="app" subject={app.slug} label="this app" />
-            </p>
-          )}
-        </aside>
+        {narrow && <aside className="side-col app-more">{sidePanels}</aside>}
       </div>
 
       <SimilarShelves slug={app.slug} kind={app.kind} />

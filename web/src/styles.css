@@ -318,9 +318,15 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .age-limit { margin: 6px 0 0; }
 
 /* ---- app page -------------------------------------------------------- */
-.app-head { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr); gap: 22px; margin-bottom: 26px; }
+/* A store page: pictures then the description on the left, the rail (title, Get it, side panels)
+   on the right. The rail spans both rows, so the description starts right under the pictures
+   however tall the rail is. */
+.app-head { display: grid; grid-template-columns: minmax(0, 1fr) 360px; grid-template-rows: auto 1fr; gap: 22px 24px; margin-bottom: 26px; align-items: start; }
+.app-media { grid-column: 1; grid-row: 1; min-width: 0; }
+.app-rail { grid-column: 2; grid-row: 1 / span 2; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.app-body { grid-column: 1; grid-row: 2; min-width: 0; }
 .app-head h1 { font-size: 30px; letter-spacing: -0.02em; }
-.app-head .hero-art { aspect-ratio: 16 / 10; align-self: start; }
+.app-head .hero-art { aspect-ratio: 16 / 10; }
 .app-head .hero-art .initial { font-size: 120px; }
 .app-side { display: flex; flex-direction: column; gap: 14px; }
 .lede { margin: 0; color: var(--text-2); font-size: 15px; }
@@ -413,6 +419,8 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 /* ---- smaller windows ------------------------------------------------- */
 @media (max-width: 900px) {
   .store, .two-col, .app-head { grid-template-columns: 1fr; }
+  .app-head { grid-template-rows: none; }
+  .app-media, .app-rail, .app-body, .app-more { grid-column: 1; grid-row: auto; }
   .library-row { grid-template-columns: 120px minmax(0, 1fr); }
   .library-actions { grid-column: 1 / -1; }
   .sidebar { display: none; }
