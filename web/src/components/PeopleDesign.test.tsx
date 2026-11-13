@@ -4,7 +4,12 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { DesignNode, PageDesign, Work } from "../api";
-import { buildDesign, DesignArea, DesignPreview, LINK_REL, portfolioWork, slopParts, type DesignParts } from "./PeopleDesign";
+import { buildDesign, DesignArea, DesignPreview, LINK_REL, placedWorks, portfolioWork, slopParts, type DesignParts } from "./PeopleDesign";
+
+// jsdom has no modal dialogs: here showModal only opens one.
+HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+  this.open = true;
+};
 
 const parts: DesignParts = {
   works: () => <div data-part="works">All works</div>,
@@ -109,6 +114,38 @@ describe("DesignArea", () => {
     const part = region.querySelector(":scope > [slot='slop-part-0']")!;
     expect(part.className).toBe("design-part");
     expect(part.querySelector("button[aria-label='View larger: Knight']")).toBeTruthy();
+  });
+});
+
+describe("placedWorks", () => {
+  const work = (name: string): Work => ({
+    key: `image:works/${name}.png`, kind: "image", url: `https://x/${name}.png`, width: 640, height: 480,
+    youtube_id: null, audio_url: null, audio_format: null, title: name, caption: null, skill: null,
+  });
+  const works = [work("a"), work("b"), work("c")];
+
+  it("is every work where the design has <slop-works>, else only the ones it places, in its order", () => {
+    expect(placedWorks([{ tag: "div", children: [{ tag: "slop-works" }] }], works)).toBe(works);
+    const tree: DesignNode[] = [
+      { tag: "section", children: [{ tag: "slop-work", attrs: { work: "image:works/c.png" } }] },
+      { tag: "slop-work", attrs: { work: "image:works/a.png" } },
+      { tag: "slop-work", attrs: { work: "image:works/c.png" } },
+      { tag: "slop-work", attrs: { work: "image:works/missing.png" } },
+    ];
+    expect(placedWorks(tree, works).map((w) => w.title)).toEqual(["c", "a"]);
+    expect(placedWorks([{ tag: "p", children: ["No works"] }], works)).toEqual([]);
+  });
+
+  it("the full-size viewer steps only through the pictures the design shows", async () => {
+    const design = { tree: [{ tag: "slop-work", attrs: { work: "image:works/b.png" } }] as DesignNode[], css: "", warnings: [] };
+    await act(async () => {
+      render(<DesignPreview design={design} works={works} services={[]} label="Preview of Vera's page" name="Vera" />);
+    });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "View larger: b" })));
+    const viewer = screen.getByRole("dialog", { name: "Vera: portfolio" });
+    expect(viewer.querySelector(".viewer-count")?.textContent).toBe("1 of 1");
+    expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+    cleanup();
   });
 });
 

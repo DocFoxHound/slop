@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
 import type { CreativePage, DesignNode, PageDesign, PortfolioWork, Work } from "../api";
 import { workKey } from "../api";
 import { isDesktop, openExternal } from "../platform";
-import { Lightbox, ServicesList, WorkTile } from "./People";
+import { ServicesList, WorkTile, WorksViewer, type OpenWork } from "./People";
 
 /** What draws each of SLAPorSLOP's parts. Returning null leaves the part out. */
 export interface DesignParts {
@@ -185,7 +185,7 @@ function trackWork(src: string, title: string | null): Work {
 }
 
 /** SLAPorSLOP's parts for a page: its works (the grid opens pictures large), videos and tracks. */
-export function slopParts({ works, onOpen }: { works: Work[]; onOpen?: (w: Work) => void }): DesignParts {
+export function slopParts({ works, onOpen }: { works: Work[]; onOpen?: (w: Work, from: HTMLElement) => void }): DesignParts {
   return {
     works: () =>
       works.length > 0 ? (
@@ -202,6 +202,33 @@ export function slopParts({ works, onOpen }: { works: Work[]; onOpen?: (w: Work)
     video: (id, title) => <WorkTile w={videoWork(id, title)} />,
     track: (src, title) => <WorkTile w={trackWork(src, title)} />,
   };
+}
+
+/**
+ * The works a design shows, in its order: all of them where it has <slop-works>, else those its
+ * <slop-work> tags place. The full-size pictures step through only these, never ones the page
+ * leaves out.
+ */
+export function placedWorks(tree: DesignNode[], works: Work[]): Work[] {
+  const keys: string[] = [];
+  let all = false;
+  const walk = (nodes: DesignNode[]) => {
+    for (const node of nodes) {
+      if (typeof node === "string") continue;
+      if (node.tag === "slop-works") all = true;
+      else if (node.tag === "slop-work" && node.attrs?.work) keys.push(node.attrs.work);
+      // As buildDesign: nothing inside SLAPorSLOP's own parts is drawn.
+      else if (!node.tag.startsWith("slop-")) walk(node.children ?? []);
+    }
+  };
+  walk(tree);
+  if (all) return works;
+  const placed: Work[] = [];
+  for (const key of keys) {
+    const w = works.find((x) => x.key === key);
+    if (w && !placed.includes(w)) placed.push(w);
+  }
+  return placed;
 }
 
 /** A portfolio set's work as the People page shows works. */
@@ -223,13 +250,16 @@ export function DesignPreview({
   works,
   services,
   label,
+  name,
 }: {
   design: PageDesign & { warnings: string[] };
   works: Work[];
   services: CreativePage["services"];
   label: string;
+  /** The creative's name, for the full-size pictures' dialog ("Vera Okafor: portfolio"). */
+  name?: string;
 }) {
-  const [open, setOpen] = useState<Work>();
+  const [open, setOpen] = useState<OpenWork>();
   const [phone, setPhone] = useState(false);
   return (
     <div className="design-preview">
@@ -256,7 +286,7 @@ export function DesignPreview({
         </button>
       </div>
       <div className={`design-preview-frame${phone ? " phone" : ""}`}>
-        <DesignArea design={design} label={label} parts={slopParts({ works, onOpen: setOpen })} />
+        <DesignArea design={design} label={label} parts={slopParts({ works, onOpen: (w, from) => setOpen({ w, from }) })} />
         {services.length > 0 && (
           <section className="design-preview-services" aria-label="Services, below the design">
             <h4 className="small">Services (always below the design, with Hire buttons)</h4>
@@ -264,7 +294,7 @@ export function DesignPreview({
           </section>
         )}
       </div>
-      {open && <Lightbox w={open} onClose={() => setOpen(undefined)} />}
+      {open && <WorksViewer works={placedWorks(design.tree, works)} open={open} name={name ?? label} onClose={() => setOpen(undefined)} />}
     </div>
   );
 }

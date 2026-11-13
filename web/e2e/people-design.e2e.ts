@@ -52,8 +52,10 @@ test("a creative's design: previewed in the editor, reviewed with the portfolio,
   await expect(dee.getByText(/style\.css line 7: "position: fixed" was removed/)).toBeVisible();
   // Its pictures open large, like on the page.
   await preview.getByRole("button", { name: "View larger: Lantern" }).first().click();
-  await expect(dee.getByRole("dialog", { name: "Lantern" })).toBeVisible();
-  await dee.getByRole("button", { name: "Close" }).click();
+  const pictures = dee.getByRole("dialog", { name: "Dee Designer: portfolio" });
+  await expect(pictures.getByRole("img", { name: "Lantern" })).toBeVisible();
+  await pictures.getByRole("button", { name: "Close" }).click();
+  await expect(pictures).toBeHidden();
   await axe(dee);
 
   // Staff see the same preview in the review inbox, with the exact HTML and CSS, and approve it.
@@ -112,8 +114,10 @@ test("a creative's design: previewed in the editor, reviewed with the portfolio,
   // The works in the design are SLAPorSLOP's: the grid opens pictures large; keyboard reaches them.
   await design.getByRole("button", { name: "View larger: The keep" }).focus();
   await visitor.keyboard.press("Enter");
-  await expect(visitor.getByRole("dialog", { name: "The keep" })).toBeVisible();
-  await visitor.getByRole("button", { name: "Close" }).click();
+  const seen = visitor.getByRole("dialog", { name: "Dee Designer: portfolio" });
+  await expect(seen.getByRole("img", { name: "The keep" })).toBeVisible();
+  await seen.getByRole("button", { name: "Close" }).click();
+  await expect(seen).toBeHidden();
   await axe(visitor);
 
   // At phone width it fits.

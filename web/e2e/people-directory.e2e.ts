@@ -161,12 +161,27 @@ test("a creative's page shows services, portfolio, reviews and AI use; signed ou
   await expect(service).toContainText("from $120");
   await expect(service).toContainText("about 7 days");
 
-  // The portfolio: a picture opens larger, and closes.
-  await page.getByRole("button", { name: "View larger: Knight" }).click();
-  const lightbox = page.getByRole("dialog", { name: "Knight" });
-  await expect(lightbox).toBeVisible();
-  await lightbox.getByRole("button", { name: "Close" }).click();
-  await expect(lightbox).toBeHidden();
+  // The portfolio: a picture opens full size, steps through Vera's other pictures, and closes.
+  const knight = page.getByRole("button", { name: "View larger: Knight" });
+  await knight.click();
+  const viewer = page.getByRole("dialog", { name: "Vera Okafor: portfolio" });
+  await expect(viewer).toBeVisible();
+  await expect(viewer.getByRole("img", { name: "Knight" })).toBeVisible();
+  await expect(viewer.getByText("1 of 3", { exact: true })).toBeVisible();
+  await expect(viewer.getByText("Knight, 32×32, four directions")).toBeVisible();
+  await expect(viewer.getByRole("button", { name: "Close" })).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(viewer.getByRole("img", { name: "Tavern" })).toBeVisible();
+  await expect(viewer.getByText("2 of 3", { exact: true })).toBeVisible();
+  await viewer.getByRole("button", { name: "Previous" }).click();
+  await viewer.getByRole("button", { name: "Previous" }).click();
+  await expect(viewer.getByRole("img", { name: "Dragon" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(viewer).toBeHidden();
+  await expect(knight).toBeFocused();
+  await knight.click();
+  await viewer.getByRole("button", { name: "Close" }).click();
+  await expect(viewer).toBeHidden();
 
   // Reviews from verified clients (Cleo's, under dispute, still shows), and the AI box.
   await expect(page.getByRole("heading", { name: "Reviews from clients" })).toBeVisible();

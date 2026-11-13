@@ -616,8 +616,13 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 
 .gallery { min-width: 0; align-self: start; }
 .gallery-stage { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden; }
-.gallery-stage > img, .gallery-stage iframe, .gallery-play img { width: 100%; height: 100%; object-fit: contain; border: 0; display: block; }
-.gallery-play { position: relative; width: 100%; height: 100%; padding: 0; border: 0; background: #000; cursor: pointer; color: #fff; }
+.gallery-zoom img, .gallery-play img { width: 100%; height: 100%; object-fit: contain; border: 0; display: block; }
+.gallery-play, .gallery-zoom { position: relative; width: 100%; height: 100%; padding: 0; border: 0; background: #000; cursor: pointer; color: #fff; }
+.gallery-zoom { cursor: zoom-in; }
+/* Inside the stage's edge (the stage clips anything outside it): lime with a black ring inside it, so
+   it shows over any picture, light or dark. */
+.gallery-zoom:focus-visible, .gallery-play:focus-visible { outline: 3px solid var(--slime); outline-offset: -3px; }
+.gallery-zoom:focus-visible::after, .gallery-play:focus-visible::after { content: ""; position: absolute; inset: 3px; border: 3px solid #000; pointer-events: none; }
 .play-mark { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; font-size: 28px; padding-left: 5px; background: rgba(0, 0, 0, 0.65); border: 2px solid rgba(255, 255, 255, 0.85); color: #fff; pointer-events: none; }
 .play-mark.small { width: 28px; height: 28px; font-size: 11px; padding-left: 2px; border-width: 1px; }
 .gallery-play:hover .play-mark, .gallery-play:focus-visible .play-mark { background: var(--slime); color: var(--slime-ink); border-color: var(--slime); }
@@ -632,6 +637,47 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 .gallery-strip button.on { border-color: var(--slime); opacity: 1; }
 .gallery-strip button:hover { opacity: 1; }
 .gallery-strip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* ---- the full-size viewer (components/MediaViewer.tsx) ------------------ */
+/* Always dark, whatever the page: every control has its own dark backing and a light edge, so it
+   reads over any picture. The item is never drawn larger than it is (pixel art aside). */
+html.viewer-open, html.viewer-open .view { overflow: hidden; }
+/* A page that showed a scrollbar keeps its gutter, so it doesn't reflow behind the viewer. */
+html.viewer-open .view.viewer-gutter { scrollbar-gutter: stable; }
+.viewer { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; overflow: hidden; overscroll-behavior: contain; background: rgba(0, 0, 0, 0.97); color: #f1f5f9; }
+.viewer:focus { outline: none; }
+.viewer[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.viewer::backdrop { background: rgba(0, 0, 0, 0.6); }
+.viewer-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; }
+.viewer-count { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+.viewer-close, .viewer-arrow { border: 1px solid rgba(255, 255, 255, 0.6); border-radius: 8px; background: rgba(0, 0, 0, 0.78); color: #fff; cursor: pointer; }
+.viewer-close { display: inline-flex; align-items: center; gap: 8px; min-width: 44px; min-height: 44px; padding: 0 16px; font-weight: 700; }
+.viewer-close:hover, .viewer-arrow:hover { background: #000; border-color: #fff; }
+.viewer button:focus-visible { outline: 3px solid #a3e635; outline-offset: 0; box-shadow: 0 0 0 6px #000; }
+.viewer-stage { position: relative; min-height: 0; }
+.viewer-frame { position: absolute; inset: 0 72px; display: flex; align-items: center; justify-content: center; container-type: size; }
+.viewer-media { display: block; max-width: 100%; max-height: 100%; max-width: 100cqw; max-height: 100cqh; object-fit: contain; }
+.viewer-video { display: block; position: relative; width: 100%; width: min(100cqw, 100cqh * 16 / 9); aspect-ratio: 16 / 9; max-height: 100%; border: 0; background: #000; }
+.viewer-play { padding: 0; color: #fff; cursor: pointer; overflow: hidden; container: viewer-play / size; }
+.viewer-play img { position: absolute; inset: 0; margin: auto; max-width: 100%; max-height: 100%; display: block; }
+/* The card's name sits below the Play mark, two lines at most, and drops out where there's no room. */
+.viewer-play .play-card { font-size: 18px; place-items: end center; padding: 12px 12px 40px; }
+.viewer-play .play-card > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; max-width: 100%; }
+@container viewer-play (max-height: 259px) { .viewer-play .play-card > span { display: none; } }
+.viewer-play:hover .play-mark, .viewer-play:focus-visible .play-mark { background: var(--slime); color: var(--slime-ink); border-color: var(--slime); }
+.viewer-play .play-note { color: #fff; }
+.viewer-arrow { position: absolute; top: 50%; transform: translateY(-50%); width: 52px; height: 72px; font-size: 34px; line-height: 1; }
+.viewer-arrow.prev { left: 10px; }
+.viewer-arrow.next { right: 10px; }
+.viewer-foot { min-height: 16px; max-height: 30vh; overflow-y: auto; padding: 8px 16px 16px; text-align: center; }
+.viewer-caption { margin: 0 auto; max-width: 70ch; overflow-wrap: anywhere; }
+.viewer-caption b { margin-right: 6px; }
+@media (max-width: 600px) {
+  .viewer-frame { inset: 0 16px; }
+  .viewer-arrow { width: 44px; height: 56px; font-size: 28px; }
+  .viewer-arrow.prev { left: 4px; }
+  .viewer-arrow.next { right: 4px; }
+}
 
 .similar { margin-top: 30px; }
 
@@ -835,8 +881,6 @@ img.pixelated { image-rendering: pixelated; object-fit: contain !important; }
 .vote-chip.up { background: rgba(74, 222, 128, 0.14); color: var(--good); }
 .vote-chip.down { background: rgba(248, 113, 113, 0.14); color: var(--bad); }
 .review-reply { border-left: 3px solid var(--accent, var(--slime)); padding: 4px 10px; background: var(--panel-2); border-radius: 0 6px 6px 0; font-size: 13px; }
-.lightbox { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.88); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 20px; }
-.lightbox img { max-width: 100%; max-height: 82vh; min-width: min(320px, 90vw); object-fit: contain; }
 
 .credits { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .made-with-people { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--slime); }

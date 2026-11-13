@@ -527,6 +527,7 @@ function PortfolioPanel({ profile, skills, suggested }: { profile: MyProfile; sk
             works={shown.works.map(portfolioWork)}
             services={profile.services.map((s) => ({ ...s, skill_name: skills.find((k) => k.slug === s.skill)?.name ?? s.skill }))}
             label={`Preview of ${profile.name}'s page`}
+            name={profile.name}
           />
         </>
       ) : (

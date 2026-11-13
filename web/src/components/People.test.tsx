@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { CreativeCard, Work } from "../api";
-import { AI_USE, AiBadge, PersonCard, RatingLine, WorkTile } from "./People";
+import { AI_USE, AiBadge, PersonCard, RatingLine, WorkTile, WorksViewer, type OpenWork } from "./People";
+
+// jsdom has no modal dialogs: here showModal only opens one.
+HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+  this.open = true;
+};
 
 const card: CreativeCard = {
   handle: "vera",
@@ -109,5 +115,81 @@ describe("WorkTile", () => {
     const audio = container.querySelector("audio");
     expect(audio?.getAttribute("preload")).toBe("none");
     expect(audio?.getAttribute("aria-label")).toBe("Play: Theme");
+  });
+});
+
+describe("WorksViewer", () => {
+  afterEach(cleanup);
+  const picture = (title: string, width = 640): Work => ({
+    key: `image:works/${title}.png`,
+    kind: "image",
+    url: `https://raw.example/works/${title}.png`,
+    width,
+    height: 480,
+    youtube_id: null,
+    audio_url: null,
+    audio_format: null,
+    title,
+    caption: `${title}, four directions`,
+    skill: null,
+  });
+  const works: Work[] = [
+    picture("Knight", 32),
+    { ...picture("Reel"), key: "video:abc", kind: "video", youtube_id: "dQw4w9WgXcQ" },
+    picture("Tavern"),
+    picture("Dragon"),
+  ];
+
+  function Portfolio() {
+    const [open, setOpen] = useState<OpenWork>();
+    return (
+      <>
+        {works.map((w) => (
+          <WorkTile key={w.key} w={w} onOpen={(w, from) => setOpen({ w, from })} />
+        ))}
+        {open && <WorksViewer works={works} open={open} name="Vera Okafor" onClose={() => setOpen(undefined)} />}
+      </>
+    );
+  }
+
+  it("View larger opens that picture full size and steps through the creative's other pictures only", () => {
+    const { container } = render(<Portfolio />);
+    const tavern = screen.getByRole("button", { name: "View larger: Tavern" });
+    tavern.focus();
+    fireEvent.click(tavern);
+    const d = screen.getByRole("dialog", { name: "Vera Okafor: portfolio" });
+    expect(within(d).getByRole("img", { name: "Tavern" })).toBeTruthy();
+    expect(d.querySelector(".viewer-count")?.textContent).toBe("2 of 3");
+    expect(d.querySelector(".viewer-caption")?.textContent).toBe("Tavern Tavern, four directions");
+    fireEvent.click(within(d).getByRole("button", { name: "Next" }));
+    expect(within(d).getByRole("img", { name: "Dragon" })).toBeTruthy();
+    // It wraps around, past the video, to the pixel-art knight (kept sharp).
+    fireEvent.click(within(d).getByRole("button", { name: "Next" }));
+    expect(within(d).getByRole("img", { name: "Knight" }).classList.contains("pixelated")).toBe(true);
+    expect(container.querySelector("iframe")).toBeNull();
+
+    fireEvent.click(within(d).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(tavern);
+  });
+
+  it("focus goes back to the button it was opened from even when the click didn't focus it (as in Safari)", () => {
+    render(<Portfolio />);
+    const dragon = screen.getByRole("button", { name: "View larger: Dragon" });
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.click(dragon);
+    const d = screen.getByRole("dialog", { name: "Vera Okafor: portfolio" });
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(d.isConnected).toBe(false);
+    expect(document.activeElement).toBe(dragon);
+  });
+
+  it("pixel art is enlarged to fit, its box exactly the picture's shape", () => {
+    render(<Portfolio />);
+    fireEvent.click(screen.getByRole("button", { name: "View larger: Knight" }));
+    const img = within(screen.getByRole("dialog")).getByRole("img", { name: "Knight" });
+    // 32×480 here: the box keeps that shape, so the dark area beside it still closes the viewer.
+    expect(img.style.aspectRatio).toBe("32 / 480");
+    expect(img.style.width).toContain("100cqw");
   });
 });

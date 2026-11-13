@@ -12,7 +12,6 @@ import { HandoffError, HandoffNotice, HandoffWaiting, useHandoff } from "../comp
 import {
   AI_USE,
   AiBadge,
-  Lightbox,
   PeopleNavActions,
   PeopleTabs,
   PersonCard,
@@ -20,9 +19,11 @@ import {
   ServicesList,
   SkillButton,
   WorkTile,
+  WorksViewer,
   accentStyle,
+  type OpenWork,
 } from "../components/People";
-import { DesignArea, slopParts } from "../components/PeopleDesign";
+import { DesignArea, placedWorks, slopParts } from "../components/PeopleDesign";
 import {
   LiveBar,
   PageStatusDetails,
@@ -309,7 +310,8 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
     // No form opens for someone who can't be hired now: the request isn't kept for one.
     else forgetHandoff("hire");
   }, [handoff, handoffN]);
-  const [open, setOpen] = useState<Work>();
+  const [open, setOpen] = useState<OpenWork>();
+  const openWork = (w: Work, from: HTMLElement) => setOpen({ w, from });
   const onProseClick = (e: MouseEvent) => {
     const link = (e.target as HTMLElement).closest("a[data-external]");
     if (link) {
@@ -333,7 +335,7 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
           <SectionHeader title="Portfolio" sub={`${p.works.length} work${p.works.length === 1 ? "" : "s"}`} />
           <div className="works">
             {p.works.map((w) => (
-              <WorkTile key={w.key} w={w} onOpen={setOpen} />
+              <WorkTile key={w.key} w={w} onOpen={openWork} />
             ))}
           </div>
         </section>
@@ -478,7 +480,7 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
         )}
 
         {p.design && (
-          <DesignArea design={p.design} label={`${p.name}'s page`} parts={slopParts({ works: p.works, onOpen: setOpen })} />
+          <DesignArea design={p.design} label={`${p.name}'s page`} parts={slopParts({ works: p.works, onOpen: openWork })} />
         )}
 
         <div className="two-col person-body">
@@ -501,7 +503,9 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
           </aside>
         </div>
       </PreviewFrame>
-      {open && <Lightbox w={open} onClose={() => setOpen(undefined)} />}
+      {open && (
+        <WorksViewer works={p.design ? placedWorks(p.design.tree, p.works) : p.works} open={open} name={p.name} onClose={() => setOpen(undefined)} />
+      )}
     </div>
   );
 }
