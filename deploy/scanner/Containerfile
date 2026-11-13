@@ -4,7 +4,7 @@
 FROM docker.io/library/debian:stable-slim@sha256:d405c1e1d9eecbf30022d23766a0eea235e7f499aa33e357dfd29271a839f82a
 
 RUN apt-get update -qq \
- && apt-get install -y -qq --no-install-recommends clamav clamav-freshclam yara libarchive-tools \
+ && apt-get install -y -qq --no-install-recommends clamav clamav-freshclam yara libarchive-tools rpm2cpio \
       python3 ca-certificates curl unzip file \
  && rm -rf /var/lib/apt/lists/*
 

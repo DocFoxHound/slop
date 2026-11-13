@@ -61,11 +61,21 @@ def size_of(folder):
 def unpack(path, dest, root, depth=0):
     """Unpacks archives recursively; returns why it couldn't unpack everything, or None."""
     os.makedirs(dest, exist_ok=True)
+    tar = ["bsdtar", "-x", "-C", dest, "--no-same-owner", "--no-same-permissions", "-f"]
     try:
-        r = run(["bsdtar", "-x", "-f", path, "-C", dest, "--no-same-owner", "--no-same-permissions"], timeout=300)
+        if path.lower().endswith(".rpm"):
+            # rpm2cpio reads every RPM format; bsdtar alone can't read RPM 6 packages (Fedora 43's
+            # rpmbuild can make them), whose payload lists files by number, not by name.
+            with open(path, "rb") as fh:
+                conv = subprocess.Popen(["rpm2cpio", "-"], stdin=fh, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                r = subprocess.run(tar + ["-"], stdin=conv.stdout, capture_output=True, timeout=300)
+                conv.stdout.close()
+                ok = conv.wait(timeout=60) == 0 and r.returncode == 0
+        else:
+            ok = run(tar + [path], timeout=300).returncode == 0
     except subprocess.TimeoutExpired:
         return f"unpacking {rel(path, root)} took too long"
-    if r.returncode != 0:
+    if not ok:
         return f"couldn't unpack {rel(path, root)} (damaged, encrypted or too large)"
     total, count = size_of(root)
     if total > MAX_UNPACKED or count > MAX_FILES:
