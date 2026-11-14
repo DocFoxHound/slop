@@ -266,13 +266,23 @@ export function SaveSyncNotice({ slug, title, result }: { slug: string; title: s
 /** Save sync results after an app closes (in the SLAPorSLOP app). */
 export function SaveSyncEvents() {
   // Each result gets its own notice (`n` is its key), so one closed earlier doesn't hide the next.
-  const [last, setLast] = useState<{ slug: string; result: SaveSyncOutcome; n: number }>();
+  const [last, setLast] = useState<{ slug: string; title: string; result: SaveSyncOutcome; n: number }>();
   useEffect(() => {
     if (!isDesktop) return;
     let unlisten: (() => void) | undefined;
-    void desktop.onSavesSynced((e) => setLast((prev) => ({ ...e, n: (prev?.n ?? 0) + 1 }))).then((u) => (unlisten = u));
+    // The event names the app by its address; the notice uses its title, from the installed apps.
+    const show = (e: { slug: string; result: SaveSyncOutcome }, title: string) =>
+      setLast((prev) => ({ ...e, title, n: (prev?.n ?? 0) + 1 }));
+    void desktop
+      .onSavesSynced((e) =>
+        void desktop.installed().then(
+          (apps) => show(e, apps.find((a) => a.slug === e.slug)?.title ?? e.slug),
+          () => show(e, e.slug),
+        ),
+      )
+      .then((u) => (unlisten = u));
     return () => unlisten?.();
   }, []);
   if (!last || !["both_changed", "too_big"].includes(last.result.outcome)) return null;
-  return <SaveSyncNotice key={last.n} slug={last.slug} title={last.slug} result={last.result} />;
+  return <SaveSyncNotice key={last.n} slug={last.slug} title={last.title} result={last.result} />;
 }
