@@ -200,21 +200,33 @@ export function SandboxFailedNotice({
   );
 }
 
+/** The × that closes a notice. */
+function DismissButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" className="btn small ghost notice-dismiss" aria-label="Dismiss" title="Dismiss" onClick={onClick}>
+      <span aria-hidden="true">×</span>
+    </button>
+  );
+}
+
 /** What save sync did, when there's something to say or choose. */
 export function SaveSyncNotice({ slug, title, result }: { slug: string; title: string; result: SaveSyncOutcome | null }) {
   const [done, setDone] = useState<string>();
   if (!result || done === "hidden") return null;
+  const dismiss = <DismissButton onClick={() => setDone("hidden")} />;
   if (result.outcome === "fetched") {
     return (
-      <div className="notice small" role="status">
-        Got {title}'s saves from your other computer. This computer's previous saves are kept under Saves.
+      <div className="notice small dismissable" role="status">
+        <span>Got {title}'s saves from your other computer. This computer's previous saves are kept under Saves.</span>
+        {dismiss}
       </div>
     );
   }
   if (result.outcome === "too_big") {
     return (
-      <div className="notice small" role="status">
-        {title}'s saves are over 20 MB, so they stay on this computer only.
+      <div className="notice small dismissable" role="status">
+        <span>{title}'s saves are over 20 MB, so they stay on this computer only.</span>
+        {dismiss}
       </div>
     );
   }
@@ -222,9 +234,12 @@ export function SaveSyncNotice({ slug, title, result }: { slug: string; title: s
   const keep = (which: "here" | "other") =>
     void desktop.resolveSaveConflict(slug, which).then(() => setDone(which === "here" ? "kept here" : "took other"));
   return (
-    <div className="notice" role="alert">
+    <div className={done ? "notice dismissable" : "notice"} role="alert">
       {done ? (
-        <p>{done === "kept here" ? "This computer's saves are synced now." : "You have the other computer's saves now; this computer's are kept under Saves."}</p>
+        <>
+          <p>{done === "kept here" ? "This computer's saves are synced now." : "You have the other computer's saves now; this computer's are kept under Saves."}</p>
+          {dismiss}
+        </>
       ) : (
         <>
           <p>
@@ -250,13 +265,14 @@ export function SaveSyncNotice({ slug, title, result }: { slug: string; title: s
 
 /** Save sync results after an app closes (in the SLAPorSLOP app). */
 export function SaveSyncEvents() {
-  const [last, setLast] = useState<{ slug: string; result: SaveSyncOutcome }>();
+  // Each result gets its own notice (`n` is its key), so one closed earlier doesn't hide the next.
+  const [last, setLast] = useState<{ slug: string; result: SaveSyncOutcome; n: number }>();
   useEffect(() => {
     if (!isDesktop) return;
     let unlisten: (() => void) | undefined;
-    void desktop.onSavesSynced((e) => setLast(e)).then((u) => (unlisten = u));
+    void desktop.onSavesSynced((e) => setLast((prev) => ({ ...e, n: (prev?.n ?? 0) + 1 }))).then((u) => (unlisten = u));
     return () => unlisten?.();
   }, []);
   if (!last || !["both_changed", "too_big"].includes(last.result.outcome)) return null;
-  return <SaveSyncNotice slug={last.slug} title={last.slug} result={last.result} />;
+  return <SaveSyncNotice key={last.n} slug={last.slug} title={last.slug} result={last.result} />;
 }
