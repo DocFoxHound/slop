@@ -57,18 +57,25 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "template": "windows/installer.nsi"
+      }
+    },
     "linux": {
       "deb": {
         "depends": [
           "bubblewrap"
-        ]
+        ],
+        "desktopTemplate": "linux/slaporslop.desktop"
       },
       "rpm": {
         "depends": [
           "webkit2gtk4.1",
           "gtk3",
           "bubblewrap"
-        ]
+        ],
+        "desktopTemplate": "linux/slaporslop.desktop"
       }
     },
     "publisher": "IronPoint Development",
