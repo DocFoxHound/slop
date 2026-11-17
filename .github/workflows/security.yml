@@ -1,0 +1,85 @@
+# Security scans. Results go to the repository's Security tab (Code scanning), not into the
+# pipeline: a finding or a scanner having a bad day never holds up a release (pipeline.yml), and
+# reviewers triage them there. Weekly as well, because new advisories arrive for unchanged code.
+name: Security
+
+on:
+  push:
+    branches: [main, dev]
+  schedule:
+    # Mondays, 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # CodeQL, GitHub's code analysis: injection, unsafe data flows and the like in the API, the
+  # desktop app, the website, and the workflows themselves.
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          # Read from source: no build, so it doesn't need the build image or a database.
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}
+
+  # Known-vulnerable dependencies (OSV), the same scanner and version the test server's deploy
+  # runs (deploy/update.sh), over the lockfiles of everything shipped.
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan the lockfiles
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP:/out" \
+            ghcr.io/google/osv-scanner:v2.7.0@sha256:d2c46aa2483c4e02759bc25f2224d28a5ceeb3dca5a1ecd1f569fbed83a626f0 \
+            scan source --lockfile /src/Cargo.lock --lockfile /src/web/package-lock.json \
+            --format sarif --output-file /out/osv.sarif || true
+          test -s "$RUNNER_TEMP/osv.sarif" || { echo "::error::OSV-Scanner wrote no results"; exit 1; }
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ runner.temp }}/osv.sarif
+          category: osv-scanner
+
+  # zizmor: the workflows' own weak spots (untrusted input in scripts, broad permissions, unpinned
+  # actions, credentials left in checkouts), which matter more now that a workflow signs.
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          version: 1.31.1
