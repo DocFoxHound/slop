@@ -1,5 +1,5 @@
 #!/bin/sh
-# Refreshes the scanner's signatures and rules in /db (run with network, daily).
+# Refreshes the scanner's signatures and rules in /db (run with network, every six hours).
 set -eu
 mkdir -p /db/clamav /db/yara
 cat > /tmp/freshclam.conf <<CONF
@@ -8,14 +8,22 @@ DatabaseMirror database.clamav.net
 Foreground yes
 CONF
 freshclam --config-file=/tmp/freshclam.conf --quiet || freshclam --config-file=/tmp/freshclam.conf
-# YARA-Forge's core set: the curated, low false-positive rules.
+# YARA-Forge's core and extended packages, split into the rules that hold a file and the ones that
+# only make a note, keeping only rules whose licence lets SLAPorSLOP use them (slop-scan-rules).
 tag=$(curl -fsSL https://api.github.com/repos/YARAHQ/yara-forge/releases/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')
-if [ "$(cat /db/yara/version 2>/dev/null)" != "$tag" ]; then
-  curl -fsSL -o /tmp/core.zip "https://github.com/YARAHQ/yara-forge/releases/download/$tag/yara-forge-rules-core.zip"
-  rm -rf /tmp/core && mkdir /tmp/core && unzip -q /tmp/core.zip -d /tmp/core
-  rules=$(find /tmp/core -name '*.yar' | head -1)
-  yarac -w "$rules" /db/yara/core.yarc.new
-  mv /db/yara/core.yarc.new /db/yara/core.yarc
+if [ "$(cat /db/yara/version 2>/dev/null)" != "$tag" ] || [ ! -f /db/yara/hold.yarc ]; then
+  rm -rf /tmp/yf && mkdir -p /tmp/yf/out
+  for p in core extended; do
+    curl -fsSL -o "/tmp/yf/$p.zip" "https://github.com/YARAHQ/yara-forge/releases/download/$tag/yara-forge-rules-$p.zip"
+    mkdir "/tmp/yf/$p" && unzip -q "/tmp/yf/$p.zip" -d "/tmp/yf/$p"
+  done
+  slop-scan-rules "$(find /tmp/yf/core -name '*.yar' | head -1)" "$(find /tmp/yf/extended -name '*.yar' | head -1)" /tmp/yf/out
+  yarac -w /tmp/yf/out/hold.yar /db/yara/hold.yarc.new
+  yarac -w /tmp/yf/out/note.yar /db/yara/note.yarc.new
+  mv /db/yara/hold.yarc.new /db/yara/hold.yarc
+  mv /db/yara/note.yarc.new /db/yara/note.yarc
+  rm -f /db/yara/core.yarc
   echo "$tag" > /db/yara/version
+  rm -rf /tmp/yf
 fi
 echo "clamav $(ls /db/clamav | tr '\n' ' '); yara-forge $(cat /db/yara/version)"

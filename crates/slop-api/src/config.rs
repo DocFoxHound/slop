@@ -289,8 +289,11 @@ pub struct ReleaseConfig {
     /// Refuse to approve builds without a verified maker signature (SECURITY §5.3). Only turn this
     /// off for local development.
     pub require_maker_signature: bool,
-    /// The scan step. Only `Off` exists so far (see scan.rs).
+    /// The scan step (scan.rs).
     pub scanner: crate::scan::Scanner,
+    /// Days between re-scans of every live release (rescan.rs). 0: only when someone reports an
+    /// app or newer signatures match one of its programs (the default since 2026-11-17).
+    pub rescan_every_days: u32,
     /// Slop Build's recipe, as `owner/repo/.github/workflows/build.yml`. Unset: Slop Build is off.
     pub slop_build_workflow: Option<String>,
     /// The recipe tag makers pin, e.g. `v1`.
@@ -368,6 +371,7 @@ impl fmt::Debug for ReleaseConfig {
             .field("allow_http_downloads", &self.allow_http_downloads)
             .field("require_maker_signature", &self.require_maker_signature)
             .field("scanner", &self.scanner)
+            .field("rescan_every_days", &self.rescan_every_days)
             .field("slop_build_workflow", &self.slop_build_workflow)
             .field("slop_build_version", &self.slop_build_version)
             .field("github_oidc_issuer", &self.github_oidc_issuer)
@@ -593,6 +597,9 @@ impl Config {
                 &var_or("SLOP_SCANNER", "off"),
                 &var_or("SLOP_SCAN_COMMAND", "slop-scan"),
             )?,
+            rescan_every_days: var_or("SLOP_RESCAN_EVERY_DAYS", "0")
+                .parse()
+                .context("SLOP_RESCAN_EVERY_DAYS")?,
             slop_build_workflow: env::var("SLOP_BUILD_WORKFLOW")
                 .ok()
                 .map(|s| {

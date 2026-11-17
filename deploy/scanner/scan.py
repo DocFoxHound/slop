@@ -3,18 +3,27 @@
 
 Static checks only; nothing in the file is ever run:
   - ClamAV: known malware, including inside archives;
-  - YARA with YARA-Forge's core rules: malware families, hack tools, suspicious packers;
+  - YARA with YARA-Forge's rules (rules.py): malware families, hack tools, suspicious packers;
   - capa: what each program can do (keylogging, injecting into other processes, persistence…).
 
-Archives (.zip, .tar.*, .deb, .rpm) are unpacked into a size-limited scratch folder first.
+The file is opened up first, into a size-limited scratch folder (formats.py): archives (.zip,
+.tar.*, .deb, .rpm, .7z…), and then what's inside them, found by their first bytes: installers
+(NSIS, Inno Setup, MSI, self-extracting archives), Android and Java packages, Godot packs,
+Electron's .asar, PyInstaller bundles, AppImages and UPX-packed programs.
 
-Verdicts (DESIGN §10): "on_hold" when ClamAV or YARA finds something (SLAPorSLOP staff look at
-it: it may be a false positive), or when the file couldn't be scanned completely (an archive that
-won't unpack, one past the size limits, an engine error or timeout, missing signatures): a file
-that wasn't fully scanned never passes on its own. "note" when capa reports capabilities a reviewer
-should look at, else "passed". The detail is written for the maker and the reviewer.
+Verdicts (DESIGN §10): "on_hold" when ClamAV or YARA's main rules find something (SLAPorSLOP
+staff look at it: it may be a false positive), or when the file couldn't be scanned completely
+(an archive that won't unpack, one past the size limits, an engine error or timeout, missing
+signatures): a file that wasn't fully scanned never passes on its own. Something inside that we
+open as an extra (an installer, a pack) and can't is a note, as before we opened them at all.
+"note" when capa reports capabilities a reviewer should look at, or YARA's wider rules match,
+else "passed". The detail is written for the maker and the reviewer.
 
-Usage: slop-scan <path> [name], or slop-scan - <name> with the file on stdin.
+The report also carries fingerprints of the programs and scripts inside (hashes.py), so later
+ClamAV signatures can be checked against them without downloading the release again.
+
+Usage: slop-scan <path> [name], or slop-scan - <name> with the file on stdin;
+       slop-scan --match-hashes, with fingerprints on stdin (hashes.py).
 """
 
 import json
@@ -23,10 +32,20 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+
+sys.path.insert(0, "/usr/local/lib/slop-scan")
+sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
+
+import formats  # noqa: E402
+import hashes  # noqa: E402
 
 MAX_UNPACKED = 4 * 1024**3
 MAX_FILES = 20000
-MAX_DEPTH = 3
+MAX_DEPTH = 4
+# How long capa may take over all the programs in a file.
+CAPA_BUDGET = 600
+# Archives a release is expected to be, or carry: not opening one of these holds the file.
 ARCHIVES = (".zip", ".tar", ".tgz", ".tar.gz", ".tar.xz", ".tar.zst", ".tar.bz2", ".deb", ".rpm", ".gz", ".xz")
 # capa namespaces worth a reviewer's look. Networking is left out: most games talk to servers.
 NOTABLE = (
@@ -41,10 +60,11 @@ NOTABLE = (
     "impact/",
     "data-manipulation/encryption/ransom",
 )
+UNPACKED = ".unpacked"
 
 
 def run(args, timeout=600):
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
 
 
 def size_of(folder):
@@ -58,40 +78,82 @@ def size_of(folder):
     return total, count
 
 
-def unpack(path, dest, root, depth=0):
-    """Unpacks archives recursively; returns why it couldn't unpack everything, or None."""
-    os.makedirs(dest, exist_ok=True)
-    tar = ["bsdtar", "-x", "-C", dest, "--no-same-owner", "--no-same-permissions", "-f"]
-    try:
-        if path.lower().endswith(".rpm"):
-            # rpm2cpio reads every RPM format; bsdtar alone can't read RPM 6 packages (Fedora 43's
-            # rpmbuild can make them), whose payload lists files by number, not by name.
-            with open(path, "rb") as fh:
-                conv = subprocess.Popen(["rpm2cpio", "-"], stdin=fh, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                r = subprocess.run(tar + ["-"], stdin=conv.stdout, capture_output=True, timeout=300)
-                conv.stdout.close()
-                ok = conv.wait(timeout=60) == 0 and r.returncode == 0
+def rel(path, root):
+    if not path.startswith(root):
+        return os.path.basename(path)
+    return os.path.relpath(path, root).replace(UNPACKED, "")
+
+
+class Unpacker:
+    """Opens the release and everything inside it that we can, within the limits."""
+
+    def __init__(self, tree):
+        self.tree = tree
+        self.total, self.count = 0, 0
+        self.incomplete, self.notes = [], []
+
+    def open(self, path, dest, required):
+        name = rel(path, self.tree)
+        try:
+            result = formats.open_up(path, dest)
+        except subprocess.TimeoutExpired:
+            result = formats.Failed("took too long to open")
+        if result is None:
+            shutil.rmtree(dest, ignore_errors=True)
+            if required:
+                self.incomplete.append(f"couldn't unpack {name} (damaged, encrypted or too large)")
+            return False
+        if isinstance(result, formats.Failed):
+            if required:
+                self.incomplete.append(f"couldn't unpack {name} ({result.why})")
+            else:
+                self.notes.append(f"{name}: {result.why}, so its contents weren't scanned one by one")
+            if not os.path.isdir(dest) or not os.listdir(dest):
+                shutil.rmtree(dest, ignore_errors=True)
+                return False
+        total, count = size_of(dest)
+        if self.total + total > MAX_UNPACKED or self.count + count > MAX_FILES:
+            shutil.rmtree(dest, ignore_errors=True)
+            if required:
+                self.incomplete.append("too large to unpack fully")
+            else:
+                self.notes.append(f"{name} wasn't opened: past the size limits")
+            return False
+        self.total += total
+        self.count += count
+        return True
+
+    def run(self, target):
+        """Unpacks `target` into the tree (or copies it there) and then what's inside."""
+        if target.lower().endswith(ARCHIVES):
+            if not self.open(target, self.tree, required=True):
+                os.makedirs(self.tree, exist_ok=True)
+                return
         else:
-            ok = run(tar + [path], timeout=300).returncode == 0
-    except subprocess.TimeoutExpired:
-        return f"unpacking {rel(path, root)} took too long"
-    if not ok:
-        return f"couldn't unpack {rel(path, root)} (damaged, encrypted or too large)"
-    total, count = size_of(root)
-    if total > MAX_UNPACKED or count > MAX_FILES:
-        return "too large to unpack fully"
-    if depth >= MAX_DEPTH:
-        nested = any(f.lower().endswith(ARCHIVES) for _, _, fs in os.walk(dest) for f in fs)
-        return "archives nested too deep to unpack" if nested else None
-    for folder, _, files in os.walk(dest):
-        for f in files:
-            p = os.path.join(folder, f)
-            if os.path.islink(p) or not f.lower().endswith(ARCHIVES):
-                continue
-            problem = unpack(p, p + ".unpacked", root, depth + 1)
-            if problem:
-                return problem
-    return None
+            os.makedirs(self.tree, exist_ok=True)
+            shutil.copy(target, os.path.join(self.tree, os.path.basename(target)))
+        queue = [(self.tree, 1)]
+        while queue and not self.incomplete:
+            folder, depth = queue.pop(0)
+            for root, dirs, files in os.walk(folder):
+                dirs[:] = [d for d in dirs if not d.endswith(UNPACKED)]
+                for f in sorted(files):
+                    p = os.path.join(root, f)
+                    if os.path.islink(p) or not os.path.isfile(p):
+                        continue
+                    required = f.lower().endswith(ARCHIVES)
+                    if formats.kind_of(p) is None and not required:
+                        continue
+                    if depth >= MAX_DEPTH:
+                        if required:
+                            self.incomplete.append("archives nested too deep to unpack")
+                            return
+                        continue
+                    dest = p + UNPACKED
+                    if self.open(p, dest, required):
+                        queue.append((dest, depth + 1))
+                    elif self.incomplete:
+                        return
 
 
 def executables(folder, limit=8):
@@ -112,13 +174,21 @@ def executables(folder, limit=8):
     return [p for _, p in sorted(found, reverse=True)[:limit]]
 
 
-def rel(path, root):
-    if not path.startswith(root):
-        return os.path.basename(path)
-    return os.path.relpath(path, root).replace(".unpacked", "")
+def yara(rules, tree):
+    """(matches, problem) for one compiled rule set."""
+    r = run(["yara", "-C", rules, "-r", "-w", "-f", tree])
+    matches = []
+    for line in r.stdout.splitlines():
+        if " " in line:
+            name, where = line.split(" ", 1)
+            matches.append({"engine": "YARA", "file": rel(where, tree), "name": name})
+    return matches, (r.returncode != 0)
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--match-hashes":
+        hashes.match()
+        return
     work = tempfile.mkdtemp(prefix="scan-", dir=os.environ.get("TMPDIR", "/tmp"))
     target = sys.argv[1]
     if target == "-":
@@ -128,18 +198,16 @@ def main():
         target = os.path.join(work, "in", name or "file")
         with open(target, "wb") as fh:
             shutil.copyfileobj(sys.stdin.buffer, fh, 1024 * 1024)
-    findings, capabilities, notes, engines = [], [], [], {}
+    findings, noticed, capabilities, notes, engines = [], [], [], [], {}
+    fingerprints, capped = [], False
     # Why the file wasn't scanned completely; any of these holds it for SLAPorSLOP staff.
     incomplete = []
     try:
         tree = os.path.join(work, "files")
-        if target.lower().endswith(ARCHIVES):
-            problem = unpack(target, tree, tree)
-            if problem:
-                incomplete.append(problem)
-        else:
-            os.makedirs(tree)
-            shutil.copy(target, os.path.join(tree, os.path.basename(target)))
+        unpacker = Unpacker(tree)
+        unpacker.run(target)
+        incomplete += unpacker.incomplete
+        notes += unpacker.notes
 
         # ClamAV, on the file itself (it reads archives) and on what was unpacked.
         db = "/db/clamav"
@@ -157,24 +225,31 @@ def main():
         else:
             incomplete.append("ClamAV has no signatures yet")
 
-        # YARA-Forge core rules.
-        rules = "/db/yara/core.yarc"
-        if os.path.exists(rules):
-            r = run(["yara", "-C", rules, "-r", "-w", "-f", tree])
-            if r.returncode != 0:
+        # YARA: the main rules hold a file; the wider set's matches are notes (rules.py).
+        hold = "/db/yara/hold.yarc"
+        if not os.path.exists(hold):
+            hold = "/db/yara/core.yarc"  # from before rules.py, until the next update
+        if os.path.exists(hold):
+            found, problem = yara(hold, tree)
+            findings += found
+            if problem:
                 incomplete.append("YARA couldn't read everything")
-            for line in r.stdout.splitlines():
-                if " " in line:
-                    name, where = line.split(" ", 1)
-                    findings.append({"engine": "YARA", "file": rel(where, tree), "name": name})
+            if os.path.exists("/db/yara/note.yarc"):
+                found, _ = yara("/db/yara/note.yarc", tree)
+                noticed += found
             engines["yara"] = "yara-forge " + open("/db/yara/version").read().strip()
         else:
             incomplete.append("YARA has no rules yet")
 
-        # capa on the main programs.
+        # capa on the main programs, biggest first, within its time budget.
+        deadline = time.monotonic() + CAPA_BUDGET
         for exe in executables(tree):
+            left = deadline - time.monotonic()
+            if left < 30:
+                notes.append(f"capa ran out of time before {rel(exe, tree)}")
+                break
             try:
-                r = run(["capa", "-j", "-q", exe], timeout=300)
+                r = run(["capa", "-j", "-q", exe], timeout=min(300, left))
             except subprocess.TimeoutExpired:
                 notes.append(f"capa took too long on {rel(exe, tree)}")
                 continue
@@ -189,6 +264,10 @@ def main():
                 if ns.startswith(NOTABLE):
                     capabilities.append({"file": rel(exe, tree), "capability": name, "namespace": ns})
         engines["capa"] = run(["capa", "--version"]).stdout.strip() or "capa"
+
+        # The release file itself too, when it was unpacked rather than copied into the tree.
+        outer = target if target.lower().endswith(ARCHIVES) else None
+        fingerprints, capped = hashes.record(tree, rel, outer=outer)
     except subprocess.TimeoutExpired:
         incomplete.append("a scanner took too long")
     except OSError as e:
@@ -197,10 +276,13 @@ def main():
         shutil.rmtree(work, ignore_errors=True)
 
     # A plain file is scanned as given and as copied into the tree: list each finding once.
-    unique = {}
-    for f in findings:
-        unique.setdefault((f["engine"], f["file"], f["name"]), f)
-    findings = list(unique.values())
+    def once(items):
+        unique = {}
+        for f in items:
+            unique.setdefault((f["engine"], f["file"], f["name"]), f)
+        return list(unique.values())
+
+    findings, noticed = once(findings), once(noticed)
 
     if findings:
         notes += incomplete
@@ -212,17 +294,25 @@ def main():
         result = "on_hold"
         detail = "Not fully scanned: " + "; ".join(incomplete) + \
             ". SLAPorSLOP staff look at it."
-    elif capabilities:
+    elif capabilities or noticed:
         result = "note"
-        kinds = sorted({c["capability"] for c in capabilities})
-        detail = "Scanned clean. For the reviewer, it can: " + ", ".join(kinds[:8]) + (" and more" if len(kinds) > 8 else "") + "."
+        parts = []
+        if capabilities:
+            kinds = sorted({c["capability"] for c in capabilities})
+            parts.append("it can: " + ", ".join(kinds[:8]) + (" and more" if len(kinds) > 8 else ""))
+        if noticed:
+            names = sorted({f"{f['name']} in {f['file']}" for f in noticed})
+            parts.append("YARA's wider rules, which false-alarm more often, matched " + "; ".join(names[:3]) +
+                         (f" and {len(names) - 3} more" if len(names) > 3 else ""))
+        detail = "Scanned clean. For the reviewer, " + "; ".join(parts) + "."
     else:
         result = "passed"
         detail = "Scanned with ClamAV, YARA and capa: nothing found."
     if notes:
         detail += " (" + "; ".join(notes) + ")"
-    print(json.dumps({"result": result, "detail": detail, "findings": findings,
-                      "capabilities": capabilities, "engines": engines}))
+    print(json.dumps({"result": result, "detail": detail, "findings": findings, "noticed": noticed,
+                      "capabilities": capabilities, "engines": engines,
+                      "hashes": fingerprints, "hashes_capped": capped}))
 
 
 if __name__ == "__main__":

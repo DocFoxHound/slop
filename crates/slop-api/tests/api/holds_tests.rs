@@ -2104,3 +2104,149 @@ async fn the_ops_alert_and_staff_notices_about_holds(db: PgPool) {
         .unwrap();
     assert!(waiting().await);
 }
+
+/// A stand-in for slop-scan that passes every file, reporting a program in it whose SHA-256 is
+/// `bad`, and that answers `--match-hashes` by matching that SHA-256 to "Win.Trojan.Newer".
+fn fingerprint_scanner(dir: &std::path::Path, bad: &str) -> String {
+    std::fs::create_dir_all(dir).unwrap();
+    let script = dir.join("slop-scan");
+    let (md5, sha1, other) = ("a".repeat(32), "a".repeat(40), "c".repeat(64));
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = --match-hashes ]; then exec python3 -c '\nimport json, sys\nq = [json.loads(l) for l in sys.stdin if l.strip()]\nm = [{{\"id\": x[\"id\"], \"name\": \"Win.Trojan.Newer\"}} for x in q if x[\"sha256\"] == \"{bad}\"]\nprint(json.dumps({{\"engines\": {{\"clamav\": \"daily 2\"}}, \"matches\": m}}))'\nfi\necho '{{\"result\":\"passed\",\"detail\":\"nothing found\",\"findings\":[],\"capabilities\":[],\"engines\":{{}},\"hashes\":[{{\"file\":\"bin/game.exe\",\"size\":3,\"md5\":\"{md5}\",\"sha1\":\"{sha1}\",\"sha256\":\"{bad}\",\"sections\":[{{\"size\":1,\"md5\":\"{md5}\",\"sha1\":\"{sha1}\",\"sha256\":\"{other}\"}}]}},{{\"file\":\"broken\",\"size\":1,\"md5\":\"zz\",\"sha1\":\"zz\",\"sha256\":\"zz\"}}]}}'\n"
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    script.to_str().unwrap().to_string()
+}
+
+/// Newer signatures are checked against the fingerprints the scanner recorded, without
+/// downloading anything: a match on the release players get asks for a full re-scan, and one on
+/// a release waiting to be published holds it for staff. Each match acts once, and the check
+/// runs only when it's due.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn newer_signatures_are_checked_against_the_fingerprints(db: PgPool) {
+    let dir = std::env::temp_dir().join(format!("slop-prints-{}", Uuid::now_v7()));
+    let bad = "b".repeat(64);
+    let command = fingerprint_scanner(&dir, &bad);
+    let app = test_app_with(db, move |c| {
+        c.releases.scanner = slop_api::scan::Scanner::from_setting("local", &command).unwrap();
+    })
+    .await;
+    let rules = admin::ReviewRules::from_config(&app.config);
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let live = submit_and_fetch(&app, &maker, "1.0.0").await;
+    defender_clean(&app, &live).await;
+    assert_eq!(release_status(&app, &live).await.0, "ready");
+    // The program and its section are kept, apart from the report; a malformed one isn't.
+    let kept: Vec<(String, Option<i16>, String)> = sqlx::query_as(
+        "select file, section, sha256 from release_file_fingerprints where release_id = $1::uuid
+         order by section nulls first",
+    )
+    .bind(&live)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        kept,
+        vec![
+            ("bin/game.exe".into(), None, bad.clone()),
+            ("bin/game.exe".into(), Some(0), "c".repeat(64)),
+        ]
+    );
+    let report: Value =
+        sqlx::query_scalar("select scan_report from release_files where release_id = $1::uuid")
+            .bind(&live)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(report.get("hashes").is_none(), "{report}");
+    approve_release(&app, rules, live.parse().unwrap())
+        .await
+        .unwrap();
+    let waiting = submit_and_fetch(&app, &maker, "1.1.0").await;
+    defender_clean(&app, &waiting).await;
+    assert_eq!(release_status(&app, &waiting).await.0, "ready");
+
+    assert_eq!(
+        slop_api::rescan::check_fingerprints(&app.state)
+            .await
+            .unwrap(),
+        2
+    );
+    // The live release is re-scanned in full: that's what flags it for staff.
+    let reason: String = sqlx::query_scalar("select reason from rescan_requests")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        reason,
+        "newer signatures match Win.Trojan.Newer in bin/game.exe"
+    );
+    assert_eq!(release_status(&app, &live).await.0, "approved");
+    // The one waiting to be published is held for staff, and its maker is told why.
+    assert_eq!(release_status(&app, &waiting).await.0, "awaiting_review");
+    let h = hold(&app, &maker, &waiting).await;
+    assert_eq!(h["kinds"], json!(["scan"]));
+    assert_eq!(h["needs_staff"], true);
+    let (detail, findings): (String, Value) = sqlx::query_as(
+        "select scan_detail, scan_report -> 'findings' from release_files where release_id = $1::uuid",
+    )
+    .bind(&waiting)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(
+        detail.starts_with("Flagged by ClamAV: Win.Trojan.Newer in bin/game.exe, by signatures newer than its scan."),
+        "{detail}"
+    );
+    assert_eq!(
+        findings,
+        json!([{ "engine": "ClamAV", "file": "bin/game.exe", "name": "Win.Trojan.Newer" }])
+    );
+    let audited: i64 = sqlx::query_scalar(
+        "select count(*) from audit_log where action = 'release.fingerprint_matched'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(audited, 2);
+    let signatures: String = sqlx::query_scalar("select signatures from fingerprint_checks")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(signatures, "daily 2");
+
+    // Not due again for six hours; when it is, the same matches don't act twice.
+    assert_eq!(
+        slop_api::rescan::check_fingerprints(&app.state)
+            .await
+            .unwrap(),
+        0
+    );
+    sqlx::query("update fingerprint_checks set checked_at = now() - interval '7 hours'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("delete from rescan_requests")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        slop_api::rescan::check_fingerprints(&app.state)
+            .await
+            .unwrap(),
+        0
+    );
+    let requests: i64 = sqlx::query_scalar("select count(*) from rescan_requests")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(requests, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}

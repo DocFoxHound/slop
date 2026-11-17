@@ -95,7 +95,10 @@ and `defender`, and `repo_scan`, the source check), and `detail.hold` is the hol
 
 - Read each finding: the engine, the name it matched and the file. ClamAV matches signatures;
   YARA rules match patterns seen in malware and also packed programs (UPX, for example); capa
-  lists what a program can do, which is information, not a finding.
+  lists what a program can do, which is information, not a finding. Matches from YARA's wider
+  rules ("noticed") false-alarm more often and never hold a release by themselves: weigh them
+  with everything else. A finding "by signatures newer than its scan" came from checking the
+  release's recorded fingerprints against newer ClamAV signatures.
 - Read the maker's explanation, if there is one, as a claim to check, not as proof.
 - Look at the repository at the release's commit: does the build plausibly come from it (a
   packer the build script uses, a known library that trips that rule)?

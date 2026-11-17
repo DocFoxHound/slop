@@ -6,8 +6,8 @@ import { cleanup, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { RepoScan } from "../api";
-import { RepoScanList } from "./Checks";
+import type { RepoScan, ScanReport } from "../api";
+import { RepoScanList, ScanFindings } from "./Checks";
 
 afterEach(cleanup);
 
@@ -93,5 +93,29 @@ describe("the source check on a dedicated server's release", () => {
     expect(download).toContain("a mod loader outside SLAPorSLOP's mods breaks the Content Policy");
     // Told it isn't one now, whatever the scan recorded.
     expect(words("maker", { scan: { ...server, dedicated_server: true }, server: false })).toContain("CODE FROM OUTSIDE SLAPorSLOP? (2)");
+  });
+});
+
+describe("the scanner's findings", () => {
+  const report: ScanReport = {
+    result: "note",
+    detail: "Scanned clean.",
+    engines: {},
+    findings: [],
+    capabilities: [],
+  };
+
+  it("lists matches from YARA's wider rules apart, as false-alarming more often", () => {
+    const { container } = render(
+      <ScanFindings report={{ ...report, noticed: [{ engine: "YARA", file: "resources/app.asar/main.js", name: "SUSP_Obfuscated_JS" }] }} />,
+    );
+    const said = container.textContent ?? "";
+    expect(said).toContain("Matched by YARA's wider rules, which false-alarm more often (1)");
+    expect(said).toContain("SUSP_Obfuscated_JS in resources/app.asar/main.js");
+  });
+
+  it("says nothing of them in reports from before they existed", () => {
+    const { container } = render(<ScanFindings report={report} />);
+    expect(container.textContent ?? "").not.toContain("wider rules");
   });
 });

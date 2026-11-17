@@ -464,7 +464,8 @@ steps: see [Browser games](#browser-games)):
 4. **Maker signature:** the attestation is checked: it must name the file's hash and come from
    your repository at the release's commit.
 5. **Scan:** SLAPorSLOP scans every file with ClamAV, YARA (YARA-Forge's rules) and capa, unpacking
-   archives first. Nothing is ever run. Windows builds also need a clean check from
+   archives first, and the installers, app bundles (Electron, PyInstaller, Godot packs) and
+   archives inside them. Nothing is ever run. Windows builds also need a clean check from
    **Microsoft Defender** (Slop Build or [Slop Check](#slop-check)). If something is found, the
    release goes **on hold** (see [On hold](#on-hold) below): scanners make mistakes, and SLAPorSLOP
    staff can clear a false positive. A scan says what was found, never that a program is harmless. Each file

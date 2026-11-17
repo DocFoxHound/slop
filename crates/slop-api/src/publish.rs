@@ -589,6 +589,43 @@ pub async fn finish_checks_in(
     apply(conn, &subject, verdict, actor).await
 }
 
+/// Checks a ready release again, when something its checks rely on changed (newer signatures
+/// match a program in it, rescan.rs): if it no longer passes, it goes where the checks leave it,
+/// and its maker is told, as Publish would.
+pub async fn recheck_ready(
+    db: &PgPool,
+    rules: ReviewRules,
+    release_id: Uuid,
+    actor: &str,
+) -> anyhow::Result<Outcome> {
+    let mut tx = db.begin().await?;
+    let row: Option<(Uuid, String, String, OffsetDateTime, String)> = sqlx::query_as(
+        "select r.app_id, a.slug, r.version, r.created_at, a.repo_url
+         from releases r join apps a on a.id = r.app_id
+         where r.id = $1 and r.status = 'ready' for update of r",
+    )
+    .bind(release_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((app_id, slug, version, created_at, repo_url)) = row else {
+        return Ok(Outcome::NotChecking);
+    };
+    let subject = Subject {
+        id: release_id,
+        app_id,
+        slug,
+        version,
+        created_at,
+        slop_check: crate::holds::slop_check_runs(&repo_url),
+    };
+    let outcome = match evaluate(&mut tx, rules, release_id).await? {
+        Verdict::Ready => Outcome::Ready,
+        other => apply(&mut tx, &subject, other, actor).await?,
+    };
+    tx.commit().await?;
+    Ok(outcome)
+}
+
 /// The newest published (or since withdrawn by SLAPorSLOP) release of the app sent after `s`.
 async fn newer_out(conn: &mut PgConnection, s: &Subject) -> sqlx::Result<Option<String>> {
     sqlx::query_scalar(

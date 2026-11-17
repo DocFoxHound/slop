@@ -101,6 +101,25 @@ cd "$REPO"
 
 fail() { log "FAILED at $1; staying on ${current:0:12}"; touch "$ROOT/builds/failed-$target"; exit 1; }
 
+# The release scanner (deploy/scanner, README "Release scanner"), where it's set up: when
+# deploy/scanner changed since its last build, the image is rebuilt, the command the API runs is
+# replaced, and the signatures and rules are refreshed with the new image. Never blocks a deploy.
+update_scanner() {
+  [ -x "$ROOT/bin/slop-scan" ] || return 0
+  local last
+  last=$(cat "$ROOT/scanner-built" 2>/dev/null || true)
+  if [ -n "$last" ] && git -C "$REPO" diff --quiet "$last" "$target" -- deploy/scanner 2>/dev/null; then
+    return 0
+  fi
+  podman build -q -t slop-scanner "$REPO/deploy/scanner" >"$ROOT/scanner-image.log" 2>&1 \
+    || { tail -n 20 "$ROOT/scanner-image.log"; return 1; }
+  install -m 755 "$REPO/deploy/scanner/slop-scan" "$ROOT/bin/slop-scan.new" || return 1
+  mv "$ROOT/bin/slop-scan.new" "$ROOT/bin/slop-scan" || return 1
+  echo "$target" >"$ROOT/scanner-built"
+  systemctl --user start --no-block slop-scan-update.service || log "couldn't refresh the scanner's signatures"
+  log "scanner rebuilt"
+}
+
 audit_dependencies() {
   podman run --rm --network=host -v "$REPO:/src:ro,z" ghcr.io/google/osv-scanner:v2.7.0@sha256:d2c46aa2483c4e02759bc25f2224d28a5ceeb3dca5a1ecd1f569fbed83a626f0 \
     scan source --lockfile /src/Cargo.lock --lockfile /src/web/package-lock.json --format json >"$ROOT/osv.json" 2>/dev/null || true
@@ -224,6 +243,7 @@ for _ in $(seq 30); do
     # Known-vulnerable dependencies (OSV), for the admins' alerts (ops.rs). Never blocks a
     # deploy: a new advisory against an old dependency shouldn't stop a fix from going out.
     audit_dependencies || log "dependency audit didn't run"
+    update_scanner || log "couldn't rebuild the scanner"
     # Keep the last three builds.
     # shellcheck disable=SC2012 # commit names: no spaces
     ls -1dt "$ROOT"/builds/*/ | tail -n +4 | xargs -r rm -rf

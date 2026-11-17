@@ -584,6 +584,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             allow_http_downloads: true,
             require_maker_signature: false,
             scanner: slop_api::scan::Scanner::Off,
+            rescan_every_days: 0,
             slop_build_workflow: Some("slop/slop-build/.github/workflows/build.yml".into()),
             slop_build_version: "v1".into(),
             github_oidc_issuer: github_base.trim_end_matches('/').to_string(),
@@ -13147,7 +13148,13 @@ async fn live_releases_are_rescanned_and_new_findings_go_to_review(db: PgPool) {
         .unwrap();
     approve_release(&app, lax(), id).await.unwrap();
 
-    // Just approved: not due for a week.
+    // Not re-scanned on a schedule (SLOP_RESCAN_EVERY_DAYS is off), however long it's been out.
+    assert_eq!(slop_api::rescan::run_once(&app.state).await.unwrap(), 0);
+    sqlx::query("update releases set published_at = now() - interval '60 days' where id = $1")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
     assert_eq!(slop_api::rescan::run_once(&app.state).await.unwrap(), 0);
 
     // A malware report re-scans it now; still clean.
@@ -13240,6 +13247,36 @@ async fn live_releases_are_rescanned_and_new_findings_go_to_review(db: PgPool) {
     .await
     .unwrap();
     assert_eq!(logged, 2);
+
+    // A file that can't be downloaded is tried again a day later, not dropped.
+    sqlx::query(
+        "update release_files set url = 'http://127.0.0.1:9/game.zip' where release_id = $1",
+    )
+    .bind(id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    slop_api::rescan::request(&app.db, app_id(&app, "game").await, "test")
+        .await
+        .unwrap();
+    assert_eq!(slop_api::rescan::run_once(&app.state).await.unwrap(), 1);
+    let result: String =
+        sqlx::query_scalar("select rescan_result from release_files where release_id = $1")
+            .bind(id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(result, "unreachable");
+    assert_eq!(
+        slop_api::rescan::run_once(&app.state).await.unwrap(),
+        0,
+        "not again today"
+    );
+    sqlx::query("update rescan_requests set requested_at = now()")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::rescan::run_once(&app.state).await.unwrap(), 1);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

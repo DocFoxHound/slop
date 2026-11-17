@@ -130,6 +130,7 @@ export function SignedLine({
  *  (so they can fix it, or say why it's a false positive) and staff. */
 export function ScanFindings({ report }: { report: ScanReport | null }) {
   if (!report) return null;
+  const noticed = report.noticed ?? [];
   return (
     <>
       {report.findings.length > 0 && (
@@ -141,6 +142,20 @@ export function ScanFindings({ report }: { report: ScanReport | null }) {
             </li>
           ))}
         </ul>
+      )}
+      {noticed.length > 0 && (
+        <details className="small">
+          <summary>
+            Matched by YARA's wider rules, which false-alarm more often ({noticed.length})
+          </summary>
+          <ul>
+            {noticed.map((f, i) => (
+              <li key={i}>
+                {f.name} <span className="muted">in {f.file}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
       {report.capabilities.length > 0 && (
         <details className="small">

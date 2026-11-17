@@ -2380,6 +2380,8 @@ export interface ScanReport {
   detail: string;
   engines: Record<string, string>;
   findings: Array<{ engine: string; file: string; name: string }>;
+  /** Matches from YARA's wider rules, which false-alarm more often: a note, not a hold. */
+  noticed?: Array<{ engine: string; file: string; name: string }>;
   capabilities: Array<{ file: string; capability: string; namespace: string }>;
 }
 

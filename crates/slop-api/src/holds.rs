@@ -8,7 +8,7 @@
 //! - **Run the scans again** (`POST …/rescan`): SLAPorSLOP keeps no copy of a release's files
 //!   (publisher.md), so a re-run downloads the same files again from the maker's release page,
 //!   checks their SHA-256 hasn't changed, scans them with today's signatures and deletes them,
-//!   as the weekly re-scan of live releases does (rescan.rs). Up to 3 per release, 6 hours apart
+//!   as a re-scan of a live release does (rescan.rs). Up to 3 per release, 6 hours apart
 //!   (30 minutes after the scanner couldn't finish), 10 a day per account. It only ever clears a
 //!   scanner's hold: Defender can't be run here, and a lowered rating waits for staff. The fetcher
 //!   runs re-runs when no release is waiting (`rescan_next`), one at a time, sharing the scanner.
@@ -1506,6 +1506,12 @@ async fn rerun_file(
         })
         .await;
     let after = verdict.result.as_str().to_string();
+    if let Err(e) =
+        crate::scan::save_fingerprints(&state.db, release_id, &f.platform, &verdict.fingerprints)
+            .await
+    {
+        return Rerun::Unreachable(format!("{e:#}"));
+    }
     match sqlx::query(sqlx::AssertSqlSafe(format!(
         "update release_files set scan_result = $3, scan_detail = $4, scan_report = $5, checked_at = now()
          where release_id = $1 and platform = $2 and {STILL_HELD}"

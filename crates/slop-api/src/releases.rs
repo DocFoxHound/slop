@@ -2512,6 +2512,7 @@ async fn fetch_release(
         .bind(parts_out)
         .execute(&state.db)
         .await?;
+        crate::scan::save_fingerprints(&state.db, id, &platform, &verdict.fingerprints).await?;
         // A Defender check of exactly this file, from Slop Build or Slop Check.
         sqlx::query(
             "update release_files f set defender = c.report

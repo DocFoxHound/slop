@@ -1,11 +1,12 @@
-# SLAPorSLOP's scanner (crates/slop-api/src/scan.rs, docs/SECURITY.md §5.2): ClamAV, YARA (YARA-Forge
-# core rules) and Mandiant's capa, all free and open source. Static only: nothing in a build is
-# ever run. `slop-scan` runs it with no network, a read-only root and the file mounted read-only.
+# SLAPorSLOP's scanner (crates/slop-api/src/scan.rs, docs/SECURITY.md §5.2): ClamAV, YARA (YARA-Forge's
+# rules) and Mandiant's capa, all free and open source, plus the tools that open installers and
+# packs (7-Zip, innoextract, squashfs-tools, UPX). Static only: nothing in a build is ever run.
+# `slop-scan` runs it with no network, a read-only root and the file on stdin.
 FROM docker.io/library/debian:stable-slim@sha256:d405c1e1d9eecbf30022d23766a0eea235e7f499aa33e357dfd29271a839f82a
 
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends clamav clamav-freshclam yara libarchive-tools rpm2cpio \
-      python3 ca-certificates curl unzip file \
+      7zip innoextract squashfs-tools upx-ucl python3 python3-pefile ca-certificates curl unzip file \
  && rm -rf /var/lib/apt/lists/*
 
 # capa (standalone, rules included), pinned and checked.
@@ -16,9 +17,12 @@ RUN curl -fsSL -o /tmp/capa.zip "https://github.com/mandiant/capa/releases/downl
  && unzip -q /tmp/capa.zip -d /usr/local/bin && chmod 755 /usr/local/bin/capa && rm /tmp/capa.zip \
  && capa --version
 
+COPY formats.py hashes.py /usr/local/lib/slop-scan/
 COPY scan.py /usr/local/bin/slop-scan
+COPY rules.py /usr/local/bin/slop-scan-rules
 COPY update.sh /usr/local/bin/slop-scan-update
-RUN chmod 755 /usr/local/bin/slop-scan /usr/local/bin/slop-scan-update \
+RUN chmod 644 /usr/local/lib/slop-scan/*.py \
+ && chmod 755 /usr/local/bin/slop-scan /usr/local/bin/slop-scan-rules /usr/local/bin/slop-scan-update \
  && useradd --system --uid 900 --home /nonexistent scanner
 
 # Signatures and rules live in a volume, refreshed by `slop-scan-update` (with network).

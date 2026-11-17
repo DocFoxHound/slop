@@ -406,11 +406,16 @@ Changing the key means everyone switches phone notifications on again.
 
 `SLOP_SCANNER=local` scans every release file before review (DESIGN §10, SECURITY §5.2). The API
 runs `SLOP_SCAN_COMMAND` (here `~/slop-deploy/bin/slop-scan`), which starts the `slop-scanner`
-container (`deploy/scanner`: ClamAV, YARA with YARA-Forge's core rules, capa) for one file:
+container (`deploy/scanner`: ClamAV, YARA with YARA-Forge's rules, capa) for one file:
 no network, read-only, no capabilities, 4 GB of memory, 25 minutes, and the file on stdin to an
 unprivileged user inside (an unmapped ID outside, not this account). Nothing in the file is ever
 run. A file the scanner couldn't scan completely (an archive that won't unpack or is past the
-limits, an engine error or timeout) is held for a person, like one it flags.
+limits, an engine error or timeout) is held for a person, like one it flags. Every six hours the
+API also runs `slop-scan --match-hashes` to check the fingerprints of live releases' programs
+against the newest ClamAV signatures (rescan.rs); full weekly re-scans are off unless
+`SLOP_RESCAN_EVERY_DAYS` is set. `slop-scan-update` (the timer) refreshes ClamAV's signatures
+and, when YARA-Forge has a new release, builds the rules that hold a file and the ones that make
+a note (`rules.py`, leaving out rules without a licence SLAPorSLOP can use).
 
 ```sh
 podman build -t slop-scanner deploy/scanner
@@ -422,7 +427,9 @@ systemctl --user enable --now slop-scan-update.timer
 # in slop.env: SLOP_SCANNER=local and SLOP_SCAN_COMMAND=/home/brian/slop-deploy/bin/slop-scan
 ```
 
-Rebuild the image when `deploy/scanner` changes. Windows builds also need Microsoft Defender's
+The deploy (`deploy/update.sh`) rebuilds the image, replaces `~/slop-deploy/bin/slop-scan` and
+refreshes the signatures when `deploy/scanner` changes, wherever that command is installed; build it
+by hand only the first time. Windows builds also need Microsoft Defender's
 check, which arrives from Slop Build or Slop Check on GitHub's Windows runners
 (`/v1/slop-build/checks`); with the scanner on, a Windows file can't be approved without a clean
 one unless a reviewer clears it.

@@ -6246,12 +6246,34 @@ fn scanner_dir(what: &str) -> std::path::PathBuf {
     }
     // The scripts under test, as they are in this checkout (not as the image was built).
     let scanner = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/scanner");
-    for file in ["scan.py", "update.sh", "slop-scan"] {
-        let to = dir.join("bin").join(file);
+    for (file, as_name) in [
+        ("scan.py", "scan.py"),
+        ("formats.py", "formats.py"),
+        ("hashes.py", "hashes.py"),
+        ("update.sh", "update.sh"),
+        ("slop-scan", "slop-scan"),
+        ("rules.py", "slop-scan-rules"),
+    ] {
+        let to = dir.join("bin").join(as_name);
         std::fs::copy(scanner.join(file), &to).unwrap();
         std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     dir
+}
+
+/// podman's arguments that put this checkout's scanner in the image: scan.py as the entry
+/// point, and the modules it reads.
+fn checkout_scanner(cmd: &mut std::process::Command, dir: &std::path::Path) {
+    cmd.arg("-v").arg(format!(
+        "{}:/usr/local/bin/slop-scan:ro,Z",
+        dir.join("bin/scan.py").display()
+    ));
+    for module in ["formats.py", "hashes.py"] {
+        cmd.arg("-v").arg(format!(
+            "{}:/usr/local/lib/slop-scan/{module}:ro,Z",
+            dir.join("bin").join(module).display()
+        ));
+    }
 }
 
 /// Files the container made belong to its own user; remove them from inside the user namespace.
@@ -6262,8 +6284,13 @@ fn remove_scanner_dir(dir: &std::path::Path) {
         .status();
 }
 
-/// Compiles a YARA rule into db/yara/core.yarc with the image's own yarac.
+/// Compiles a YARA rule into db/yara/core.yarc with the image's own yarac (the name rules had
+/// before update.sh split them into hold.yarc and note.yarc: scan.py still reads it).
 fn compile_yara(dir: &std::path::Path, rule: &str, version: &str) {
+    compile_yara_as(dir, rule, version, "core.yarc");
+}
+
+fn compile_yara_as(dir: &std::path::Path, rule: &str, version: &str, file: &str) {
     std::fs::write(dir.join("db/yara/rule.yar"), rule).unwrap();
     let out = std::process::Command::new("podman")
         .args([
@@ -6275,7 +6302,8 @@ fn compile_yara(dir: &std::path::Path, rule: &str, version: &str) {
             "-v",
         ])
         .arg(format!("{}:/db:Z", dir.join("db").display()))
-        .args([SCANNER_IMAGE, "/db/yara/rule.yar", "/db/yara/core.yarc"])
+        .args([SCANNER_IMAGE, "/db/yara/rule.yar"])
+        .arg(format!("/db/yara/{file}"))
         .output()
         .unwrap();
     assert!(
@@ -6323,12 +6351,8 @@ fn scan_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Value {
         "/tmp:rw,size=200m,mode=1777",
         "-v",
     ])
-    .arg(format!("{}:/db:ro,Z", dir.join("db").display()))
-    .arg("-v")
-    .arg(format!(
-        "{}:/usr/local/bin/slop-scan:ro,Z",
-        dir.join("bin/scan.py").display()
-    ));
+    .arg(format!("{}:/db:ro,Z", dir.join("db").display()));
+    checkout_scanner(&mut cmd, dir);
     if dir.join("bin/capa").exists() {
         cmd.arg("-v").arg(format!(
             "{}:/usr/local/bin/capa:ro,Z",
@@ -6544,7 +6568,7 @@ fn slop_scan_tames_the_file_name_it_passes_on() {
 
 /// update.sh: YARA rules are replaced only when YARA-Forge has a new release, and only once the
 /// new rules compile; ClamAV's signatures are refreshed every time. (curl and freshclam are
-/// stand-ins: no network.)
+/// stand-ins: no network. Both of YARA-Forge's packages are the test's one file.)
 #[test]
 fn the_scanner_update_replaces_yara_rules_only_when_new_ones_compile() {
     use std::os::unix::fs::PermissionsExt;
@@ -6603,20 +6627,25 @@ fn the_scanner_update_replaces_yara_rules_only_when_new_ones_compile() {
             .trim()
             .to_string()
     };
-    let compiled = || std::fs::read(dir.join("db/yara/core.yarc")).ok();
-    let good = "rule SlopOne { strings: $a = \"ONE\" condition: $a }\n";
+    let compiled = || std::fs::read(dir.join("db/yara/hold.yarc")).ok();
+    let good = "rule SlopOne { meta: license = \"MIT\" strings: $a = \"ONE\" condition: $a }\n";
+    // Rules compiled before update.sh split them.
+    std::fs::write(dir.join("db/yara/core.yarc"), b"old").unwrap();
 
-    // First run: the rules are fetched and compiled.
+    // First run: the rules are fetched, split and compiled, and the old file goes.
     release(good);
     let (ok, out) = update("v1");
     assert!(ok, "{out}");
     assert_eq!(version(), "v1");
     let first = compiled().expect("compiled rules");
+    assert!(dir.join("db/yara/note.yarc").exists());
+    assert!(!dir.join("db/yara/core.yarc").exists());
     assert!(out.contains("yara-forge v1"), "{out}");
+    assert!(out.contains("YARA rules: 1 hold, 0 note"), "{out}");
 
     // Same tag: nothing downloaded or replaced (even if the release changed).
     std::fs::write(dir.join("db/calls"), "").unwrap();
-    release("rule Broken { condition: nonsense }\n");
+    release("rule Broken { meta: license = \"MIT\" condition: nonsense }\n");
     let (ok, _) = update("v1");
     assert!(ok);
     assert_eq!(
@@ -6635,7 +6664,7 @@ fn the_scanner_update_replaces_yara_rules_only_when_new_ones_compile() {
     assert_eq!(compiled().as_ref(), Some(&first));
 
     // A new tag that compiles: replaced.
-    release("rule SlopTwo { strings: $a = \"TWO\" condition: $a }\n");
+    release("rule SlopTwo { meta: license = \"MIT\" strings: $a = \"TWO\" condition: $a }\n");
     let (ok, out) = update("v2");
     assert!(ok, "{out}");
     assert_eq!(version(), "v2");
@@ -6689,6 +6718,260 @@ fn the_scanner_notes_capabilities_worth_a_reviewers_look() {
         &zip_of(&[("tool.bin", b"\x7fELF pretend program")]),
     );
     assert_eq!(plain["result"], "passed", "{plain}");
+    remove_scanner_dir(&dir);
+}
+
+/// An Electron app's app.asar holding `files` (stored as they are, after a JSON header).
+fn asar_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut entries = serde_json::Map::new();
+    let mut data = Vec::new();
+    for (name, bytes) in files {
+        entries.insert(
+            name.to_string(),
+            json!({ "size": bytes.len(), "offset": data.len().to_string() }),
+        );
+        data.extend_from_slice(bytes);
+    }
+    let header = serde_json::to_vec(&json!({ "files": entries })).unwrap();
+    let pad = (4 - header.len() % 4) % 4;
+    let mut pickle = Vec::new();
+    pickle.extend_from_slice(&((4 + header.len() + pad) as u32).to_le_bytes());
+    pickle.extend_from_slice(&(header.len() as u32).to_le_bytes());
+    pickle.extend_from_slice(&header);
+    pickle.extend(std::iter::repeat_n(0u8, pad));
+    let mut out = Vec::new();
+    out.extend_from_slice(&4u32.to_le_bytes());
+    out.extend_from_slice(&(pickle.len() as u32).to_le_bytes());
+    out.extend_from_slice(&pickle);
+    out.extend_from_slice(&data);
+    out
+}
+
+/// What's inside an app bundle is scanned file by file; YARA's wider rules make a note, not a
+/// hold; and the report carries fingerprints of the programs and scripts inside.
+#[test]
+fn the_scanner_opens_bundles_notes_wider_rules_and_records_fingerprints() {
+    if !scanner_image() {
+        return;
+    }
+    let dir = scanner_dir("scan");
+    scanner_signatures(&dir);
+    compile_yara_as(
+        &dir,
+        "rule SlopWide { strings: $a = \"SLOP_WIDE_MARKER\" condition: $a }\n",
+        "test-1",
+        "note.yarc",
+    );
+    let noted = scan_file(
+        &dir,
+        "game.zip",
+        &zip_of(&[(
+            "resources/app.asar",
+            &asar_of(&[
+                ("main.js", b"x = 'SLOP_WIDE_MARKER'"),
+                ("run.sh", b"#!/bin/sh\n"),
+            ]),
+        )]),
+    );
+    assert_eq!(noted["result"], "note", "{noted}");
+    let detail = noted["detail"].as_str().unwrap();
+    // Found in the file inside, not only in the bundle as a whole.
+    assert!(
+        detail.starts_with("Scanned clean. For the reviewer, YARA's wider rules, which false-alarm more often, matched ")
+            && detail.contains("SlopWide in resources/app.asar/main.js"),
+        "{detail}"
+    );
+    let printed: Vec<&str> = noted["hashes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        printed,
+        [
+            "game.zip",
+            "resources/app.asar/main.js",
+            "resources/app.asar/run.sh"
+        ],
+        "{noted}"
+    );
+    remove_scanner_dir(&dir);
+}
+
+/// `slop-scan --match-hashes` checks recorded fingerprints against the signatures on disk,
+/// honouring ClamAV's false-positive list.
+#[test]
+fn the_scanner_matches_fingerprints_against_newer_signatures() {
+    use std::io::Write;
+    if !scanner_image() {
+        return;
+    }
+    let dir = scanner_dir("scan");
+    // Scanned before there were signatures for it (the hold is for missing signatures).
+    let first = scan_file(
+        &dir,
+        "game.zip",
+        &zip_of(&[("bin/virus.com", FAKE_MALWARE)]),
+    );
+    let print = first["hashes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["file"] == "bin/virus.com")
+        .cloned()
+        .unwrap_or_else(|| panic!("{first}"));
+    let clean = first["hashes"][0].clone();
+    // Signatures arrive later; one more entry is on the false-positive list.
+    scanner_signatures(&dir);
+    std::fs::write(
+        dir.join("db/clamav/test.hdb"),
+        format!(
+            "{}:{}:Slop.Test.Other\n",
+            clean["md5"].as_str().unwrap(),
+            clean["size"]
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("db/clamav/test.fp"),
+        format!(
+            "{}:{}:Slop.Test.Other\n",
+            clean["md5"].as_str().unwrap(),
+            clean["size"]
+        ),
+    )
+    .unwrap();
+    let query = |id: &str, h: &Value| {
+        json!({ "id": id, "kind": "file", "size": h["size"], "md5": h["md5"], "sha1": h["sha1"], "sha256": h["sha256"] })
+            .to_string()
+    };
+    let mut cmd = std::process::Command::new("podman");
+    cmd.args(["run", "--rm", "-i", "--network=none", "--read-only", "-v"])
+        .arg(format!("{}:/db:ro,Z", dir.join("db").display()));
+    checkout_scanner(&mut cmd, &dir);
+    let mut child = cmd
+        .args([SCANNER_IMAGE, "--match-hashes"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(
+        child.stdin.take().unwrap(),
+        "{}\n{}",
+        query("virus", &print),
+        query("game", &clean)
+    )
+    .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        answer["matches"],
+        json!([{ "id": "virus", "name": "Slop.Test.Malware" }]),
+        "{answer}"
+    );
+    remove_scanner_dir(&dir);
+}
+
+/// slop-scan-rules (update.sh) splits YARA-Forge's packages into rules that hold a file and
+/// rules that make a note, and leaves out rules SLAPorSLOP has no licence to use, with any rule
+/// that needs one of them.
+#[test]
+fn the_scanner_keeps_only_licensed_yara_rules_and_splits_them() {
+    if !scanner_image() {
+        return;
+    }
+    let dir = scanner_dir("scan-rules");
+    let rule = |name: &str, meta: &str, condition: &str| {
+        format!(
+            "rule {name}\n{{\n\tmeta:\n{meta}\n\tstrings:\n\t\t$a = \"{name}\"\n\tcondition:\n\t\t{condition}\n}}\n"
+        )
+    };
+    let licensed = |quality: u32, score: u32| {
+        format!(
+            "\t\tlicense_url = \"https://example.com/LICENSE\"\n\t\tscore = {score}\n\t\tquality = {quality}"
+        )
+    };
+    let core = format!(
+        "import \"pe\"\n\n{}",
+        rule("CoreOne", &licensed(90, 70), "$a")
+    );
+    let extended = [
+        core.clone(),
+        rule("ExtGood", &licensed(80, 80), "$a"),
+        rule("ExtWeak", &licensed(40, 80), "$a"),
+        rule("ExtLowScore", &licensed(90, 60), "$a"),
+        rule(
+            "ExtNoLicence",
+            "\t\tlicense_url = \"N/A\"\n\t\tscore = 90",
+            "$a",
+        ),
+        rule(
+            "ExtNonCommercial",
+            "\t\tlicense = \"CC BY-NC 4.0\"\n\t\tscore = 90",
+            "$a",
+        ),
+        format!(
+            "private {}",
+            rule("PrivUnlicensed", "\t\tlicense_url = \"N/A\"", "$a")
+        ),
+        rule(
+            "ExtNeedsUnlicensed",
+            &licensed(90, 90),
+            "$a and PrivUnlicensed",
+        ),
+        format!("private {}", rule("PrivLicensed", &licensed(90, 90), "$a")),
+        rule("ExtNeedsLicensed", &licensed(90, 90), "$a and PrivLicensed"),
+    ]
+    .join("\n");
+    std::fs::write(dir.join("db/core.yar"), core).unwrap();
+    std::fs::write(dir.join("db/extended.yar"), extended).unwrap();
+    let out = std::process::Command::new("podman")
+        .args(["run", "--rm", "--network=none", "-v"])
+        .arg(format!("{}:/db:Z", dir.join("db").display()))
+        .arg("-v")
+        .arg(format!("{}:/stubs:ro,Z", dir.join("bin").display()))
+        .args([
+            "--entrypoint",
+            "sh",
+            SCANNER_IMAGE,
+            "-c",
+            "python3 /stubs/slop-scan-rules /db/core.yar /db/extended.yar /db \
+             && yarac -w /db/hold.yar /db/hold.yarc && yarac -w /db/note.yar /db/note.yarc",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "YARA rules: 3 hold, 2 note, 3 left out (licence)"
+    );
+    let names = |file: &str| -> Vec<String> {
+        std::fs::read_to_string(dir.join("db").join(file))
+            .unwrap()
+            .lines()
+            .filter_map(|l| {
+                l.strip_prefix("rule ")
+                    .or_else(|| l.strip_prefix("private rule "))
+            })
+            .map(String::from)
+            .collect()
+    };
+    assert_eq!(
+        names("hold.yar"),
+        ["CoreOne", "ExtGood", "PrivLicensed", "ExtNeedsLicensed"]
+    );
+    assert_eq!(names("note.yar"), ["ExtWeak", "ExtLowScore"]);
     remove_scanner_dir(&dir);
 }
 
