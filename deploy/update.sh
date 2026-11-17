@@ -102,16 +102,18 @@ cd "$REPO"
 fail() { log "FAILED at $1; staying on ${current:0:12}"; touch "$ROOT/builds/failed-$target"; exit 1; }
 
 # The release scanner (deploy/scanner, README "Release scanner"), where it's set up: when
-# deploy/scanner changed since its last build, the image is rebuilt, the command the API runs is
-# replaced, and the signatures and rules are refreshed with the new image. Never blocks a deploy.
+# deploy/scanner or the source check (crates/slop-source-scan, built into the image) changed since
+# its last build, the image is rebuilt, the command the API runs is replaced, and the signatures
+# and rules are refreshed with the new image. Never blocks a deploy.
 update_scanner() {
   [ -x "$ROOT/bin/slop-scan" ] || return 0
   local last
   last=$(cat "$ROOT/scanner-built" 2>/dev/null || true)
-  if [ -n "$last" ] && git -C "$REPO" diff --quiet "$last" "$target" -- deploy/scanner 2>/dev/null; then
+  if [ -n "$last" ] && git -C "$REPO" diff --quiet "$last" "$target" -- deploy/scanner crates/slop-source-scan 2>/dev/null; then
     return 0
   fi
-  podman build -q -t slop-scanner "$REPO/deploy/scanner" >"$ROOT/scanner-image.log" 2>&1 \
+  podman build -q --ignorefile "$REPO/deploy/scanner/Containerfile.dockerignore" -t slop-scanner \
+    -f "$REPO/deploy/scanner/Containerfile" "$REPO" >"$ROOT/scanner-image.log" 2>&1 \
     || { tail -n 20 "$ROOT/scanner-image.log"; return 1; }
   install -m 755 "$REPO/deploy/scanner/slop-scan" "$ROOT/bin/slop-scan.new" || return 1
   mv "$ROOT/bin/slop-scan.new" "$ROOT/bin/slop-scan" || return 1

@@ -61,6 +61,7 @@ const STAGE_LABEL: Record<FileCheckStage, string> = {
   downloading: "Downloading",
   signature: "Checking the maker signature",
   scanning: "Scanning for malware",
+  waiting_for_scan: "Waiting for its scan from GitHub",
 };
 
 /** The scanner's longest run on one file (crates/slop-api/src/scan.rs). */

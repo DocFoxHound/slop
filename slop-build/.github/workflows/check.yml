@@ -1,12 +1,16 @@
-# Slop Check: Microsoft Defender's check of Windows builds made outside Slop Build
-# (docs/DESIGN.md §10, crates/slop-api/src/slop_build.rs).
+# Slop Check: SLAPorSLOP's checks of a release made outside Slop Build, run on the maker's own
+# GitHub Actions minutes instead of SLAPorSLOP's servers (docs/DESIGN.md §10,
+# crates/slop-api/src/slop_build.rs). Makers who build with their own CI, or attach files by hand,
+# call this from a small workflow in their repository (SLAPorSLOP's publishing guide has it), when a
+# release is published. Three jobs, none of which runs anything from the repository:
 #
-# SLAPorSLOP runs ClamAV, YARA and capa on every build itself, but Defender only runs on Windows. Makers
-# who build with their own CI call this from a small workflow in their repository (SLAPorSLOP's
-# publishing guide has it), usually when a release is published. It runs on the maker's own
-# GitHub Actions minutes: downloads the release's Windows files, scans them with today's
-# definitions, and tells SLAPorSLOP with the run's GitHub OIDC token (no secret is shared). SLAPorSLOP attaches
-# the result to the release files with the same SHA-256.
+#   - Microsoft Defender's check of the Windows files, on a Windows runner;
+#   - SLAPorSLOP's malware scan (ClamAV, YARA, capa) of every file, with SLAPorSLOP's scanner image;
+#   - SLAPorSLOP's source check of the release's commit, with the same image.
+#
+# Each tells SLAPorSLOP with the run's GitHub OIDC token (no secret is shared). SLAPorSLOP attaches
+# the results to the release files with the same SHA-256, and the source check to the commit; what
+# doesn't come, SLAPorSLOP does itself.
 
 name: Slop Check
 
@@ -46,7 +50,7 @@ jobs:
           [ -n "$TAG" ] || { echo "::error::no release tag: pass tag, or run this when a release is published"; exit 1; }
           mkdir -p slop-check
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir slop-check \
-            --pattern '*.zip' --pattern '*.exe' --pattern '*.msi' --pattern '*.msix'
+            --pattern '*.zip' --pattern '*.exe' --pattern '*.msi' --pattern '*.msix' || true
           ls -l slop-check
 
       - name: Scan
@@ -94,7 +98,8 @@ jobs:
             }
             foreach ($d in $detections) { echo "::warning title=Microsoft Defender flags $($f.Name)::$($d.threat) in $($d.file). SLAPorSLOP holds the release for a person to look at. If it's a false positive, submit it at https://www.microsoft.com/en-us/wdsi/filesubmission (as a software developer)." }
           }
-          if ($reports.Count -eq 0) { throw "the release has no Windows files (.zip, .exe, .msi)" }
+          # A release without Windows files has nothing for Defender (the other jobs still run).
+          if ($reports.Count -eq 0) { echo "::notice::No Windows files (.zip, .exe, .msi): nothing for Microsoft Defender to check."; exit 0 }
           @{ app = $env:SLOP_APP; files = @($reports) } | ConvertTo-Json -Depth 5 | Set-Content body.json
 
       - name: Tell SLAPorSLOP
@@ -102,9 +107,176 @@ jobs:
         env:
           SLOP_URL: ${{ inputs.slop-url }}
         run: |
+          [ -f body.json ] || exit 0
           base="${SLOP_URL%/}"
           token=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$base" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          echo "::add-mask::$token"
+          status=$(curl -sS -o response.json -w '%{http_code}' -X POST "$base/v1/slop-build/checks" \
+            -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data @body.json)
+          cat response.json; echo
+          if [ "$status" -ge 300 ]; then echo "::error::SLAPorSLOP refused the check (HTTP $status)"; exit 1; fi
+
+  scan:
+    name: Scan for malware
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Every file of the release, as data (files in parts, name.001…, joined back).
+      - name: Download the files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag != '' && inputs.tag || github.event.release.tag_name }}
+        run: |
+          [ -n "$TAG" ] || { echo "::error::no release tag: pass tag, or run this when a release is published"; exit 1; }
+          mkdir -p slop-download slop-scan
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir slop-download \
+            --pattern '*.zip' --pattern '*.tar.gz' --pattern '*.tgz' --pattern '*.deb' --pattern '*.rpm' \
+            --pattern '*.apk' --pattern '*.exe' --pattern '*.msi' --pattern '*.msix' --pattern '*.[0-9][0-9][0-9]'
+          python3 - <<'PY'
+          import os, re, shutil
+          names = sorted(os.listdir("slop-download"))
+          parts = {}
+          for n in names:
+              m = re.fullmatch(r"(.+)\.(\d{3})", n)
+              if m:
+                  parts.setdefault(m.group(1), []).append(n)
+              else:
+                  os.rename(os.path.join("slop-download", n), os.path.join("slop-scan", n))
+          for whole, pieces in parts.items():
+              with open(os.path.join("slop-scan", whole), "wb") as out:
+                  for p in sorted(pieces):
+                      with open(os.path.join("slop-download", p), "rb") as part:
+                          shutil.copyfileobj(part, out, 1 << 24)
+          PY
+          ls -l slop-scan
+
+      # SLAPorSLOP's scanner image, as SLAPorSLOP's own repository built it on its main branch, with
+      # today's signatures (.github/workflows/scanner.yml there): checked by its build attestation
+      # before it runs, and then run by digest, so it can't change in between.
+      - name: Get SLAPorSLOP's scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image=ghcr.io/docfoxhound/slop-scanner
+          docker pull -q "$image:latest"
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:latest")
+          gh attestation verify "oci://$ref" --repo DocFoxHound/slop \
+            --signer-workflow DocFoxHound/slop/.github/workflows/scanner.yml --source-ref refs/heads/main
+          echo "SCANNER=$ref" >> "$GITHUB_ENV"
+
+      # ClamAV, YARA and capa, each file in its own container: no network, read-only, nothing in
+      # the file run. The reports go to SLAPorSLOP, which uses them instead of scanning the files
+      # on its own servers.
+      - name: Scan
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          scratch = os.path.join(os.environ["RUNNER_TEMP"], "scan-tmp")
+          os.makedirs(scratch, exist_ok=True)
+          os.chmod(scratch, 0o777)
+          out = []
+          for name in sorted(os.listdir("slop-scan")):
+              path = os.path.join("slop-scan", name)
+              digest = hashlib.sha256()
+              with open(path, "rb") as fh:
+                  for chunk in iter(lambda: fh.read(1 << 20), b""):
+                      digest.update(chunk)
+              with open(path, "rb") as fh:
+                  r = subprocess.run(
+                      ["docker", "run", "--rm", "-i", "--network=none", "--read-only", "--cap-drop=ALL",
+                       "--security-opt=no-new-privileges", "--pids-limit=256", "--memory=8g",
+                       "-v", f"{scratch}:/tmp", os.environ["SCANNER"], "-", name],
+                      stdin=fh, capture_output=True, timeout=1800)
+              if r.returncode != 0:
+                  raise SystemExit(f"::error::SLAPorSLOP's scanner failed on {name}: {r.stderr.decode(errors='replace')[-500:]}")
+              report = json.loads(r.stdout)
+              out.append({"file_name": name, "sha256": digest.hexdigest(), "report": report})
+              if report["result"] == "on_hold":
+                  print(f"::warning title=SLAPorSLOP's scanner holds {name}::{report['detail']} SLAPorSLOP staff look at it; it may be a false positive.")
+              else:
+                  print(f"{name}: {report['detail']}")
+          json.dump(out, open("scans.json", "w"))
+          PY
+
+      - name: The reports for SLAPorSLOP
+        env:
+          SLOP_APP: ${{ inputs.app }}
+        run: |
+          python3 -c '
+          import json, os
+          scans = [{"sha256": s["sha256"], "report": s["report"]} for s in json.load(open("scans.json"))]
+          json.dump({"app": os.environ["SLOP_APP"], "scans": scans}, open("body.json", "w"))'
+
+      - name: Tell SLAPorSLOP
+        shell: bash
+        env:
+          SLOP_URL: ${{ inputs.slop-url }}
+        run: |
+          [ -f body.json ] || exit 0
+          base="${SLOP_URL%/}"
+          token=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$base" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          echo "::add-mask::$token"
+          status=$(curl -sS -o response.json -w '%{http_code}' -X POST "$base/v1/slop-build/checks" \
+            -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data @body.json)
+          cat response.json; echo
+          if [ "$status" -ge 300 ]; then echo "::error::SLAPorSLOP refused the check (HTTP $status)"; exit 1; fi
+
+  source:
+    name: Check the source
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # The commit this run is for (GitHub's token says which to SLAPorSLOP): the release's.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: src
+
+      # SLAPorSLOP's scanner image, as SLAPorSLOP's own repository built it on its main branch, with
+      # today's signatures (.github/workflows/scanner.yml there): checked by its build attestation
+      # before it runs, and then run by digest, so it can't change in between.
+      - name: Get SLAPorSLOP's scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image=ghcr.io/docfoxhound/slop-scanner
+          docker pull -q "$image:latest"
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:latest")
+          gh attestation verify "oci://$ref" --repo DocFoxHound/slop \
+            --signer-workflow DocFoxHound/slop/.github/workflows/scanner.yml --source-ref refs/heads/main
+          echo "SCANNER=$ref" >> "$GITHUB_ENV"
+
+      # Licence, monetization, code from outside SLAPorSLOP, online play and packages: read here,
+      # nothing in the source run.
+      - name: SLAPorSLOP's source check
+        env:
+          SLOP_APP: ${{ inputs.app }}
+        run: |
+          docker run --rm --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            -v "$PWD/src:/src:ro" --entrypoint slop-source-check "$SCANNER" /src > source-scan.json
+          python3 -c '
+          import json, os
+          json.dump({"app": os.environ["SLOP_APP"], "source_scan": json.load(open("source-scan.json"))}, open("body.json", "w"))'
+
+      - name: Tell SLAPorSLOP
+        shell: bash
+        env:
+          SLOP_URL: ${{ inputs.slop-url }}
+        run: |
+          [ -f body.json ] || exit 0
+          base="${SLOP_URL%/}"
+          token=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$base" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
           echo "::add-mask::$token"
           status=$(curl -sS -o response.json -w '%{http_code}' -X POST "$base/v1/slop-build/checks" \
             -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data @body.json)

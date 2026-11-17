@@ -1,6 +1,7 @@
-# .github/workflows/slop-check.yml — for apps built with your own CI instead of Slop Build.
-# When you publish a release, this checks its Windows files with Microsoft Defender and tells
-# SLAPorSLOP. Builds from Slop Build are checked already and don't need it.
+# .github/workflows/slop-check.yml — for apps on GitHub built with your own CI (or by hand)
+# instead of Slop Build. When you publish a release, SLAPorSLOP's malware scan of every file, its
+# source check and Microsoft Defender (Windows files) run here and tell SLAPorSLOP. Builds from
+# Slop Build are checked already and don't need it.
 name: Slop Check
 on:
   release:

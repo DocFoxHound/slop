@@ -413,12 +413,16 @@ run. A file the scanner couldn't scan completely (an archive that won't unpack o
 limits, an engine error or timeout) is held for a person, like one it flags. Every six hours the
 API also runs `slop-scan --match-hashes` to check the fingerprints of live releases' programs
 against the newest ClamAV signatures (rescan.rs); full weekly re-scans are off unless
-`SLOP_RESCAN_EVERY_DAYS` is set. `slop-scan-update` (the timer) refreshes ClamAV's signatures
+`SLOP_RESCAN_EVERY_DAYS` is set. Releases from GitHub are mostly scanned on the maker's own runner
+(Slop Build, Slop Check), with the image `.github/workflows/scanner.yml` publishes at
+`ghcr.io/docfoxhound/slop-scanner` (make that package public once, under the repository's
+Packages); a release waiting for its scan from GitHub is scanned here after
+`SLOP_CI_SCAN_WAIT_MINUTES` (30) if none comes. `slop-scan-update` (the timer) refreshes ClamAV's signatures
 and, when YARA-Forge has a new release, builds the rules that hold a file and the ones that make
 a note (`rules.py`, leaving out rules without a licence SLAPorSLOP can use).
 
 ```sh
-podman build -t slop-scanner deploy/scanner
+podman build --ignorefile deploy/scanner/Containerfile.dockerignore -t slop-scanner -f deploy/scanner/Containerfile .
 podman volume create slop-scan-db
 podman run --rm --user 0 -v slop-scan-db:/db --entrypoint sh slop-scanner -c 'chown -R 900 /db'
 podman run --rm -v slop-scan-db:/db --entrypoint slop-scan-update slop-scanner   # first signatures

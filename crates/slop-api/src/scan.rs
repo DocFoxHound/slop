@@ -352,15 +352,22 @@ async fn run_local(command: &str, target: &Target<'_>) -> anyhow::Result<Verdict
             .last()
             .unwrap_or("")
     );
-    let mut report: Value = serde_json::from_slice(&out.stdout)?;
+    verdict_of(serde_json::from_slice(&out.stdout)?)
+}
+
+/// The verdict in a scanner's report (deploy/scanner/scan.py), whether SLAPorSLOP's scanner
+/// wrote it here or on the maker's GitHub runner (`ci_report_problem`). The fingerprints are taken
+/// out of the report and kept apart.
+pub fn verdict_of(mut report: Value) -> anyhow::Result<Verdict> {
     let prints = fingerprints(report.as_object_mut().and_then(|o| o.remove("hashes")));
+    let found = |key: &str| report[key].as_array().is_some_and(|a| !a.is_empty());
     let result = report["result"]
         .as_str()
         .and_then(ScanResult::parse)
         // The scanner never decides on its own that something is malicious: it holds the file,
-        // and SLAPorSLOP staff judge it.
+        // and SLAPorSLOP staff judge it. Nor does a report pass with findings in it.
         .map(|r| match r {
-            ScanResult::Passed | ScanResult::Note => r,
+            ScanResult::Passed | ScanResult::Note if !found("findings") => r,
             _ => ScanResult::OnHold,
         })
         .ok_or_else(|| anyhow::anyhow!("no result in the report"))?;
@@ -370,6 +377,97 @@ async fn run_local(command: &str, target: &Target<'_>) -> anyhow::Result<Verdict
         report: Some(report),
         fingerprints: prints,
     })
+}
+
+/// How old the signatures of a scan run on a maker's runner may be: the scanner image is rebuilt
+/// with new ones every six hours (.github/workflows/scanner.yml).
+const CI_SIGNATURES_MAX_DAYS: i64 = 3;
+
+/// Why a scanner report sent from a maker's GitHub runner (Slop Build or Slop Check, by SLAPorSLOP's
+/// own pinned workflow and scanner image) can't be used, or None when it can. It's checked like
+/// any input: its shape and sizes, and that its ClamAV signatures are recent.
+pub fn ci_report_problem(report: &Value, now: time::OffsetDateTime) -> Option<&'static str> {
+    let Some(o) = report.as_object() else {
+        return Some("a scan report is a JSON object");
+    };
+    if !matches!(
+        o.get("result").and_then(Value::as_str),
+        Some("passed" | "note" | "on_hold")
+    ) {
+        return Some("a scan report's result is passed, note or on_hold");
+    }
+    let text = |v: Option<&Value>, n: usize| {
+        v.and_then(Value::as_str)
+            .is_some_and(|s| s.chars().count() <= n)
+    };
+    if !text(o.get("detail"), 4000) {
+        return Some("a scan report needs a detail of at most 4,000 characters");
+    }
+    let list = |key: &str, max: usize, fields: &[(&str, usize)]| {
+        o.get(key).is_none_or(|v| {
+            v.as_array().is_some_and(|items| {
+                items.len() <= max
+                    && items
+                        .iter()
+                        .all(|i| fields.iter().all(|(f, n)| text(i.get(*f), *n)))
+            })
+        })
+    };
+    let finding = [("engine", 50), ("file", 1000), ("name", 300)];
+    if !list("findings", 500, &finding)
+        || !list("noticed", 500, &finding)
+        || !list(
+            "capabilities",
+            2000,
+            &[("file", 1000), ("capability", 300), ("namespace", 300)],
+        )
+    {
+        return Some("a scan report's findings are too many or malformed");
+    }
+    let Some(engines) = o.get("engines").and_then(Value::as_object) else {
+        return Some("a scan report names its engines");
+    };
+    if engines.len() > 10 || !engines.values().all(|v| text(Some(v), 200)) {
+        return Some("a scan report's engines are malformed");
+    }
+    if o.get("hashes")
+        .is_some_and(|h| h.as_array().is_none_or(|a| a.len() > MAX_FINGERPRINTS))
+    {
+        return Some("a scan report's fingerprints are malformed");
+    }
+    // `clamscan --version`: "ClamAV 1.4.3/28186/Mon Nov 17 06:30:00 2026".
+    let clamav = engines.get("clamav").and_then(Value::as_str).unwrap_or("");
+    match signatures_date(clamav) {
+        Some(date) if now.date() - date > time::Duration::days(CI_SIGNATURES_MAX_DAYS) => {
+            Some("the scan's ClamAV signatures are out of date")
+        }
+        Some(_) => None,
+        None => Some("the scan doesn't say which ClamAV signatures it used"),
+    }
+}
+
+/// The date of ClamAV's signatures in `clamscan --version`'s answer.
+fn signatures_date(version: &str) -> Option<time::Date> {
+    let stamp = version
+        .rsplit('/')
+        .next()?
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    // "Mon Nov 17 06:30:00 2026": month, day and year.
+    let [_, month, day, _, year] = stamp.as_slice() else {
+        return None;
+    };
+    let month = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .iter()
+    .position(|m| m == month)?;
+    time::Date::from_calendar_date(
+        year.parse().ok()?,
+        time::Month::try_from(month as u8 + 1).ok()?,
+        day.parse().ok()?,
+    )
+    .ok()
 }
 
 /// Microsoft Defender's check of a Windows build, as reported by Slop Build or Slop Check.
@@ -442,6 +540,47 @@ mod tests {
         );
         assert!(!Scanner::Off.approvable(ScanResult::Rejected));
         assert!(!Scanner::Off.approvable(ScanResult::OnHold));
+    }
+
+    #[test]
+    fn reports_from_github_are_checked_like_any_input() {
+        let now = time::macros::datetime!(2026-11-17 12:00 UTC);
+        let good = serde_json::json!({
+            "result": "passed", "detail": "Scanned with ClamAV, YARA and capa: nothing found.",
+            "findings": [], "noticed": [], "capabilities": [],
+            "engines": { "clamav": "ClamAV 1.4.3/28186/Mon Nov 16 06:30:00 2026", "yara": "yara-forge 20261115" },
+            "hashes": []
+        });
+        assert_eq!(ci_report_problem(&good, now), None);
+        let with = |key: &str, value: Value| {
+            let mut r = good.clone();
+            r[key] = value;
+            ci_report_problem(&r, now)
+        };
+        assert!(with("result", "blocked".into()).is_some());
+        assert!(with("detail", "x".repeat(4001).into()).is_some());
+        assert!(with("findings", serde_json::json!([{ "engine": "ClamAV" }])).is_some());
+        assert!(
+            with("engines", serde_json::json!({})).is_some(),
+            "which signatures?"
+        );
+        assert!(
+            with(
+                "engines",
+                serde_json::json!({ "clamav": "ClamAV 1.4.3/28100/Thu Nov  5 06:30:00 2026" })
+            )
+            .is_some(),
+            "signatures more than three days old"
+        );
+        assert_eq!(
+            signatures_date("ClamAV 1.4.3/28100/Thu Nov  5 06:30:00 2026"),
+            Some(time::macros::date!(2026 - 11 - 05))
+        );
+        // A report with findings never passes, whatever it says.
+        let mut found = good.clone();
+        found["findings"] =
+            serde_json::json!([{ "engine": "ClamAV", "file": "a.exe", "name": "Win.Test" }]);
+        assert_eq!(verdict_of(found).unwrap().result, ScanResult::OnHold);
     }
 
     #[tokio::test]

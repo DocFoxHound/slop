@@ -12,7 +12,7 @@
 //! and nothing is signed. Play then opens it (`catalog::PLAY_ADDRESS`). SLAPorSLOP checks the
 //! address, not what the site serves.
 
-use std::{sync::atomic::Ordering, time::Duration as StdDuration};
+use std::{collections::HashMap, sync::atomic::Ordering, time::Duration as StdDuration};
 
 use anyhow::{Context, anyhow, bail};
 use axum::{
@@ -2183,13 +2183,16 @@ pub async fn run_fetcher(state: AppState) {
 /// first: their checks take seconds, and shouldn't wait behind files that take minutes each. But
 /// never two in a row while a file release waits, so a run of addresses can't hold files up.
 pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
+    if resume_next(state).await? {
+        return Ok(true);
+    }
     let files_first = state.fetched_address_last.load(Ordering::Relaxed);
     let claimed: Option<(Uuid, Uuid, String, String, Option<String>, i16)> = sqlx::query_as(
         "update releases r set fetch_started_at = now(), fetch_attempts = r.fetch_attempts + 1
          from apps a
          where a.id = r.app_id and r.id = (
              select id from releases
-             where status = 'fetching'
+             where status = 'fetching' and scans_waiting_since is null
                and (fetch_started_at is null
                     or fetch_started_at < now() - case when play_address is null then $1 else $2 end)
              order by case when $3 then play_address is not null else play_address is null end,
@@ -2238,60 +2241,213 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
     .await?;
 
     let checked = match &play_address {
-        Some(address) => check_address_release(state, id, &commit, &repo_url, address).await,
+        Some(address) => check_address_release(state, id, &commit, &repo_url, address)
+            .await
+            .map(|commit_verified| Fetched {
+                commit_verified,
+                waiting: false,
+            }),
         None => fetch_release(state, id, &commit, &repo_url).await,
     };
     match checked {
-        Ok(commit_verified) => {
+        Ok(fetched) => {
             // It stays `fetching` until every check is done ("finishing up" for its maker), so
             // it never flashes into the staff queue.
             let updated = sqlx::query(
-                "update releases set commit_verified = $2 where id = $1 and status = 'fetching'",
+                "update releases set commit_verified = $2,
+                        fetch_started_at = case when $3 then null else fetch_started_at end
+                 where id = $1 and status = 'fetching'",
             )
             .bind(id)
-            .bind(commit_verified)
+            .bind(fetched.commit_verified)
+            .bind(fetched.waiting)
             .execute(&state.db)
             .await?
             .rows_affected();
-            // Withdrawn by its maker while it was fetched: nothing more to check.
-            if updated == 0 {
+            // Withdrawn by its maker while it was fetched: nothing more to check. Waiting for
+            // scans from GitHub: `resume_next` goes on.
+            if updated == 0 || fetched.waiting {
                 return Ok(true);
             }
-            tracing::info!(release = %id, "release fetched; finishing its checks");
-            // Each step renews the lease, so a slow one isn't taken for a dead fetch.
-            renew_lease(state, id).await?;
-            // Pictures that changed with this release wait for their own review.
-            crate::media::refresh_for_release(state, app_id, &repo_url, &commit).await;
-            renew_lease(state, id).await?;
-            // Licence, monetization and packages: shown to the maker before they publish.
-            crate::source_scan::check_release(state, id).await?;
-            renew_lease(state, id).await?;
-            // Ready for its maker to publish, on hold, or failed (publish.rs).
-            crate::publish::finish_checks(
-                &state.db,
-                crate::admin::ReviewRules::from_config(&state.config),
-                id,
-                crate::updates::AUTO_REVIEWER,
-            )
-            .await?;
+            finish_fetched(state, id, app_id, &repo_url, &commit).await?;
         }
-        Err(err) => {
-            tracing::warn!(release = %id, error = %err, "release fetch failed");
-            let reason = format!("{err:#}");
-            let mut tx = state.db.begin().await?;
-            let updated = sqlx::query("update releases set status = 'failed', status_reason = $2 where id = $1 and status = 'fetching'")
-                .bind(id)
-                .bind(&reason)
-                .execute(&mut *tx)
-                .await?
-                .rows_affected();
-            if updated == 1 {
-                tell_maker(&mut tx, id, ReleaseEvent::Failed { reason: &reason }).await?;
-            }
-            tx.commit().await?;
-        }
+        Err(err) => fetch_failed(state, id, &err).await?,
     }
     Ok(true)
+}
+
+/// The rest of a release's checks once its files are: pictures, source, then where it ends.
+async fn finish_fetched(
+    state: &AppState,
+    id: Uuid,
+    app_id: Uuid,
+    repo_url: &str,
+    commit: &str,
+) -> anyhow::Result<()> {
+    tracing::info!(release = %id, "release fetched; finishing its checks");
+    // Each step renews the lease, so a slow one isn't taken for a dead fetch.
+    renew_lease(state, id).await?;
+    // Pictures that changed with this release wait for their own review.
+    crate::media::refresh_for_release(state, app_id, repo_url, commit).await;
+    renew_lease(state, id).await?;
+    // Licence, monetization and packages: shown to the maker before they publish.
+    crate::source_scan::check_release(state, id).await?;
+    renew_lease(state, id).await?;
+    // Ready for its maker to publish, on hold, or failed (publish.rs).
+    crate::publish::finish_checks(
+        &state.db,
+        crate::admin::ReviewRules::from_config(&state.config),
+        id,
+        crate::updates::AUTO_REVIEWER,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn fetch_failed(state: &AppState, id: Uuid, err: &anyhow::Error) -> anyhow::Result<()> {
+    tracing::warn!(release = %id, error = %err, "release fetch failed");
+    let reason = format!("{err:#}");
+    let mut tx = state.db.begin().await?;
+    let updated = sqlx::query("update releases set status = 'failed', status_reason = $2 where id = $1 and status = 'fetching'")
+        .bind(id)
+        .bind(&reason)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if updated == 1 {
+        tell_maker(&mut tx, id, ReleaseEvent::Failed { reason: &reason }).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Goes on with a release whose files waited for their scans from the maker's GitHub runner:
+/// once they've all come, or after `ci_scan_wait`, when SLAPorSLOP scans the rest itself (a
+/// maker's run can fail or be turned off; nobody is left waiting). Returns whether it did.
+async fn resume_next(state: &AppState) -> anyhow::Result<bool> {
+    let claimed: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
+        "update releases r set fetch_started_at = now()
+         from apps a
+         where a.id = r.app_id and r.id = (
+             select id from releases
+             where status = 'fetching' and scans_waiting_since is not null
+               and (fetch_started_at is null or fetch_started_at < now() - $1)
+               and (scans_waiting_since < now() - $2
+                    or not exists (select 1 from release_files f
+                                   where f.release_id = releases.id and f.check_stage = 'waiting_for_scan'))
+             order by scans_waiting_since
+             limit 1 for update skip locked)
+         returning r.id, r.app_id, r.commit_sha, a.repo_url",
+    )
+    .bind(FETCH_LEASE)
+    .bind(state.config.releases.ci_scan_wait)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((id, app_id, commit, repo_url)) = claimed else {
+        return Ok(false);
+    };
+    let still: Vec<WaitingFile> = sqlx::query_as(
+        "select platform, url, file_name, sha256, parts from release_files
+             where release_id = $1 and check_stage = 'waiting_for_scan' order by platform",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    for (platform, url, file_name, sha256, parts) in still {
+        renew_lease(state, id).await?;
+        let sha256 = sha256.unwrap_or_default();
+        // Came just now, or never: then SLAPorSLOP's own scanner, on a fresh download.
+        let verdict = match ci_scan(&state.db, app_id, &sha256).await? {
+            Some(report) => crate::scan::verdict_of(report)?,
+            None => {
+                tracing::info!(release = %id, %platform, "no scan from GitHub; scanning here");
+                file_stage(state, id, &platform, "scanning").await?;
+                match scan_here(state, app_id, &url, &file_name, &sha256, parts.as_ref()).await {
+                    Ok(v) => v,
+                    Err(err) => {
+                        fetch_failed(state, id, &err).await?;
+                        return Ok(true);
+                    }
+                }
+            }
+        };
+        record_scan(state, id, &platform, verdict).await?;
+    }
+    let updated = sqlx::query(
+        "update releases set scans_waiting_since = null where id = $1 and status = 'fetching'",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?
+    .rows_affected();
+    if updated == 1 {
+        finish_fetched(state, id, app_id, &repo_url, &commit).await?;
+    }
+    Ok(true)
+}
+
+/// A file waiting for its scan: platform, URL, file name, SHA-256 and parts.
+type WaitingFile = (
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<serde_json::Value>,
+);
+
+/// Downloads a release file again, checks it's the one that was fetched, and scans it here.
+async fn scan_here(
+    state: &AppState,
+    app_id: Uuid,
+    url: &str,
+    file_name: &str,
+    sha256: &str,
+    parts: Option<&serde_json::Value>,
+) -> anyhow::Result<crate::scan::Verdict> {
+    let part_urls: Vec<String> = parts
+        .and_then(|p| p.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p["url"].as_str().map(String::from))
+        .collect();
+    let auth = crate::repo_tokens::auth_for(state, app_id, url).await?;
+    let path = std::env::temp_dir().join(format!("slop-release-{}", Uuid::now_v7()));
+    let downloaded = if part_urls.is_empty() {
+        let source = match &auth {
+            Some(_) => url.to_string(),
+            None => download_link(state, url).await?,
+        };
+        download_full(
+            &state.fetch_http,
+            &source,
+            auth.as_deref(),
+            state.config.releases.max_file_bytes,
+            Some(&path),
+        )
+        .await
+    } else {
+        download_parts(state, &part_urls, auth.as_deref(), Some(&path))
+            .await
+            .map(|(joined, _)| joined)
+    };
+    let result = match downloaded {
+        Ok(file) if file.sha256 == sha256 => Ok(state
+            .config
+            .releases
+            .scanner
+            .scan(&crate::scan::Target {
+                path: &path,
+                file_name,
+                sha256,
+            })
+            .await),
+        Ok(_) => Err(anyhow!(
+            "{file_name} changed on the release page while SLAPorSLOP was checking it. Send the release again."
+        )),
+        Err(e) => Err(e.context(file_name.to_string())),
+    };
+    let _ = tokio::fs::remove_file(&path).await;
+    result
 }
 
 /// What a release file's temporary copy is called while it's checked: the fetcher's, a
@@ -2343,12 +2499,15 @@ async fn fetch_release(
     id: Uuid,
     commit: &str,
     repo_url: &str,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Fetched> {
     let commit_verified = check_commit(state, repo_url, commit).await?;
-    let app_id: Uuid = sqlx::query_scalar("select app_id from releases where id = $1")
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
+    let (app_id, source, scanned_on_github_before): (Uuid, String, bool) = sqlx::query_as(
+        "select r.app_id, r.source, exists (select 1 from ci_scans c where c.app_id = r.app_id)
+         from releases r where r.id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     let files: Vec<(String, String, String, Option<serde_json::Value>)> = sqlx::query_as(
         "select platform, url, file_name, parts from release_files where release_id = $1 order by platform",
     )
@@ -2356,6 +2515,16 @@ async fn fetch_release(
     .fetch_all(&state.db)
     .await?;
     let scanner = state.config.releases.scanner;
+    // Scans from the maker's GitHub runner (slop_build.rs). Slop Build sends them with the
+    // release; Slop Check after the release is published on GitHub, often after SLAPorSLOP fetched
+    // it. So a release from a GitHub repository that has sent scans before waits for them: the
+    // fetcher goes on when they've come, or scans the files itself after a while (`resume`).
+    let may_wait = scanner.is_on()
+        && source != "slop_build"
+        && scanned_on_github_before
+        && crate::holds::slop_check_runs(repo_url);
+    let mut assets = HashMap::new();
+    let mut waiting = false;
     for (platform, url, file_name, parts) in files {
         file_stage(state, id, &platform, "downloading").await?;
         let part_urls: Vec<String> = parts
@@ -2367,12 +2536,32 @@ async fn fetch_release(
             .collect();
         // A private repository outside GitHub: read with the maker's token (repo_tokens.rs).
         let auth = crate::repo_tokens::auth_for(state, app_id, &url).await?;
-        // With a scanner, the file is kept on disk until it's scanned, then deleted.
-        let local = scanner
-            .is_on()
+        // A GitHub release file with a build attestation, whose SHA-256 GitHub publishes, needn't be
+        // downloaded when its scan comes from the maker's GitHub runner (or nothing scans it here):
+        // nothing else reads its bytes, and players' apps check them against the signed manifest.
+        let mut attested = None;
+        let mut known = None;
+        if part_urls.is_empty()
+            && auth.is_none()
+            && let Some((size, sha)) = github_asset(state, &url, &mut assets).await
+            && size <= state.config.releases.max_file_bytes
+            && (!scanner.is_on() || may_wait || ci_scan(&state.db, app_id, &sha).await?.is_some())
+            && let Ok(found) = find_attestation(state, repo_url, commit, &sha).await
+        {
+            attested = Some(found);
+            known = Some(Downloaded {
+                size,
+                sha256: sha,
+                sha512: [0; 64],
+            });
+        }
+        // With a scanner, a downloaded file is kept on disk until it's scanned, then deleted.
+        let local = (known.is_none() && scanner.is_on())
             .then(|| std::env::temp_dir().join(format!("slop-release-{}", Uuid::now_v7())));
         let mut part_digests = Vec::new();
-        let downloaded = if part_urls.is_empty() {
+        let downloaded = if let Some(file) = known {
+            Ok(file)
+        } else if part_urls.is_empty() {
             let source = if auth.is_some() {
                 url.clone()
             } else {
@@ -2411,7 +2600,9 @@ async fn fetch_release(
         // In parts: each part carries its own attestation (Slop Build attests every file it
         // uploads); the joined file has none of its own.
         let mut parts_out = None;
-        let (attestation, provenance, mut problem) = if part_urls.is_empty() {
+        let (attestation, provenance, mut problem) = if let Some((bundle, provenance)) = attested {
+            (Some(bundle), Some(sqlx::types::Json(provenance)), None)
+        } else if part_urls.is_empty() {
             match find_attestation(state, repo_url, commit, &sha256).await {
                 Ok((bundle, provenance)) => {
                     (Some(bundle), Some(sqlx::types::Json(provenance)), None)
@@ -2466,36 +2657,41 @@ async fn fetch_release(
                 }
             }
         }
-        if scanner.is_on() {
-            file_stage(state, id, &platform, "scanning").await?;
-        }
-        let verdict = match &local {
-            Some(path) => {
-                let v = scanner
-                    .scan(&crate::scan::Target {
-                        path,
-                        file_name: &file_name,
-                        sha256: &sha256,
-                    })
-                    .await;
-                let _ = tokio::fs::remove_file(path).await;
-                v
-            }
-            None => {
-                scanner
-                    .scan(&crate::scan::Target {
-                        path: std::path::Path::new(""),
-                        file_name: &file_name,
-                        sha256: &sha256,
-                    })
-                    .await
-            }
+        // The scan: from the maker's GitHub runner if it has come, else waited for, else SLAPorSLOP's
+        // own scanner.
+        let from_github = match ci_scan(&state.db, app_id, &sha256).await? {
+            Some(report) => crate::scan::verdict_of(report).ok(),
+            None => None,
         };
+        let verdict = if from_github.is_some() || may_wait {
+            if let Some(path) = &local {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+            from_github
+        } else {
+            if scanner.is_on() {
+                file_stage(state, id, &platform, "scanning").await?;
+            }
+            let path = local.clone().unwrap_or_default();
+            let v = scanner
+                .scan(&crate::scan::Target {
+                    path: &path,
+                    file_name: &file_name,
+                    sha256: &sha256,
+                })
+                .await;
+            if local.is_some() {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+            Some(v)
+        };
+        waiting |= verdict.is_none();
         sqlx::query(
             "update release_files
              set size_bytes = $3, sha256 = $4, attestation = $5, provenance = $6, provenance_problem = $7,
-                 scan_result = $8, scan_detail = $9, scan_report = $10, maker_signature = $11,
-                 parts = coalesce($12, parts), check_stage = null, checked_at = now()
+                 maker_signature = $8, parts = coalesce($9, parts),
+                 check_stage = case when $10 then 'waiting_for_scan' end,
+                 checked_at = case when $10 then null else now() end
              where release_id = $1 and platform = $2",
         )
         .bind(id)
@@ -2505,14 +2701,14 @@ async fn fetch_release(
         .bind(attestation)
         .bind(provenance)
         .bind(problem)
-        .bind(verdict.result.as_str())
-        .bind(verdict.detail)
-        .bind(verdict.report.map(sqlx::types::Json))
         .bind(maker_sig)
         .bind(parts_out)
+        .bind(verdict.is_none())
         .execute(&state.db)
         .await?;
-        crate::scan::save_fingerprints(&state.db, id, &platform, &verdict.fingerprints).await?;
+        if let Some(verdict) = verdict {
+            record_scan(state, id, &platform, verdict).await?;
+        }
         // A Defender check of exactly this file, from Slop Build or Slop Check.
         sqlx::query(
             "update release_files f set defender = c.report
@@ -2525,7 +2721,144 @@ async fn fetch_release(
         .execute(&state.db)
         .await?;
     }
-    Ok(commit_verified)
+    if waiting {
+        sqlx::query("update releases set scans_waiting_since = now() where id = $1")
+            .bind(id)
+            .execute(&state.db)
+            .await?;
+    }
+    Ok(Fetched {
+        commit_verified,
+        waiting,
+    })
+}
+
+/// What fetching a release's files came to.
+struct Fetched {
+    commit_verified: bool,
+    /// Some files wait for their scans from the maker's GitHub runner.
+    waiting: bool,
+}
+
+/// A scan of the file with this hash from the app's GitHub runner (slop_build.rs `record_scan`).
+async fn ci_scan(
+    db: &sqlx::PgPool,
+    app_id: Uuid,
+    sha256: &str,
+) -> sqlx::Result<Option<serde_json::Value>> {
+    sqlx::query_scalar("select report from ci_scans where app_id = $1 and sha256 = $2")
+        .bind(app_id)
+        .bind(sha256)
+        .fetch_optional(db)
+        .await
+}
+
+/// Keeps a file's scan result, wherever it was scanned.
+async fn record_scan(
+    state: &AppState,
+    id: Uuid,
+    platform: &str,
+    verdict: crate::scan::Verdict,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "update release_files set scan_result = $3, scan_detail = $4, scan_report = $5,
+                check_stage = null, checked_at = now()
+         where release_id = $1 and platform = $2",
+    )
+    .bind(id)
+    .bind(platform)
+    .bind(verdict.result.as_str())
+    .bind(verdict.detail)
+    .bind(verdict.report.map(sqlx::types::Json))
+    .execute(&state.db)
+    .await?;
+    crate::scan::save_fingerprints(&state.db, id, platform, &verdict.fingerprints).await
+}
+
+/// Gives a scan that came from the app's GitHub runner to every file of the app with that hash
+/// that's waiting for it. Returns how many.
+pub async fn give_waiting_scans(
+    state: &AppState,
+    app_id: Uuid,
+    sha256: &str,
+) -> anyhow::Result<u64> {
+    let Some(report) = ci_scan(&state.db, app_id, sha256).await? else {
+        return Ok(0);
+    };
+    let waiting: Vec<(Uuid, String)> = sqlx::query_as(
+        "select f.release_id, f.platform from release_files f join releases r on r.id = f.release_id
+         where r.app_id = $1 and f.sha256 = $2 and f.check_stage = 'waiting_for_scan'
+           and r.status = 'fetching'",
+    )
+    .bind(app_id)
+    .bind(sha256)
+    .fetch_all(&state.db)
+    .await?;
+    for (id, platform) in &waiting {
+        record_scan(
+            state,
+            *id,
+            platform,
+            crate::scan::verdict_of(report.clone())?,
+        )
+        .await?;
+    }
+    Ok(waiting.len() as u64)
+}
+
+/// A GitHub release file's size and SHA-256 as GitHub publishes them (it has hashed every file
+/// uploaded since June 2025), read with SLAPorSLOP's GitHub token so the file needn't be
+/// downloaded. None for other hosts, older uploads, or without a token. `seen` keeps each
+/// release's file list for the rest of the fetch.
+async fn github_asset(
+    state: &AppState,
+    url: &str,
+    seen: &mut HashMap<(String, String), Vec<GithubAsset>>,
+) -> Option<(u64, String)> {
+    let cfg = &state.config.releases;
+    if cfg.github_token.is_none() && cfg.github_app.is_none() {
+        return None;
+    }
+    let (repo, tag, name) = github_release_file(url)?;
+    let key = (repo, tag);
+    if !seen.contains_key(&key) {
+        let tag_path =
+            percent_encoding::utf8_percent_encode(&key.1, percent_encoding::NON_ALPHANUMERIC);
+        let url = cfg
+            .github_api_base
+            .join(&format!("repos/{}/releases/tags/{tag_path}", key.0))
+            .ok()?;
+        let assets = async {
+            let res = github_get(state, url).await.send().await.ok()?;
+            let release: GithubRelease = res.error_for_status().ok()?.json().await.ok()?;
+            Some(release.assets)
+        }
+        .await
+        .unwrap_or_default();
+        seen.insert(key.clone(), assets);
+    }
+    asset_digest(&seen[&key], &name)
+}
+
+/// The size and SHA-256 GitHub gives for file `name` of a release ("sha256:<hex>").
+fn asset_digest(assets: &[GithubAsset], name: &str) -> Option<(u64, String)> {
+    let asset = assets.iter().find(|a| a.name == name)?;
+    let sha = asset.digest.as_deref()?.strip_prefix("sha256:")?;
+    (sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| (asset.size, sha.to_ascii_lowercase()))
+}
+
+#[derive(Deserialize)]
+struct GithubRelease {
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Deserialize)]
+struct GithubAsset {
+    name: String,
+    size: u64,
+    #[serde(default)]
+    digest: Option<String>,
 }
 
 /// A browser game's release: its commit, then its play address (`check_play_address`). What the
@@ -3330,6 +3663,24 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn github_publishes_a_files_size_and_hash() {
+        let assets: Vec<GithubAsset> = serde_json::from_value(serde_json::json!([
+            { "name": "game.zip", "size": 10, "digest": format!("sha256:{}", "AB".repeat(32)) },
+            { "name": "old.zip", "size": 5, "digest": null },
+            { "name": "odd.zip", "size": 5, "digest": "md5:00" },
+            { "name": "short.zip", "size": 5 }
+        ]))
+        .unwrap();
+        assert_eq!(
+            asset_digest(&assets, "game.zip"),
+            Some((10, "ab".repeat(32)))
+        );
+        for name in ["old.zip", "odd.zip", "short.zip", "missing.zip"] {
+            assert_eq!(asset_digest(&assets, name), None, "{name}");
+        }
     }
 
     #[test]

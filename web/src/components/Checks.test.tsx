@@ -117,5 +117,11 @@ describe("the scanner's findings", () => {
   it("says nothing of them in reports from before they existed", () => {
     const { container } = render(<ScanFindings report={report} />);
     expect(container.textContent ?? "").not.toContain("wider rules");
+    expect(container.textContent ?? "").not.toContain("GitHub");
+  });
+
+  it("says when the scan ran on the maker's GitHub runner", () => {
+    const { container } = render(<ScanFindings report={{ ...report, scanned_on: "github" }} />);
+    expect(container.textContent ?? "").toContain("Scanned on the maker's GitHub runner, with SLAPorSLOP's scanner image.");
   });
 });

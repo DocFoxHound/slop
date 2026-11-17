@@ -47,7 +47,7 @@ and links, in plain words.
    `list_pictures` shows what the store has now and what waits for review. Guide section
    "Pictures and videos".
 5. Before the first release, `check_source`: SLAPorSLOP's source check on what's pushed, without submitting anything. Fix the `must` items it lists (a missing licence file, purchases, code loaded from outside SLAPorSLOP, going online without the store page saying so), push, and check the new commit.
-6. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`. A game that plays on the maker's own website works differently: see the next section.
+6. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs, scans and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`; on GitHub, also commit the Slop Check workflow `slop_build_setup` gives (`check_workflow`, at `.github/workflows/slop-check.yml`): when a release is published it runs SLAPorSLOP's malware scan, source check and Microsoft Defender on the repository's own GitHub Actions, and the release isn't left waiting for SLAPorSLOP's servers. Committing it is all it takes; nobody needs to click anything. A game that plays on the maker's own website works differently: see the next section.
 
 A **dedicated server** is a program players run on their own computer or a host so others can play your game. Add it to the game with `add_dedicated_server` (or **Add a dedicated server** on the game's Edit store page): it needs its own repository, never the game's (split a repository that holds both first), and Windows and/or Linux like any download. It's an app of its own with its own releases (submit them as for any app; Slop Build works as usual), checked the same way and published by your maker, who puts it in the store once one is published. It has no store page of its own: it shows on the game's, players get the game without it unless they tick it, and it goes out of the store whenever the game does. A game can have several (a world server and a lobby server). Its versions are its own: SLAPorSLOP doesn't check which work with which game versions. Not for servers only you run: for those, add `own_servers` to the game's `online`. A server-like program with no game on SLAPorSLOP (a tool) is published as an ordinary app. Guide section "Dedicated servers".
 
@@ -100,7 +100,8 @@ website also shows it when they next publish). Carry on once they've accepted it
   the same file: submit the file to Microsoft and build again, or tell staff why it's a false
   positive.
 - `defender_missing`: the Windows build needs Defender's check. On GitHub, run Slop Check in the
-  repository (guide section "Slop Check"); the release goes on by itself once the result arrives.
+  repository (guide section "Slop Check": commit the workflow if it isn't there, then run it with
+  the release's tag); the release goes on by itself once the result arrives.
   Slop Check runs on GitHub Actions, so for a repository elsewhere SLAPorSLOP staff check the
   build by hand; your maker can write to them.
 - `rating_lowered`: it lowers the age rating players are shown, so a SLAPorSLOP staff member

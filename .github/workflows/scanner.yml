@@ -1,0 +1,92 @@
+# The scanner image makers' GitHub runners use: Slop Build and Slop Check scan each release's
+# files with it on the maker's own Actions minutes (slop-build/.github/workflows), so SLAPorSLOP's
+# servers don't have to (decided 2026-11-17). It's deploy/scanner with today's ClamAV signatures
+# and YARA rules built in, at ghcr.io/docfoxhound/slop-scanner:latest, rebuilt every six hours
+# (the signatures change daily) and when the scanner changes on main.
+#
+# Every image gets a build attestation, which the recipe checks before using it: it only runs an
+# image this workflow built, in this repository, on main. A maker can't swap in their own.
+name: Scanner image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy/scanner/**
+      - crates/slop-source-scan/**
+      - .github/workflows/scanner.yml
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: scanner-image
+  cancel-in-progress: false
+
+jobs:
+  image:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE: ghcr.io/docfoxhound/slop-scanner
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the scanner
+        # From the repository's root; deploy/scanner/Containerfile.dockerignore keeps the context small.
+        run: docker build -q -t slop-scanner -f deploy/scanner/Containerfile .
+
+      # The last run's signatures, so freshclam only fetches what changed since (ClamAV asks
+      # mirrors and CI not to download everything every time).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ctx/db
+          key: scanner-db-${{ github.run_id }}
+          restore-keys: scanner-db-
+
+      - name: Today's signatures and rules
+        run: |
+          mkdir -p ctx/db
+          chmod -R a+rwX ctx/db
+          docker run --rm -v "$PWD/ctx/db:/db" --entrypoint slop-scan-update slop-scanner
+
+      - name: Build them in
+        run: |
+          printf 'FROM slop-scanner\nCOPY --chown=900 db /baked-db\nENV SLOP_SCAN_DB=/baked-db\n' > ctx/Containerfile
+          docker build -q -t "$IMAGE:latest" ctx
+          # A plain file scans clean with the image as built, or it isn't published.
+          echo "SLAPorSLOP scanner image check" > ctx/check.txt
+          docker run --rm -i --network=none --read-only --tmpfs /tmp:rw,size=1g,mode=1777 \
+            "$IMAGE:latest" - check.txt < ctx/check.txt | python3 -c '
+          import json, sys
+          r = json.load(sys.stdin)
+          assert r["result"] == "passed", r
+          assert r["engines"]["clamav"].startswith("ClamAV "), r["engines"]
+          print(r["engines"])'
+
+      - name: Publish
+        id: push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push -q "$IMAGE:latest"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:latest" | cut -d@ -f2)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Published $IMAGE@$digest"
+
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

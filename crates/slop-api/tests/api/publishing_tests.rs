@@ -3412,6 +3412,158 @@ async fn submit_checks(app: &TestApp, token: &str, body: Value) -> Response {
     .await
 }
 
+/// A scan report as SLAPorSLOP's scanner image writes it on a maker's runner, with today's
+/// ClamAV signatures, finding `found`.
+fn runner_scan(found: &[&str]) -> Value {
+    let today = OffsetDateTime::now_utc();
+    json!({
+        "result": if found.is_empty() { "passed" } else { "on_hold" },
+        "detail": "Scanned with ClamAV, YARA and capa.",
+        "findings": found.iter().map(|n| json!({ "engine": "ClamAV", "file": "game.exe", "name": n })).collect::<Vec<_>>(),
+        "noticed": [], "capabilities": [],
+        "engines": { "clamav": format!("ClamAV 1.4.3/28186/Mon {} {} 06:30:00 {}", &today.month().to_string()[..3], today.day(), today.year()) },
+    })
+}
+
+/// Scans from makers' GitHub runners: Slop Check sends them for any release's files and Slop
+/// Build with its release. They're kept by file hash, checked like any input, given to a file
+/// waiting for its scan, and a finding is never washed out by a later clean report.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn scans_from_github_runners_are_kept_by_file_hash(db: PgPool) {
+    let (app, _, _, _) = slop_build_app(db).await;
+    let check_token = github_token(
+        &app,
+        json!({ "job_workflow_ref": RECIPE_REF.replace("build.yml", "check.yml") }),
+    );
+    let scans = |sha: &str, report: Value| json!({ "app": "game", "scans": [{ "sha256": sha, "report": report }] });
+
+    let res = submit_checks(&app, &check_token, scans(&"a".repeat(64), runner_scan(&[]))).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["matched"], 0);
+    let kept: Value = sqlx::query_scalar("select report from ci_scans")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(kept["scanned_on"], "github");
+
+    // Checked like any input: its shape, and that its signatures are recent.
+    let mut stale = runner_scan(&[]);
+    stale["engines"]["clamav"] = json!("ClamAV 1.4.3/27000/Mon Jan  5 06:30:00 2026");
+    let mut blocked = runner_scan(&[]);
+    blocked["result"] = json!("blocked");
+    for (body, why) in [
+        (
+            scans(&"b".repeat(64), stale),
+            "the scan's ClamAV signatures are out of date",
+        ),
+        (
+            scans(&"b".repeat(64), blocked),
+            "a scan report's result is passed, note or on_hold",
+        ),
+        (
+            scans("not-a-hash", runner_scan(&[])),
+            "sha256 must be the file's hex SHA-256",
+        ),
+        (json!({ "app": "game" }), "1 to 20 files"),
+    ] {
+        let res = submit_checks(&app, &check_token, body).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{why}");
+        assert_eq!(body_json(res).await["error"]["message"], why);
+    }
+
+    // A finding stays, whatever a later report of the same file says.
+    let flagged = "f".repeat(64);
+    submit_checks(
+        &app,
+        &check_token,
+        scans(&flagged, runner_scan(&["Win.Test"])),
+    )
+    .await;
+    submit_checks(&app, &check_token, scans(&flagged, runner_scan(&[]))).await;
+    let findings: Value =
+        sqlx::query_scalar("select report -> 'findings' from ci_scans where sha256 = $1")
+            .bind(&flagged)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(findings[0]["name"], "Win.Test");
+
+    // A file waiting for its scan gets it at once.
+    let release = release_with_file(
+        &app,
+        "game",
+        "1.0.0",
+        "fetching",
+        "https://github.com/octo/game/releases/download/v1/game.zip",
+        None,
+    )
+    .await;
+    sqlx::query(
+        "update release_files set sha256 = repeat('d', 64), check_stage = 'waiting_for_scan'
+         where release_id = $1",
+    )
+    .bind(release)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = submit_checks(&app, &check_token, scans(&"D".repeat(64), runner_scan(&[]))).await;
+    assert_eq!(body_json(res).await["matched"], 1);
+    let (stage, result): (Option<String>, Option<String>) =
+        sqlx::query_as("select check_stage, scan_result from release_files where release_id = $1")
+            .bind(release)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((stage, result.as_deref()), (None, Some("passed")));
+
+    // The source check, of the commit GitHub's token names (not one the body claims).
+    let source = crate::github_scans_tests::runner_source_check();
+    let res = submit_checks(
+        &app,
+        &check_token,
+        json!({ "app": "game", "source_scan": source }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        count(
+            &app,
+            &format!("select count(*) from ci_source_scans where commit_sha = '{BUILD_COMMIT}'")
+        )
+        .await,
+        1
+    );
+    let mut odd = source.clone();
+    odd["raw"]["pulse"] = json!("sometimes");
+    let res = submit_checks(
+        &app,
+        &check_token,
+        json!({ "app": "game", "source_scan": odd }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Slop Build sends each file's scan, and the source check, with the release.
+    let mut body = ci_release();
+    body["files"][0]["scan"] = json!({ "sha256": "9".repeat(64), "report": runner_scan(&[]) });
+    body["source_scan"] = source;
+    sqlx::query("delete from ci_source_scans")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = submit_ci(&app, &github_token(&app, json!({})), body).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from ci_scans where sha256 = repeat('9', 64)"
+        )
+        .await,
+        1
+    );
+    assert_eq!(count(&app, "select count(*) from ci_source_scans").await, 1);
+}
+
 /// Slop Check: from check.yml or the build recipe, in the app's very repository, with 1 to 20
 /// well-formed checks.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -6218,7 +6370,8 @@ async fn agents_register_community_builds_with_an_all_apps_token(db: PgPool) {
 // ---------------------------------------------------------------------------------------------
 // The scanner container (deploy/scanner): scan.py and update.sh, run in the slop-scanner image
 // with signatures and rules made by the test. These run where the image has been built
-// (`podman build -t slop-scanner deploy/scanner`) and say so and return early elsewhere.
+// (`podman build --ignorefile deploy/scanner/Containerfile.dockerignore -t slop-scanner -f
+// deploy/scanner/Containerfile .`) and say so and return early elsewhere.
 
 const SCANNER_IMAGE: &str = "localhost/slop-scanner";
 /// Stands in for malware: ClamAV and YARA are given signatures for these bytes.

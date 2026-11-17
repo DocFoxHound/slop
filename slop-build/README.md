@@ -11,8 +11,10 @@ one small workflow file to their repository (SLAPorSLOP's **Add Slop Build** but
    Build from source"),
    On Windows it first signs the program with the maker's free SignPath Foundation certificate
    (optional), then scans the build with Microsoft Defender and the day's definitions and records
-   the result and the signer. A separate job runs gitleaks (secrets) and OSV-Scanner (vulnerable
-   dependencies) on the source; the results go to SLAPorSLOP for the maker and the reviewer.
+   the result and the signer. A `scan` job scans every file with SLAPorSLOP's scanner image
+   (ClamAV, YARA, capa, with the day's signatures), and a separate job runs SLAPorSLOP's source
+   check, gitleaks (secrets) and OSV-Scanner (vulnerable dependencies) on the source; the results
+   go to SLAPorSLOP, which uses them instead of scanning on its own servers.
 3. attaches the files to a release on the maker's repository (SLAPorSLOP stores no builds),
 4. sends the release to SLAPorSLOP with the run's GitHub OIDC token. SLAPorSLOP checks the token was issued
    to this recipe, in the app's repository, at this commit; no secret is shared.
@@ -71,11 +73,25 @@ GitHub release files are limited to 2 GiB: a bigger `.zip` or `.tar.gz` is split
 
 ## Slop Check
 
-`.github/workflows/check.yml` is for makers who build with their own CI (`examples/check.yml`).
-When they publish a release, it downloads the release's Windows files (`.zip`, `.exe`, `.msi`,
-`.msix`) on a Windows runner, scans them with Microsoft Defender, records each file's SHA-256 and
-signer, and posts the result to `/v1/slop-build/checks` with the run's OIDC token. SLAPorSLOP accepts it
-only from this workflow (or the build recipe), in the app's own repository.
+`.github/workflows/check.yml` is for makers on GitHub who build with their own CI or attach files by
+hand (`examples/check.yml`). When they publish a release, three jobs run, none of them running
+anything from the repository:
+
+- `defender`: the release's Windows files (`.zip`, `.exe`, `.msi`, `.msix`) with Microsoft
+  Defender on a Windows runner, each file's SHA-256 and signer;
+- `scan`: every file (parts joined back) with SLAPorSLOP's scanner image;
+- `source`: SLAPorSLOP's source check of the run's commit, with the same image.
+
+Each posts to `/v1/slop-build/checks` with the run's OIDC token. SLAPorSLOP accepts them only from this
+workflow (or the build recipe), at a tag, in the app's own repository.
+
+## The scanner image
+
+`ghcr.io/docfoxhound/slop-scanner:latest` is built by SLAPorSLOP's repository
+(`.github/workflows/scanner.yml`, every six hours, with the day's ClamAV signatures and YARA rules
+built in). Before using it, the recipe checks its build attestation names that workflow, that
+repository and `refs/heads/main`, and then runs it by digest. So scanner updates reach makers
+without a new recipe tag, and nobody but SLAPorSLOP's main branch can change what scans.
 
 ## Where this lives
 

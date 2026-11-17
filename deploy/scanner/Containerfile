@@ -1,7 +1,25 @@
 # SLAPorSLOP's scanner (crates/slop-api/src/scan.rs, docs/SECURITY.md §5.2): ClamAV, YARA (YARA-Forge's
 # rules) and Mandiant's capa, all free and open source, plus the tools that open installers and
-# packs (7-Zip, innoextract, squashfs-tools, UPX). Static only: nothing in a build is ever run.
-# `slop-scan` runs it with no network, a read-only root and the file on stdin.
+# packs (7-Zip, innoextract, squashfs-tools, UPX), and SLAPorSLOP's source check
+# (crates/slop-source-scan) for makers' GitHub runners. Static only: nothing in a build is ever
+# run. `slop-scan` runs it with no network, a read-only root and the file on stdin.
+#
+# Built from the repository's root (Containerfile.dockerignore keeps the context to what's needed):
+#   podman build --ignorefile deploy/scanner/Containerfile.dockerignore -t slop-scanner -f deploy/scanner/Containerfile .
+
+# The source check, with Debian's own Rust (the same base image, so no other image is trusted).
+FROM docker.io/library/debian:stable-slim@sha256:d405c1e1d9eecbf30022d23766a0eea235e7f499aa33e357dfd29271a839f82a AS source-check
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends cargo rustc ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY Cargo.lock ./
+COPY crates/slop-source-scan crates/slop-source-scan
+# Only this crate: a workspace of one, with the repository's locked versions.
+RUN printf '[workspace]\nresolver = "3"\nmembers = ["crates/slop-source-scan"]\n\n[workspace.package]\nedition = "2024"\npublish = false\nauthors = ["IronPoint Development LLC"]\n' > Cargo.toml \
+ && cargo build -q --release -p slop-source-scan --bin slop-source-check \
+ && cp target/release/slop-source-check /usr/local/bin/
+
 FROM docker.io/library/debian:stable-slim@sha256:d405c1e1d9eecbf30022d23766a0eea235e7f499aa33e357dfd29271a839f82a
 
 RUN apt-get update -qq \
@@ -17,10 +35,11 @@ RUN curl -fsSL -o /tmp/capa.zip "https://github.com/mandiant/capa/releases/downl
  && unzip -q /tmp/capa.zip -d /usr/local/bin && chmod 755 /usr/local/bin/capa && rm /tmp/capa.zip \
  && capa --version
 
-COPY formats.py hashes.py /usr/local/lib/slop-scan/
-COPY scan.py /usr/local/bin/slop-scan
-COPY rules.py /usr/local/bin/slop-scan-rules
-COPY update.sh /usr/local/bin/slop-scan-update
+COPY --from=source-check /usr/local/bin/slop-source-check /usr/local/bin/slop-source-check
+COPY deploy/scanner/formats.py deploy/scanner/hashes.py /usr/local/lib/slop-scan/
+COPY deploy/scanner/scan.py /usr/local/bin/slop-scan
+COPY deploy/scanner/rules.py /usr/local/bin/slop-scan-rules
+COPY deploy/scanner/update.sh /usr/local/bin/slop-scan-update
 RUN chmod 644 /usr/local/lib/slop-scan/*.py \
  && chmod 755 /usr/local/bin/slop-scan /usr/local/bin/slop-scan-rules /usr/local/bin/slop-scan-update \
  && useradd --system --uid 900 --home /nonexistent scanner

@@ -38,8 +38,9 @@ const MAX_SOURCE_CHECKS: usize = 256 * 1024;
 /// Why a browser game's run is refused: Slop Build makes downloads.
 const BROWSER_GAME: &str = "Slop Build makes downloads, and this game plays in the browser: give \
                             its play address on the Releases page instead";
-/// The largest submission: its source checks, files and Defender checks.
-pub const MAX_SUBMISSION_BYTES: usize = 1024 * 1024;
+/// The largest submission: its source checks, files, Defender checks and scans (a scan report
+/// carries the fingerprints of up to 3,000 programs).
+pub const MAX_SUBMISSION_BYTES: usize = 16 * 1024 * 1024;
 
 /// What the recipe sends: their own body limit (lib.rs), since the source checks alone may be
 /// four times the usual 64 KiB.
@@ -203,6 +204,34 @@ struct CiFile {
     /// Windows builds: Microsoft Defender's check of the file, on GitHub's Windows runner.
     #[serde(default)]
     defender: Option<crate::scan::DefenderCheck>,
+    /// SLAPorSLOP's scanner's report on the file (whole, if it's in parts), run on GitHub's runner
+    /// with SLAPorSLOP's scanner image (deploy/scanner/scan.py's JSON).
+    #[serde(default)]
+    scan: Option<CiScan>,
+}
+
+/// A scanner report from a maker's GitHub runner, for the file with this SHA-256.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CiScan {
+    sha256: String,
+    report: serde_json::Value,
+}
+
+impl CiScan {
+    fn validate(&self) -> ApiResult<()> {
+        let hex = self.sha256.len() == 64 && self.sha256.bytes().all(|b| b.is_ascii_hexdigit());
+        if !hex {
+            return Err(ApiError::invalid(
+                "scan",
+                "sha256 must be the file's hex SHA-256",
+            ));
+        }
+        match crate::scan::ci_report_problem(&self.report, time::OffsetDateTime::now_utc()) {
+            Some(problem) => Err(ApiError::invalid("scan", problem)),
+            None => Ok(()),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -220,6 +249,9 @@ struct CiRelease {
     /// Shared runtimes from slop.toml's `[runtimes]` (slop-manifest runtimes.rs).
     #[serde(default)]
     runtimes: Option<Vec<String>>,
+    /// SLAPorSLOP's source check of the commit, run on the runner (slop-source-check's output).
+    #[serde(default)]
+    source_scan: Option<slop_source_scan::SourceCheck>,
 }
 
 /// Everything but URL-unreserved characters (RFC 3986) is escaped in a path segment.
@@ -236,7 +268,7 @@ pub(crate) fn path_segment(s: &str) -> String {
 async fn submit_from_ci(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<CiRelease>,
+    Json(mut req): Json<CiRelease>,
 ) -> ApiResult<(StatusCode, Json<ReleaseInfo>)> {
     let recipe = recipe(&state)?.to_string();
     let token = headers
@@ -288,13 +320,24 @@ async fn submit_from_ci(
     {
         return Err(ApiError::invalid("source_checks", "too large"));
     }
+    if let Some(check) = &req.source_scan {
+        check
+            .raw
+            .validate()
+            .map_err(|m| ApiError::invalid("source_scan", m))?;
+    }
     // Download URLs are built here from the app's repository, never taken from the request.
     let base = repo_url.trim_end_matches('/');
     let mut checks = Vec::new();
-    for f in &req.files {
+    let mut scans = Vec::new();
+    for f in &mut req.files {
         if let Some(d) = &f.defender {
             d.validate().map_err(|m| ApiError::invalid("defender", m))?;
             checks.push(d.clone());
+        }
+        if let Some(scan) = f.scan.take() {
+            scan.validate()?;
+            scans.push(scan);
         }
     }
     let files = req
@@ -350,9 +393,18 @@ async fn submit_from_ci(
             .execute(&state.db)
             .await?;
     }
-    // Defender's checks, by file hash: matched to the files once SLAPorSLOP has fetched them.
+    // Defender's checks and the scans, by file hash: matched to the files once SLAPorSLOP has
+    // fetched them.
     for check in &checks {
         record_defender(&state, app_id, check).await?;
+    }
+    for scan in scans {
+        record_scan(&state, app_id, scan).await?;
+    }
+    if let Some(check) = &req.source_scan {
+        crate::source_scan::record_from_runner(&state.db, app_id, &req.commit, check)
+            .await
+            .map_err(|m| ApiError::invalid("source_scan", m))?;
     }
     tracing::info!(app = %req.app, version = %req.version, run_repo = %claims.repository, "Slop Build submitted a release");
     Ok((StatusCode::CREATED, Json(release)))
@@ -414,11 +466,42 @@ async fn record_defender(
     Ok(matched)
 }
 
+/// Keeps a scan from a maker's GitHub runner, and gives it to any file of the app with that hash
+/// that's waiting for it (releases.rs; the fetcher then goes on with that release). Like
+/// Defender's, a scan that found something is never replaced by one that didn't. Returns how many
+/// files it was given to.
+async fn record_scan(state: &AppState, app_id: Uuid, scan: CiScan) -> ApiResult<u64> {
+    let sha = scan.sha256.to_ascii_lowercase();
+    let mut report = scan.report;
+    report["scanned_on"] = serde_json::json!("github");
+    sqlx::query(
+        "insert into ci_scans (app_id, sha256, report) values ($1, $2, $3)
+         on conflict (app_id, sha256) do update set report = excluded.report, received_at = now()
+         where jsonb_array_length(coalesce(ci_scans.report->'findings', '[]')) = 0",
+    )
+    .bind(app_id)
+    .bind(&sha)
+    .bind(&report)
+    .execute(&state.db)
+    .await?;
+    crate::releases::give_waiting_scans(state, app_id, &sha)
+        .await
+        .map_err(ApiError::Internal)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CiChecks {
     app: String,
+    /// Microsoft Defender's checks of Windows files.
+    #[serde(default)]
     files: Vec<crate::scan::DefenderCheck>,
+    /// SLAPorSLOP's scanner's reports on the release's files.
+    #[serde(default)]
+    scans: Vec<CiScan>,
+    /// SLAPorSLOP's source check of the run's commit (slop-source-check's output).
+    #[serde(default)]
+    source_scan: Option<slop_source_scan::SourceCheck>,
 }
 
 #[derive(Serialize)]
@@ -427,8 +510,9 @@ struct ChecksRecorded {
     matched: u64,
 }
 
-/// Slop Check (`check.yml` beside the recipe): Microsoft Defender's checks of Windows builds
-/// made outside Slop Build, from the maker's own repository's GitHub Actions.
+/// Slop Check (`check.yml` beside the recipe), for releases made outside Slop Build, from the
+/// maker's own repository's GitHub Actions: Microsoft Defender's checks of Windows files, and
+/// SLAPorSLOP's scanner's reports on every file.
 async fn submit_checks(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -465,15 +549,36 @@ async fn submit_checks(
         return Err(ApiError::Forbidden);
     }
     same_repository(&state, app_id, &claims).await?;
-    if req.files.is_empty() || req.files.len() > 20 {
+    let nothing = req.files.is_empty() && req.scans.is_empty() && req.source_scan.is_none();
+    if nothing || req.files.len() > 20 || req.scans.len() > 20 {
         return Err(ApiError::invalid("files", "1 to 20 files"));
     }
-    let mut matched = 0;
+    if let Some(check) = &req.source_scan {
+        check
+            .raw
+            .validate()
+            .map_err(|m| ApiError::invalid("source_scan", m))?;
+    }
     for check in &req.files {
         check
             .validate()
             .map_err(|m| ApiError::invalid("files", m))?;
+    }
+    for scan in &req.scans {
+        scan.validate()?;
+    }
+    let mut matched = 0;
+    for check in &req.files {
         matched += record_defender(&state, app_id, check).await?;
+    }
+    for scan in req.scans {
+        matched += record_scan(&state, app_id, scan).await?;
+    }
+    // The source check is of the commit the run is for, as GitHub's token says.
+    if let Some(check) = &req.source_scan {
+        crate::source_scan::record_from_runner(&state.db, app_id, &claims.sha, check)
+            .await
+            .map_err(|m| ApiError::invalid("source_scan", m))?;
     }
     Ok(Json(ChecksRecorded { matched }))
 }
@@ -511,8 +616,8 @@ const CHECK_PATH: &str = ".github/workflows/slop-check.yml";
 fn check_yaml(recipe: &str, version: &str, slug: &str, site: &str) -> String {
     let dir = recipe.rsplit_once('/').map_or(recipe, |(d, _)| d);
     format!(
-        "# Slop Check: when you publish a release, Microsoft Defender checks its Windows files\n\
-         # and tells SLAPorSLOP. Docs: {site}/publish/guide#slop-check\n\
+        "# Slop Check: when you publish a release, SLAPorSLOP's malware scan, source check and\n\
+         # Microsoft Defender run here and tell SLAPorSLOP. Docs: {site}/publish/guide#slop-check\n\
          name: Slop Check\n\
          on:\n  \
            release:\n    \

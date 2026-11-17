@@ -21,7 +21,7 @@ use serde::Serialize;
 use time::OffsetDateTime;
 
 /// What one file is doing now, as stored in `release_files.check_stage`.
-pub const STAGES: [&str; 3] = ["downloading", "signature", "scanning"];
+pub const STAGES: [&str; 4] = ["downloading", "signature", "scanning", "waiting_for_scan"];
 
 /// A scanner's longest run on one file (scan.rs).
 const LONGEST_SCAN_MINUTES: i64 = 30;
@@ -34,7 +34,18 @@ pub fn stage_label(stage: &str) -> &'static str {
         "downloading" => "Downloading",
         "signature" => "Checking the maker signature",
         "scanning" => "Scanning for malware",
+        "waiting_for_scan" => "Waiting for its scan from GitHub",
         _ => "Checking",
+    }
+}
+
+/// "Waiting for its scan from GitHub" in the middle of a sentence: only its first letter is
+/// lowered, so names keep their capitals.
+fn lower_first(label: &str) -> String {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 
@@ -336,7 +347,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
                     "Checking file {} of {total}: {}, {}. {files_checked} of {total} done.",
                     c.number,
                     c.label,
-                    c.step_label.to_lowercase()
+                    lower_first(c.step_label)
                 ),
                 None if files_checked == total => {
                     format!("All {files_word} are checked; finishing up.")

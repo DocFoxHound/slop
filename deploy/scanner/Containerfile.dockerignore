@@ -1,0 +1,6 @@
+# The scanner image's build context is the repository's root (Containerfile); only these go in.
+*
+!Cargo.lock
+!crates/slop-source-scan
+!deploy/scanner
+crates/slop-source-scan/target

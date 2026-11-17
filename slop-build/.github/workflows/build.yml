@@ -10,7 +10,8 @@
 #      signs every file with a GitHub artifact attestation (Sigstore), which records that this
 #      recipe built it from the maker's repo at this commit,
 #   4. checks the source for leaked secrets (gitleaks) and dependencies with known
-#      vulnerabilities (OSV-Scanner),
+#      vulnerabilities (OSV-Scanner), and scans every file for malware with SLAPorSLOP's scanner
+#      image (ClamAV, YARA, capa), so SLAPorSLOP's servers don't have to,
 #   5. attaches the files to a release on the maker's repo (SLAPorSLOP stores no builds),
 #   6. tells SLAPorSLOP, using the run's GitHub OIDC token instead of any secret.
 #
@@ -1169,6 +1170,102 @@ jobs:
           path: slop-dist/${{ matrix.platform }}.json
           retention-days: 1
 
+  # SLAPorSLOP's malware scan of every file, here on the maker's runner instead of SLAPorSLOP's
+  # servers. A fresh runner, no maker code: it downloads the files the release job attached (in
+  # parts, joined back), as data only. Its reports go to SLAPorSLOP with the release (notify); if it
+  # fails, the release is still sent and SLAPorSLOP scans the files itself.
+  scan:
+    name: Scan for malware
+    needs: [prepare, release]
+    if: ${{ !cancelled() && inputs.publish && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: slop-file-*
+          merge-multiple: true
+          path: slop-files
+
+      - name: Download the files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, shutil, subprocess
+          os.makedirs("slop-scan")
+          os.makedirs("parts")
+          for p in sorted(glob.glob("slop-files/*.json")):
+              for f in json.load(open(p)):
+                  names = f.get("parts") or [f["file_name"]]
+                  for n in names:
+                      subprocess.run(["gh", "release", "download", os.environ["TAG"], "--repo",
+                                      os.environ["GITHUB_REPOSITORY"], "--pattern", n, "--dir", "parts"], check=True)
+                  with open(os.path.join("slop-scan", f["file_name"]), "wb") as whole:
+                      for n in names:
+                          with open(os.path.join("parts", n), "rb") as part:
+                              shutil.copyfileobj(part, whole, 1 << 24)
+                          os.remove(os.path.join("parts", n))
+          PY
+          ls -l slop-scan
+
+      # SLAPorSLOP's scanner image, as SLAPorSLOP's own repository built it on its main branch, with
+      # today's signatures (.github/workflows/scanner.yml there): checked by its build attestation
+      # before it runs, and then run by digest, so it can't change in between.
+      - name: Get SLAPorSLOP's scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image=ghcr.io/docfoxhound/slop-scanner
+          docker pull -q "$image:latest"
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:latest")
+          gh attestation verify "oci://$ref" --repo DocFoxHound/slop \
+            --signer-workflow DocFoxHound/slop/.github/workflows/scanner.yml --source-ref refs/heads/main
+          echo "SCANNER=$ref" >> "$GITHUB_ENV"
+
+      # ClamAV, YARA and capa, each file in its own container: no network, read-only, nothing in
+      # the file run. The reports go to SLAPorSLOP, which uses them instead of scanning the files
+      # on its own servers.
+      - name: Scan
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          scratch = os.path.join(os.environ["RUNNER_TEMP"], "scan-tmp")
+          os.makedirs(scratch, exist_ok=True)
+          os.chmod(scratch, 0o777)
+          out = []
+          for name in sorted(os.listdir("slop-scan")):
+              path = os.path.join("slop-scan", name)
+              digest = hashlib.sha256()
+              with open(path, "rb") as fh:
+                  for chunk in iter(lambda: fh.read(1 << 20), b""):
+                      digest.update(chunk)
+              with open(path, "rb") as fh:
+                  r = subprocess.run(
+                      ["docker", "run", "--rm", "-i", "--network=none", "--read-only", "--cap-drop=ALL",
+                       "--security-opt=no-new-privileges", "--pids-limit=256", "--memory=8g",
+                       "-v", f"{scratch}:/tmp", os.environ["SCANNER"], "-", name],
+                      stdin=fh, capture_output=True, timeout=1800)
+              if r.returncode != 0:
+                  raise SystemExit(f"::error::SLAPorSLOP's scanner failed on {name}: {r.stderr.decode(errors='replace')[-500:]}")
+              report = json.loads(r.stdout)
+              out.append({"file_name": name, "sha256": digest.hexdigest(), "report": report})
+              if report["result"] == "on_hold":
+                  print(f"::warning title=SLAPorSLOP's scanner holds {name}::{report['detail']} SLAPorSLOP staff look at it; it may be a false positive.")
+              else:
+                  print(f"{name}: {report['detail']}")
+          json.dump(out, open("scans.json", "w"))
+          PY
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: slop-scans
+          path: scans.json
+          retention-days: 1
+
   source-checks:
     name: Check the source
     needs: prepare
@@ -1181,6 +1278,30 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
+
+      # SLAPorSLOP's scanner image, checked as in the scan job. Without it, the release still goes:
+      # SLAPorSLOP reads the repository itself.
+      - name: Get SLAPorSLOP's scanner
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          image=ghcr.io/docfoxhound/slop-scanner
+          docker pull -q "$image:latest"
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:latest")
+          gh attestation verify "oci://$ref" --repo DocFoxHound/slop \
+            --signer-workflow DocFoxHound/slop/.github/workflows/scanner.yml --source-ref refs/heads/main
+          echo "SCANNER=$ref" >> "$GITHUB_ENV"
+
+      # SLAPorSLOP's source check (licence, monetization, code from outside SLAPorSLOP, online play,
+      # packages), read here instead of SLAPorSLOP downloading the repository. Nothing in the source
+      # is run. If it can't run, SLAPorSLOP reads the repository itself.
+      - name: SLAPorSLOP's source check
+        if: env.SCANNER != ''
+        run: |
+          docker run --rm --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+            -v "$PWD:/src:ro" --entrypoint slop-source-check "$SCANNER" /src > "$RUNNER_TEMP/source-scan.json" \
+            || { echo "::warning::SLAPorSLOP's source check couldn't run here; SLAPorSLOP reads the repository itself."; rm -f "$RUNNER_TEMP/source-scan.json"; }
 
       # Leaked keys and tokens (gitleaks), and dependencies with known vulnerabilities (OSV).
       # Findings go to SLAPorSLOP for the maker and the reviewer; secrets' values are never sent.
@@ -1216,16 +1337,20 @@ jobs:
           jq -r '.secrets[] | "\(.file):\(.line) (\(.rule))"' slop-checks/source.json | while IFS= read -r f; do
             echo "::warning title=Possible secret in your repository::$f"
           done
+          [ ! -f "$RUNNER_TEMP/source-scan.json" ] || mv "$RUNNER_TEMP/source-scan.json" slop-checks/
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: slop-source-checks
-          path: slop-checks/source.json
+          path: |
+            slop-checks/source.json
+            slop-checks/source-scan.json
+          if-no-files-found: ignore
           retention-days: 1
 
   notify:
     name: Tell SLAPorSLOP
-    needs: [prepare, release, source-checks]
+    needs: [prepare, release, source-checks, scan]
     # Without !cancelled(), GitHub needs every job upstream to have succeeded, and the unity job
     # is skipped for every other project type, so SLAPorSLOP would never be told.
     if: ${{ !cancelled() && inputs.publish && needs.prepare.result == 'success' && needs.release.result == 'success' && needs.source-checks.result == 'success' }}
@@ -1243,6 +1368,13 @@ jobs:
         with:
           name: slop-source-checks
           path: slop-checks
+
+      # Missing when the scan job failed: SLAPorSLOP then scans the files itself.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          name: slop-scans
+          path: slop-scans
 
       - name: Submit the release to SLAPorSLOP
         env:
@@ -1263,6 +1395,15 @@ jobs:
           checks = json.load(open("slop-checks/source.json"))
           body = {"app": os.environ["APP"], "version": os.environ["VERSION"], "tag": os.environ["TAG"],
                   "commit": os.environ["GITHUB_SHA"], "files": files, "source_checks": checks}
+          # SLAPorSLOP's source check, from the source-checks job.
+          if os.path.exists("slop-checks/source-scan.json"):
+              body["source_scan"] = json.load(open("slop-checks/source-scan.json"))
+          # Each file's scan, from the scan job.
+          scans = json.load(open("slop-scans/scans.json")) if os.path.exists("slop-scans/scans.json") else []
+          for f in files:
+              for s in scans:
+                  if s["file_name"] == f["file_name"]:
+                      f["scan"] = {"sha256": s["sha256"], "report": s["report"]}
           # slop.toml's runtimes travel with the Windows file; SLAPorSLOP takes them for the release.
           runtimes = [f.pop("runtimes", None) for f in files]
           if any(r is not None for r in runtimes):

@@ -437,6 +437,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
             require_maker_signature: false,
             scanner: slop_api::scan::Scanner::Off,
             rescan_every_days: 0,
+            ci_scan_wait: time::Duration::minutes(30),
             slop_build_workflow: None,
             slop_build_version: "v1".into(),
             github_oidc_issuer: fake.trim_end_matches('/').to_string(),

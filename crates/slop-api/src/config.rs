@@ -294,6 +294,9 @@ pub struct ReleaseConfig {
     /// Days between re-scans of every live release (rescan.rs). 0: only when someone reports an
     /// app or newer signatures match one of its programs (the default since 2026-11-17).
     pub rescan_every_days: u32,
+    /// How long a release waits for its files' scans from the maker's GitHub runner (Slop
+    /// Check) before SLAPorSLOP scans them itself (releases.rs `resume_next`).
+    pub ci_scan_wait: time::Duration,
     /// Slop Build's recipe, as `owner/repo/.github/workflows/build.yml`. Unset: Slop Build is off.
     pub slop_build_workflow: Option<String>,
     /// The recipe tag makers pin, e.g. `v1`.
@@ -372,6 +375,7 @@ impl fmt::Debug for ReleaseConfig {
             .field("require_maker_signature", &self.require_maker_signature)
             .field("scanner", &self.scanner)
             .field("rescan_every_days", &self.rescan_every_days)
+            .field("ci_scan_wait", &self.ci_scan_wait)
             .field("slop_build_workflow", &self.slop_build_workflow)
             .field("slop_build_version", &self.slop_build_version)
             .field("github_oidc_issuer", &self.github_oidc_issuer)
@@ -600,6 +604,11 @@ impl Config {
             rescan_every_days: var_or("SLOP_RESCAN_EVERY_DAYS", "0")
                 .parse()
                 .context("SLOP_RESCAN_EVERY_DAYS")?,
+            ci_scan_wait: time::Duration::minutes(
+                var_or("SLOP_CI_SCAN_WAIT_MINUTES", "30")
+                    .parse()
+                    .context("SLOP_CI_SCAN_WAIT_MINUTES")?,
+            ),
             slop_build_workflow: env::var("SLOP_BUILD_WORKFLOW")
                 .ok()
                 .map(|s| {

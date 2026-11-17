@@ -6329,6 +6329,7 @@ dependencies = [
  "slop-client",
  "slop-manifest",
  "slop-provenance",
+ "slop-source-scan",
  "sqlx",
  "tar",
  "thiserror 2.0.21",
@@ -6432,6 +6433,21 @@ dependencies = [
  "sha2 0.11.1",
  "sigstore-verify",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "slop-source-scan"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "toml 1.1.8+spec-1.1.0",
 ]
 
 [[package]]

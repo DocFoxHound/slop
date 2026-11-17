@@ -442,8 +442,10 @@ Builds made by Slop Build are labelled **Built by Slop Build from source**.
    fill in the version (e.g. `1.0.0`), the full commit SHA, and for each platform the file's URL
    on your release page, its type, and for zips the program to start (and optional arguments).
    Repositories that aren't on GitHub always use the form.
-5. **Windows builds:** add [Slop Check](#slop-check) to your repository so Microsoft Defender
-   checks them. Slop Build does this for you.
+5. **On GitHub:** add [Slop Check](#slop-check) to your repository. It runs SLAPorSLOP's malware
+   scan, source check and (for Windows builds) Microsoft Defender on your own GitHub Actions
+   minutes when you publish the release, so your release isn't waiting for SLAPorSLOP's servers.
+   Slop Build does all of this for you.
 
 ### 4. What happens next
 
@@ -463,9 +465,13 @@ steps: see [Browser games](#browser-games)):
    `list_releases` (`progress.summary`).
 4. **Maker signature:** the attestation is checked: it must name the file's hash and come from
    your repository at the release's commit.
-5. **Scan:** SLAPorSLOP scans every file with ClamAV, YARA (YARA-Forge's rules) and capa, unpacking
+5. **Scan:** every file is scanned with ClamAV, YARA (YARA-Forge's rules) and capa, unpacking
    archives first, and the installers, app bundles (Electron, PyInstaller, Godot packs) and
-   archives inside them. Nothing is ever run. Windows builds also need a clean check from
+   archives inside them. Nothing is ever run. On GitHub the scan runs on your repository's own
+   GitHub Actions runner (Slop Build, or [Slop Check](#slop-check)), with SLAPorSLOP's scanner
+   image, and SLAPorSLOP uses its report; a release fetched before its report arrives says
+   "Waiting for its scan from GitHub", and if none comes within half an hour SLAPorSLOP scans the
+   files itself. Windows builds also need a clean check from
    **Microsoft Defender** (Slop Build or [Slop Check](#slop-check)). If something is found, the
    release goes **on hold** (see [On hold](#on-hold) below): scanners make mistakes, and SLAPorSLOP
    staff can clear a false positive. A scan says what was found, never that a program is harmless. Each file
@@ -1837,9 +1843,20 @@ installing. Your Releases page shows **SIGNED BY YOUR KEY**.
 
 ### Slop Check
 
-For apps not built with Slop Build. When you publish a GitHub release, Slop Check downloads its
-Windows files on GitHub's Windows runner, scans them with Microsoft Defender, notes whether they're
-signed, and tells SLAPorSLOP. Add this file to your repository:
+For apps on GitHub not built with Slop Build: add it to every such repository (your AI agent can
+commit the file; nothing needs clicking). When you publish a GitHub release, Slop Check runs
+SLAPorSLOP's checks on your own GitHub Actions minutes, so SLAPorSLOP's servers don't have to:
+
+- **Malware scan:** every file of the release (files in parts are joined back) with SLAPorSLOP's
+  scanner image, the same ClamAV, YARA and capa SLAPorSLOP uses;
+- **Source check:** licence, monetization, code from outside SLAPorSLOP, online play and packages, at
+  the release's commit;
+- **Microsoft Defender**, for Windows files, on GitHub's Windows runner, noting whether they're
+  signed.
+
+Each job tells SLAPorSLOP with the run's GitHub token; none of them runs anything from your
+repository. A public repository's Actions minutes are free; a private one's count toward your
+plan (a scan takes a few minutes per file). Add this file to your repository:
 
 ```yaml
 # .github/workflows/slop-check.yml
@@ -1863,8 +1880,10 @@ jobs:
       slop-url: https://slop.example   # the SLAPorSLOP site
 ```
 
-SLAPorSLOP only accepts the check from your app's own repository. If you published before adding it,
-run it by hand from the repository's **Actions** tab (**Run workflow**, with the release's tag).
+SLAPorSLOP only accepts the results from your app's own repository, from its own unchanged
+workflow and scanner image. If you published before adding it, run it by hand from the
+repository's **Actions** tab (**Run workflow**, with the release's tag); whatever doesn't come,
+SLAPorSLOP does itself, only slower.
 Repositories that aren't on GitHub can't run it yet: their Windows builds go on hold waiting for
 Defender's check. **Write to SLAPorSLOP staff** on the release and they look at it by hand, so
 expect a longer wait.

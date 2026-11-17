@@ -32,6 +32,7 @@ mod agents_tests;
 mod browser_games_tests;
 mod checks_tests;
 mod discover_tests;
+mod github_scans_tests;
 mod history_tests;
 mod holds_tests;
 mod icons_tests;
@@ -585,6 +586,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             require_maker_signature: false,
             scanner: slop_api::scan::Scanner::Off,
             rescan_every_days: 0,
+            ci_scan_wait: time::Duration::minutes(30),
             slop_build_workflow: Some("slop/slop-build/.github/workflows/build.yml".into()),
             slop_build_version: "v1".into(),
             github_oidc_issuer: github_base.trim_end_matches('/').to_string(),

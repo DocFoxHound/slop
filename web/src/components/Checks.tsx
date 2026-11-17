@@ -133,6 +133,11 @@ export function ScanFindings({ report }: { report: ScanReport | null }) {
   const noticed = report.noticed ?? [];
   return (
     <>
+      {report.scanned_on === "github" && (
+        <div className="small muted">
+          Scanned on the maker's GitHub runner, with SLAPorSLOP's scanner image.
+        </div>
+      )}
       {report.findings.length > 0 && (
         <ul className="small findings">
           {report.findings.map((f, i) => (

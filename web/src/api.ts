@@ -2337,7 +2337,7 @@ export interface ReleaseFile {
   check?: "waiting" | "checking" | "checked" | "not_checked";
 }
 
-export type FileCheckStage = "downloading" | "signature" | "scanning";
+export type FileCheckStage = "downloading" | "signature" | "scanning" | "waiting_for_scan";
 
 /** Where a release is in SLAPorSLOP's checks, file by file (crates/slop-api/src/release_progress.rs). */
 export interface ReleaseProgress {
@@ -2382,6 +2382,8 @@ export interface ScanReport {
   findings: Array<{ engine: string; file: string; name: string }>;
   /** Matches from YARA's wider rules, which false-alarm more often: a note, not a hold. */
   noticed?: Array<{ engine: string; file: string; name: string }>;
+  /** Where it ran: "github" on the maker's GitHub runner (Slop Build or Slop Check), else here. */
+  scanned_on?: "github";
   capabilities: Array<{ file: string; capability: string; namespace: string }>;
 }
 

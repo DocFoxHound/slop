@@ -61,6 +61,9 @@ NOTABLE = (
     "data-manipulation/encryption/ransom",
 )
 UNPACKED = ".unpacked"
+# Signatures and rules: the volume slop-scan-update fills, or (the image makers' GitHub runners
+# use, .github/workflows/scanner.yml) a copy built into the image.
+DB = os.environ.get("SLOP_SCAN_DB", "/db")
 
 
 def run(args, timeout=600):
@@ -187,7 +190,7 @@ def yara(rules, tree):
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--match-hashes":
-        hashes.match()
+        hashes.match(os.path.join(DB, "clamav"))
         return
     work = tempfile.mkdtemp(prefix="scan-", dir=os.environ.get("TMPDIR", "/tmp"))
     target = sys.argv[1]
@@ -210,7 +213,7 @@ def main():
         notes += unpacker.notes
 
         # ClamAV, on the file itself (it reads archives) and on what was unpacked.
-        db = "/db/clamav"
+        db = os.path.join(DB, "clamav")
         if os.path.isdir(db) and os.listdir(db):
             r = run(["clamscan", "--database", db, "-r", "--no-summary", "--infected", "--alert-encrypted=no",
                      "--max-filesize=1000M", "--max-scansize=4000M", target, tree])
@@ -226,18 +229,19 @@ def main():
             incomplete.append("ClamAV has no signatures yet")
 
         # YARA: the main rules hold a file; the wider set's matches are notes (rules.py).
-        hold = "/db/yara/hold.yarc"
+        hold = os.path.join(DB, "yara/hold.yarc")
         if not os.path.exists(hold):
-            hold = "/db/yara/core.yarc"  # from before rules.py, until the next update
+            hold = os.path.join(DB, "yara/core.yarc")  # from before rules.py, until the next update
         if os.path.exists(hold):
             found, problem = yara(hold, tree)
             findings += found
             if problem:
                 incomplete.append("YARA couldn't read everything")
-            if os.path.exists("/db/yara/note.yarc"):
-                found, _ = yara("/db/yara/note.yarc", tree)
+            note = os.path.join(DB, "yara/note.yarc")
+            if os.path.exists(note):
+                found, _ = yara(note, tree)
                 noticed += found
-            engines["yara"] = "yara-forge " + open("/db/yara/version").read().strip()
+            engines["yara"] = "yara-forge " + open(os.path.join(DB, "yara/version")).read().strip()
         else:
             incomplete.append("YARA has no rules yet")
 
