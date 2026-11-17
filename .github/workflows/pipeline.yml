@@ -189,10 +189,16 @@ jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 60
+    # On main this build is signed, so it waits for a release approver like production does
+    # (docs/CODE-SIGNING.md: nothing is signed until a person approves it). The Azure signing
+    # account trusts exactly this: repo:DocFoxHound/slop:environment:production.
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || '' }}
     permissions:
       contents: read
       # The signing allowance counts the pipeline's runs on main.
       actions: read
+      # Signing in to Azure with GitHub's OIDC token, no stored secret.
+      id-token: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       # 1 when this build is to be signed (deploy/signing.conf: signing on, within the allowance).
@@ -272,6 +278,53 @@ jobs:
         working-directory: web
         run: npm ci
 
+      # Windows code signing with Azure Artifact Signing (docs/CODE-SIGNING.md). The repository
+      # variables AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID name the app
+      # registration allowed to sign; AZURE_SIGNING_ENDPOINT is the signing account's URI.
+      - name: Sign in to Azure
+        if: steps.allowance.outputs.sign == '1'
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Tauri signs slop.exe, the uninstaller and the installer with this command as it builds
+      # them: signtool with Microsoft's Artifact Signing plugin, which signs with the Azure sign-in
+      # above, and Microsoft's timestamp, so the signatures outlast the 3-day certificates.
+      - name: Set up signing
+        if: steps.allowance.outputs.sign == '1'
+        env:
+          ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          CLIENT_VERSION: 1.0.146
+          CLIENT_SHA256: 7761e5d8f31e54b764da21d33cd8b0a2940e1b05526c7dfcb5e94b0431426f70
+        run: |
+          [ -n "$ENDPOINT" ] || { echo "::error::the repository variable AZURE_SIGNING_ENDPOINT isn't set"; exit 1; }
+          dir="$RUNNER_TEMP/signing"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/client.nupkg" \
+            "https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/$CLIENT_VERSION/microsoft.artifactsigning.client.$CLIENT_VERSION.nupkg"
+          echo "$CLIENT_SHA256  $dir/client.nupkg" | sha256sum -c -
+          7z x -y -o"$dir/client" "$dir/client.nupkg" >/dev/null
+          signtool=$(ls -d "/c/Program Files (x86)/Windows Kits/10/bin/"10.*/x64/signtool.exe | sort -V | tail -1)
+          [ -f "$signtool" ] || { echo "::error::no signtool.exe in the Windows SDK"; exit 1; }
+          SIGNTOOL=$(cygpath -w "$signtool") DLIB=$(cygpath -w "$dir/client/bin/x64/Azure.CodeSigning.Dlib.dll") \
+            METADATA=$(cygpath -w "$dir/metadata.json") CONFIG="$dir/tauri.signing.json" node -e '
+              const fs = require("fs"), e = process.env;
+              fs.writeFileSync(e.METADATA.replace(/\\/g, "/"), JSON.stringify({
+                Endpoint: e.ENDPOINT,
+                CodeSigningAccountName: "SLAPorSLOP",
+                CertificateProfileName: "SLAPorSLOP",
+                ExcludeCredentials: ["ManagedIdentityCredential"],
+              }));
+              fs.writeFileSync(e.CONFIG, JSON.stringify({ bundle: { windows: { signCommand: {
+                cmd: e.SIGNTOOL,
+                args: ["sign", "/v", "/fd", "SHA256", "/tr", "http://timestamp.acs.microsoft.com", "/td", "SHA256",
+                       "/dlib", e.DLIB, "/dmdf", e.METADATA, "%1"],
+              } } } }));'
+          echo "SIGNING_CONFIG=$(cygpath -w "$dir/tauri.signing.json")" >> "$GITHUB_ENV"
+          echo "SIGNTOOL=$signtool" >> "$GITHUB_ENV"
+
       - name: Build the installer
         working-directory: web
         env:
@@ -279,7 +332,15 @@ jobs:
           # The release-signing public key (not a secret); the test server and production share it.
           SLOP_TRUSTED_KEYS: Y4ONcDe13CHu7blM2TpRSTcxuQ3Jc5yl2jrSLfJkav0=
         # Never SLOP_ALLOW_UNSIGNED: production's app accepts only signed releases (build.rs).
-        run: npm run desktop:build:windows
+        run: npm run desktop:build:windows -- ${SIGNING_CONFIG:+--config "$SIGNING_CONFIG"}
+
+      - name: Check the signatures
+        if: steps.allowance.outputs.sign == '1'
+        run: |
+          # The program (named by its crate, whatever the installer calls it) and the installer.
+          for f in target/release/*.exe "target/release/bundle/nsis/Slop_${VERSION}_x64-setup.exe"; do
+            "$SIGNTOOL" verify //pa //v "$f" | grep -E 'Issued to|Expires|Timestamp|Successfully verified' || { echo "::error::$f isn't signed"; exit 1; }
+          done
 
       - name: Check the installer
         run: |
