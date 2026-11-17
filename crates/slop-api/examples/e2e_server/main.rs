@@ -46,6 +46,45 @@ fn release_zip() -> Vec<u8> {
     buf.into_inner()
 }
 
+/// A repository's source at any commit (`/repos/<owner>/<repo>/tarball/<commit>`), as GitHub
+/// sends it: a .tar.gz with one top folder, here holding just an MIT licence. SLAPorSLOP's source
+/// check (source_scan.rs) then has a result, which Publish waits for (publish.rs).
+fn source_tarball() -> Vec<u8> {
+    const MIT: &str = "MIT License
+
+Copyright (c) 2026 SLAPorSLOP e2e tests
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the \"Software\"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+";
+    let gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut tar = tar::Builder::new(gz);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(MIT.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, "e2e-repo/LICENSE", MIT.as_bytes())
+        .expect("a tar entry");
+    tar.into_inner()
+        .and_then(|gz| gz.finish())
+        .expect("a .tar.gz")
+}
+
 /// The commit every fake repository is at.
 const MEDIA_COMMIT: &str = "d00dfeed00d00dfeed00d00dfeed00d00dfeed00";
 
@@ -198,6 +237,7 @@ h3 { color: #ffd166; font-family: "Pixelify Sans", monospace; }
 /// browser game's page at `/<owner>/<repo>/play/`.
 async fn fake_github() -> anyhow::Result<String> {
     let zip = Bytes::from(release_zip());
+    let source = Bytes::from(source_tarball());
     let app = Router::new()
         // Account pictures (avatars.rs): GitHub's at /avatars/u/<id>, one colour per account.
         .route(
@@ -272,6 +312,14 @@ async fn fake_github() -> anyhow::Result<String> {
                     return Err(axum::http::StatusCode::NOT_FOUND);
                 }
                 Ok(axum::Json(serde_json::json!({ "sha": MEDIA_COMMIT })))
+            }),
+        )
+        // Any repository's source at any commit, for SLAPorSLOP's source check.
+        .route(
+            "/repos/{owner}/{repo}/tarball/{commit}",
+            get(move || {
+                let source = source.clone();
+                async move { ([("content-type", "application/gzip")], source) }
             }),
         )
         // A browser game's page (releases.rs check_play_address, and Play in the browser tests):

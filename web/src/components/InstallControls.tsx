@@ -981,10 +981,12 @@ function DesktopControls({
           {busy === "launch" ? "Starting…" : "▶ Play"}
         </button>
       );
-      label = bar.pending ? (bar.pending.status === "fetching" ? "Scanning update" : "Update in review") : "Installed";
+      label = bar.pending ? (bar.pending.status === "fetching" ? "Scanning update" : "Update being checked") : "Installed";
       detail = bar.pending
         ? `Version ${installed.version}; ${bar.pending.version} is ${
-            bar.pending.status === "fetching" ? "being downloaded and scanned by SLAPorSLOP" : "waiting for a person to review it"
+            bar.pending.status === "fetching"
+              ? "being downloaded and scanned by SLAPorSLOP"
+              : "being checked by SLAPorSLOP; it installs once its maker publishes it"
           }`
         : `Version ${installed.version}`;
     }

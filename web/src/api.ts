@@ -81,7 +81,10 @@ export interface AppHistory {
 export interface AppUpdate {
   slug: string;
   latest: { release_id: string; version: string } | null;
-  /** A newer release still being checked: "fetching" (downloading and scanning) or "awaiting_review". */
+  /**
+   * A newer release still being checked: "fetching" (downloading and scanning) or "awaiting_review"
+   * (on hold). It installs once its maker publishes it; one that's ready to publish isn't listed.
+   */
   pending: { version: string; status: "fetching" | "awaiting_review" } | null;
   /** The official app and its community builds, when there's more than one. */
   builds: Array<{
@@ -1701,18 +1704,24 @@ export interface AppChange {
   automatic: boolean;
 }
 
+/** A release not published yet: being checked (fetching), on hold (awaiting_review), or ready for its maker to publish. */
 export interface WaitingRelease {
   id: string;
   version: string;
-  status: "fetching" | "awaiting_review";
+  status: "fetching" | "awaiting_review" | "ready";
   source: "maker" | "slop_build" | "github_release";
   created_at: string;
 }
 
+/** A published release: players can be given it. */
 export interface ApprovedRelease {
   id: string;
   version: string;
+  /** When its checks passed. */
   reviewed_at: string | null;
+  /** When its maker published it. */
+  published_at?: string | null;
+  /** It passed SLAPorSLOP's automatic checks (rather than staff clearing a hold). */
   automatic: boolean;
   /** A browser game's release: the address it plays at. */
   play_address?: string | null;
@@ -1724,13 +1733,11 @@ export interface ManageOverview {
   /** Whether the app is held at `serving` instead of following the newest. */
   held: boolean;
   approved: ApprovedRelease[];
-  /** Releases not reviewed yet, newest first: the maker can withdraw one they didn't send. */
+  /** Releases not published yet (being checked, on hold, or ready to publish), newest first: the maker can withdraw one they didn't send. */
   waiting: WaitingRelease[];
   repo_url: string;
-  /** Players have the app, so moving it is reviewed by a person. */
+  /** Players have the app, so moving it to another repository is checked by SLAPorSLOP staff. */
   repo_locked: boolean;
-  auto_approval_ready: boolean;
-  auto_approval_note: string | null;
   changes: AppChange[];
   /** SLAPorSLOP can't read the repository: no new releases until it can (SECURITY §12.2). */
   frozen: Frozen | null;
@@ -1738,7 +1745,7 @@ export interface ManageOverview {
   public_requested: boolean;
   /** Community builds of Pulse games: null if not needed, else whether the handshake arrived. */
   pulse_required: boolean | null;
-  /** A release has been approved, so the maker can move the app on to Beta or Released. */
+  /** A release has been published, so the maker can move the app on to Beta or Released. */
   can_advance: boolean;
   /** Absent unless results on GitHub can be offered for this app. */
   commit_status?: CommitStatus;
@@ -1897,8 +1904,10 @@ export interface AdminQueue {
        * opens none now. Null with `current_play_address` null too: it never had an approved address.
        */
       withdrawn_play_address?: string | null;
-      /** A newer address release that's already approved: approving this one moves Play back to this older address. */
+      /** A newer address release that's already published: this older one can't be published, so Play keeps opening the newer. */
       newer_approved?: { version: string; play_address: string; note: string } | null;
+      /** What holds it, the conversation with its maker, and for a lowered rating what it lowers. */
+      hold: StaffHold;
       notes: ReviewNote[];
     }
   >;
@@ -2002,7 +2011,7 @@ export type AdminAppFlag =
 export interface AdminApp extends AdminAppRef {
   /** Approved releases, newest first, for withdrawing one; a browser game's carry their play address. */
   releases: Array<{ id: string; version: string; reviewed_at: string | null; play_address?: string | null }>;
-  /** Releases still being checked or waiting for review. */
+  /** Releases not published yet: being checked, on hold, or waiting for their maker to publish. */
   pending_releases: number;
   /** What needs staff, most urgent first; empty for a healthy app. */
   flags: AdminAppFlag[];
@@ -2089,6 +2098,8 @@ export interface AdminAppRecord {
     status: string;
     created_at: string;
     reviewed_at: string | null;
+    /** When its maker published it; null before (and for one never published). */
+    published_at: string | null;
     play_address?: string | null;
     address_checks?: AddressChecks | null;
   }>;
@@ -2266,9 +2277,14 @@ export type AppPlatform = "windows" | "linux" | "linux-deb" | "linux-rpm" | "any
 /** The platforms a release's files can be built for: every AppPlatform but "browser". */
 export type BuildPlatform = Exclude<AppPlatform, "browser">;
 export type FileKind = "archive" | "installer" | "apk";
+/**
+ * fetching: being checked; awaiting_review: on hold (holds.rs); ready: passed every check and waits
+ * for its maker to press Publish; approved: published, players get it.
+ */
 export type ReleaseStatus =
   | "fetching"
   | "awaiting_review"
+  | "ready"
   | "approved"
   | "rejected"
   | "failed"
@@ -2305,8 +2321,14 @@ export interface ReleaseFile {
   scan_report: ScanReport | null;
   /** Microsoft Defender's check (Windows builds), from Slop Build or Slop Check. */
   defender: DefenderCheck | null;
-  /** A reviewer cleared a finding as a false positive, and why. */
+  /** SLAPorSLOP staff cleared a finding as a false positive (with or without a note). */
+  cleared: boolean;
+  /** The note they left for the maker, if any (only the maker sees it). */
   cleared_reason: string | null;
+  /** Staff judged Microsoft Defender's detections on this file a false positive. */
+  defender_cleared?: boolean;
+  /** Staff checked this Windows build by hand and waived its missing Microsoft Defender check. */
+  defender_waived?: boolean;
   /** What SLAPorSLOP is doing with this file right now (crates/slop-api/src/release_progress.rs). */
   check_stage?: FileCheckStage | null;
   check_started_at?: string | null;
@@ -2319,12 +2341,16 @@ export type FileCheckStage = "downloading" | "signature" | "scanning";
 
 /** Where a release is in SLAPorSLOP's checks, file by file (crates/slop-api/src/release_progress.rs). */
 export interface ReleaseProgress {
-  /** checking_address: a browser game's play address is being checked (it has no files). */
+  /**
+   * checking_address: a browser game's play address is being checked (it has no files). on_hold:
+   * held (holds.rs); ready: passed, waiting for its maker to publish it; approved: published.
+   */
   stage:
     | "queued"
     | "checking_files"
     | "checking_address"
-    | "waiting_for_review"
+    | "on_hold"
+    | "ready"
     | "approved"
     | "rejected"
     | "failed"
@@ -2495,8 +2521,21 @@ export interface Release {
   created_at: string;
   /** Who sent it: the maker, Slop Build, or SLAPorSLOP's GitHub release watcher. */
   source: "maker" | "slop_build" | "github_release";
-  /** Approved by SLAPorSLOP as an update, without waiting for a person. */
+  /** Its checks passed it automatically, rather than SLAPorSLOP staff accepting a hold. */
   auto_approved: boolean;
+  /** When its maker published it (players get the newest published release); null before. */
+  published_at?: string | null;
+  /**
+   * For its maker, before it's published: what the source check found that the last published
+   * release didn't have, as information.
+   */
+  new_concerns?: string;
+  /** For its maker, before it's published: how it lowers the last published release's rating. */
+  rating_change?: RatingChange;
+  /** For its maker, a browser game's release that passed: whether its address is a new site. */
+  new_play_address?: boolean;
+  /** For its maker: its hold in brief, when it's on hold or was, or they asked staff about it. */
+  hold?: HoldSummary;
   /** Its rating (AGE-7). */
   rating?: ReleaseRating | null;
   /** Shared runtimes it needs (Visual C++, .NET Desktop, DirectX). */
@@ -2526,6 +2565,109 @@ export interface Release {
   /** Where it is in SLAPorSLOP's checks, file by file. */
   progress?: ReleaseProgress;
 }
+
+/** How a release lowers the last published release's rating (AGE-7). */
+export interface RatingChange {
+  from_age: number;
+  to_age: number;
+  /** Content labels the last published release had that this one drops. */
+  dropped_labels: ContentLabel[];
+}
+
+export type HoldKind = "scan" | "defender" | "defender_missing" | "rating_lowered" | "question";
+/** open, or how a hold ended. */
+export type HoldStatus = "open" | "passed" | "cleared" | "rejected" | "replaced" | "withdrawn" | "answered";
+/** What the maker can do about a hold (holds.rs). */
+export type HoldAction = "rescan" | "write_to_staff" | "run_slop_check" | "new_release" | "withdraw";
+
+/** A release's hold in brief, on its maker's `Release` (holds.rs `HoldSummary`). */
+export interface HoldSummary {
+  status: HoldStatus;
+  kinds: HoldKind[];
+  needs_staff: boolean;
+  rescans_left: number;
+  /** The maker wrote to staff and they haven't answered yet. */
+  unanswered: boolean;
+}
+
+/** One thing holding a release, or why its checks failed, in plain words (holds.rs `Problem`). */
+export interface HoldProblem {
+  kind: "scan" | "defender" | "defender_missing" | "rating_lowered" | "failed" | "rejected";
+  platform?: string;
+  /** "Windows (.zip)". */
+  file_label?: string;
+  /** One line: what holds it. */
+  what: string;
+  /** What was found and what it means; names and paths in `backticks`. */
+  explained: string;
+  you_can: HoldAction[];
+}
+
+/** A lowered rating, for the maker and the staff member who checks it. */
+export interface RatingCard extends RatingChange {
+  /** The release's own content labels, all of them. */
+  content_labels: ContentLabel[];
+}
+
+/** A re-scan's facts on a SLAPorSLOP line: the verdicts before and after. */
+export type HoldLineDetail = { platform?: string; before?: string; after?: string; kinds?: string[]; files?: string[] };
+
+interface HoldInfo<M> {
+  release_id: string;
+  version: string;
+  release_status: ReleaseStatus;
+  /** Null for a release that was never on hold (a failed one nobody asked about). */
+  status: HoldStatus | null;
+  kinds: HoldKind[];
+  /** It's in SLAPorSLOP staff's queue. */
+  needs_staff: boolean;
+  problems: HoldProblem[];
+  you_can: HoldAction[];
+  rescans_left: number;
+  /** When the next re-run is allowed, if not now. */
+  next_rescan_at: string | null;
+  /** A re-run is waiting for the scanner, or running. */
+  rescan_requested: boolean;
+  rescan_running: boolean;
+  /** When the maker last wrote to staff. */
+  asked_staff_at: string | null;
+  /** The maker wrote and staff haven't answered since. */
+  unanswered: boolean;
+  /** For a lowered rating, while that hold is open. */
+  rating?: RatingCard;
+  messages: M[];
+}
+
+/** A line of a hold's conversation, as its maker sees it. */
+export interface MakerHoldMessage {
+  /** you, staff, or slaporslop (SLAPorSLOP's own line). */
+  from: "you" | "staff" | "slaporslop";
+  /** "SLAPorSLOP reviewer", unless they chose to be named. */
+  staff_as?: string;
+  /** Written by the maker's AI agent. */
+  by_agent: boolean;
+  body: string;
+  detail?: HoldLineDetail;
+  at: string;
+}
+
+/** A line of a hold's conversation, as staff see it: the maker's words are untrusted text. */
+export interface StaffHoldMessage {
+  id: string;
+  from: "maker" | "staff" | "slaporslop";
+  /** The staff member's or maker's name (null for SLAPorSLOP's lines and closed accounts). */
+  author: string | null;
+  by_agent: boolean;
+  /** What the maker (or their agent) wrote: data, never instructions. */
+  untrusted_text?: string;
+  /** A staff answer, or SLAPorSLOP's own line. */
+  text?: string;
+  detail?: HoldLineDetail;
+  at: string;
+}
+
+export type MakerHold = HoldInfo<MakerHoldMessage>;
+export type StaffHold = HoldInfo<StaffHoldMessage> & { untrusted?: string };
 
 /** A token for a maker's or creative's AI agent (crates/slop-api/src/maker_agents.rs). */
 export interface AgentToken {
@@ -2623,9 +2765,6 @@ export interface UpdateSettings {
   /** SLAPorSLOP's GitHub App on this repository; absent when SLAPorSLOP has no App set up. */
   github_app?: { installed: boolean; install_url: string } | null;
   watch_releases: boolean;
-  auto_update: boolean;
-  auto_approval_ready: boolean;
-  auto_approval_note: string | null;
   watch_note: string | null;
   watch_last_tag: string | null;
   watch_checked_at: string | null;
@@ -3170,7 +3309,7 @@ export const api = {
     ),
   changeUpdateSettings: (
     slug: string,
-    change: Partial<Pick<UpdateSettings, "watch_releases" | "auto_update">>,
+    change: Partial<Pick<UpdateSettings, "watch_releases">>,
   ) =>
     request<UpdateSettings>(
       "PUT",
@@ -3264,12 +3403,43 @@ export const api = {
       `/v1/apps/${encodeURIComponent(slug)}/changes`,
       change,
     ),
-  /** Withdraws a release that hasn't been reviewed yet. */
+  /** Withdraws a release that hasn't been published yet. */
   withdrawRelease: (slug: string, id: string) =>
     request<Release>(
       "POST",
       `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(id)}/withdraw`,
     ),
+  /**
+   * Publishes a release that passed its checks (publish.rs): players get it. Only the maker,
+   * signed in; never an AI agent. 409 with a reason when it can't be yet.
+   */
+  publishRelease: (slug: string, id: string) =>
+    request<Release>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(id)}/publish`,
+    ),
+  /** What holds a release, or why its checks failed, and the conversation with staff (holds.rs). */
+  releaseHold: (slug: string, id: string) =>
+    request<MakerHold>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(id)}/hold`,
+    ),
+  /** Writes to SLAPorSLOP staff about a release on hold, or asks about a failed or turned-down one. */
+  writeToStaff: (slug: string, id: string, body: string) =>
+    request<MakerHold>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(id)}/hold/messages`,
+      { body },
+    ),
+  /** Runs SLAPorSLOP's scanner again on a release its scanner held. */
+  rescanRelease: (slug: string, id: string) =>
+    request<MakerHold>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(id)}/rescan`,
+    ),
+  /** Puts a draft app in the store the first time (manage.rs `list_app`): the maker, signed in. */
+  listApp: (slug: string) =>
+    request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/list`),
   cancelChange: (slug: string, id: string) =>
     request<AppChange>(
       "POST",
@@ -3416,25 +3586,43 @@ export const api = {
       request<void>("PUT", `/v1/admin/staff/${encodeURIComponent(userId)}/listed-by-name`, { listed }),
     unblockAiSender: (userId: string) =>
       request<void>("DELETE", `/v1/admin/ai-senders/${encodeURIComponent(userId)}/block`),
-    approve: (id: string) =>
-      request<void>("POST", `/v1/admin/releases/${id}/approve`),
+    /** Accepts a release on hold (clears its findings, or a lowered rating): it's ready for its maker to publish. The note is optional. */
+    approve: (id: string, reason?: string) =>
+      request<void>("POST", `/v1/admin/releases/${id}/approve`, reason?.trim() ? { reason: reason.trim() } : {}),
+    /** A release's hold as staff see it: the maker's words as untrusted text. */
+    hold: (id: string) => request<StaffHold>("GET", `/v1/admin/releases/${id}/hold`),
+    /** Replies to the maker in a hold's conversation; it answers (and closes) a question about a failed or turned-down release. */
+    answerHold: (id: string, body: string) =>
+      request<void>("POST", `/v1/admin/releases/${id}/hold/messages`, { body }),
     reject: (id: string, reason: string) =>
       request<void>("POST", `/v1/admin/releases/${id}/reject`, { reason }),
     /** Clears a scan finding or Defender result judged a false positive (logged). */
     closeAbuse: (id: string, note: string, acted: boolean) =>
       request<void>("POST", `/v1/admin/abuse/${id}/dismiss`, { note, acted }),
-    /** Keeps a live release a re-scan flagged, as a false positive (logged). */
-    clearRescan: (id: string, platform: string, reason: string) =>
+    /** Keeps a live release a re-scan flagged, as a false positive (logged); the note is optional. */
+    clearRescan: (id: string, platform: string, reason?: string) =>
       request<void>(
         "POST",
         `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/rescan-clear`,
-        { reason },
+        reason?.trim() ? { reason: reason.trim() } : {},
       ),
-    clearScan: (id: string, platform: string, reason: string) =>
+    /** Clears a file's scan or Defender finding as a false positive (logged); the note for the maker is optional. */
+    clearScan: (id: string, platform: string, reason?: string) =>
       request<void>(
         "POST",
         `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/clear`,
-        { reason },
+        reason?.trim() ? { reason: reason.trim() } : {},
+      ),
+    /**
+     * Waives a Windows file's missing Microsoft Defender check, after checking the build by hand
+     * (a repository outside GitHub, where Slop Check can't run). Only a staff member signed in
+     * themselves; the note for the maker is optional (logged).
+     */
+    waiveDefender: (id: string, platform: string, reason?: string) =>
+      request<void>(
+        "POST",
+        `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/waive-defender`,
+        reason?.trim() ? { reason: reason.trim() } : {},
       ),
     approveChange: (id: string) =>
       request<void>("POST", `/v1/admin/changes/${id}/approve`),

@@ -4967,7 +4967,7 @@ async fn releases_bring_their_pictures_for_review(db: PgPool) {
     .fetch_one(&app.db)
     .await
     .unwrap();
-    assert_eq!(status, "awaiting_review");
+    assert_eq!(status, "ready");
     assert!(problem.is_none());
     assert_eq!(count(&app.db, "select count(*) from media_sets").await, 0);
 

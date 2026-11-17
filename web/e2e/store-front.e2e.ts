@@ -36,12 +36,12 @@ test("visitors get the intro and the test-server note; signed-in players get For
   const visitor = await browser.newPage();
   await visitor.goto("/");
   await expect(visitor.getByRole("heading", { name: /Apps and games made with AI\./, level: 1 })).toBeVisible();
-  // This server doesn't scan, so it says a person checks every build instead; a game that plays
-  // in the browser (the seed's Orbit Tap is listed) has an address checked, not a build.
+  // This server doesn't scan, so it says every build is checked before it's listed; a game that
+  // plays in the browser (the seed's Orbit Tap is listed) has an address checked, not a build.
   const claims = visitor.locator(".intro li");
-  await expect(visitor.getByText("Reviewed before it's listed.")).toBeVisible();
+  await expect(visitor.getByText("Checked before players get it.")).toBeVisible();
   await expect(claims.nth(1)).toHaveText(
-    "Reviewed before it's listed. Every build is checked by a person. Games that play in your browser have their address checked and are opened by a person.",
+    "Checked before players get it. Every build is checked before it's listed. Games that play in your browser have their address checked.",
   );
   await expect(claims.nth(2)).toHaveText("Free to download or play. Makers can take donations. Nothing is ever for sale.");
   await expect(visitor.getByRole("note").filter({ hasText: "Test server." })).toContainText("uploads are not scanned");
@@ -55,7 +55,7 @@ test("visitors get the intro and the test-server note; signed-in players get For
   await patchJson(scanned, path("/v1/server"), (body) => ({ ...body, scanning: true }));
   await scanned.goto("/");
   await expect(scanned.locator(".intro li").nth(1)).toHaveText(
-    "Downloads are scanned before they're listed. Malware, stolen code and scams are checked on every upload. Games that play in your browser have their address checked and are opened by a person; what their site serves isn't scanned.",
+    "Downloads are scanned before they're listed. Malware, stolen code and scams are checked on every upload. Games that play in your browser have their address checked; what their site serves isn't scanned.",
   );
   await expect(scanned.getByText("Scanned before it's listed.")).toHaveCount(0);
   await scanned.close();

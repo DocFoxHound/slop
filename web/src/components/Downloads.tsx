@@ -149,7 +149,9 @@ export function DownloadsStatus({
                 <b>{a.installed.title}</b>{" "}
                 <span className="muted small">
                   {a.update?.pending?.version}{" "}
-                  {a.update?.pending?.status === "fetching" ? "is being downloaded and scanned by SLAPorSLOP" : "is waiting for a person to review it"}
+                  {a.update?.pending?.status === "fetching"
+                    ? "is being downloaded and scanned by SLAPorSLOP"
+                    : "is being checked by SLAPorSLOP; it installs once its maker publishes it"}
                 </span>
               </li>
             ))}

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { isValidElement, type ReactNode } from "react";
 import type { AppDetail, Release } from "../api";
-import { about, ago, currentStep, fileLabel, progressSteps, refreshEvery } from "./PublishProgress";
+import { about, ago, currentStep, fileLabel, holdActions, progressSteps, refreshEvery } from "./PublishProgress";
 
 /** The text in a step's detail, which may hold links. */
 function textOf(node: ReactNode): string {
@@ -39,6 +39,7 @@ const file = (
   scan_detail: "not scanned: scanning is off on this server",
   scan_report: null,
   defender: null,
+  cleared: false,
   cleared_reason: null,
   ...over,
 });
@@ -80,7 +81,7 @@ describe("progressSteps", () => {
     });
   });
 
-  it("shows a release waiting for review on a test server", () => {
+  it("shows a release on hold, and one that passed, on a test server", () => {
     expect(states(progressSteps(app(), [release()], testServer))).toEqual({
       "Store page": "done",
       Release: "done",
@@ -88,12 +89,18 @@ describe("progressSteps", () => {
       "Maker signature": "skipped",
       Scan: "skipped",
       "Source check": "done",
-      "Review by a person": "active",
+      Checks: "problem",
+      Publish: "waiting",
+      "In the store": "waiting",
+    });
+    expect(states(progressSteps(app(), [release({ status: "ready" })], testServer))).toMatchObject({
+      Checks: "done",
+      Publish: "active",
       "In the store": "waiting",
     });
   });
 
-  it("flags source-check notes until a person has looked", () => {
+  it("shows source-check notes as information, never as something to wait for", () => {
     const repo_scan = {
       status: "checked" as const,
       licence: {
@@ -111,9 +118,10 @@ describe("progressSteps", () => {
         },
       ],
     };
-    const waiting = progressSteps(app(), [release({ repo_scan })], testServer);
+    const waiting = progressSteps(app(), [release({ repo_scan, status: "ready" })], testServer);
     expect(waiting.find((s) => s.title === "Source check")).toMatchObject({
-      state: "problem",
+      state: "done",
+      stateLabel: "Done, with notes",
     });
     expect(
       textOf(waiting.find((s) => s.title === "Source check")!.detail),
@@ -145,7 +153,7 @@ describe("progressSteps", () => {
     const step = progressSteps(app(), [release({ repo_scan })], testServer).find(
       (s) => s.title === "Source check",
     )!;
-    expect(step.state).toBe("problem");
+    expect(step.state).toBe("done");
     expect(textOf(step.detail)).toContain("2 notes");
   });
 
@@ -180,11 +188,15 @@ describe("progressSteps", () => {
       testServer,
     );
     expect(
-      textOf(rejected.find((s) => s.title === "Review by a person")!.detail),
-    ).toContain("loot boxes");
+      textOf(rejected.find((s) => s.title === "Checks")!.detail),
+    ).toContain("Turned down by SLAPorSLOP staff: loot boxes. Fix it and submit a new version, or ask SLAPorSLOP staff about it.");
+    // A failed release can always be asked about.
+    const checks = failed.find((s) => s.title === "Checks")!;
+    expect(checks).toMatchObject({ state: "problem", stateLabel: "Failed" });
+    expect(textOf(checks.detail)).toContain("ask SLAPorSLOP staff if you think the checks got it wrong");
   });
 
-  it("leaves out a release withdrawn before review", () => {
+  it("leaves out a release withdrawn before it was published", () => {
     const steps = progressSteps(
       app(),
       [
@@ -194,20 +206,29 @@ describe("progressSteps", () => {
       testServer,
     );
     expect(steps.find((s) => s.title === "Release")!.detail).toBe("Version 1.0.0 received.");
-    expect(textOf(steps.find((s) => s.title === "Review by a person")!.detail)).toContain("loot boxes");
+    expect(textOf(steps.find((s) => s.title === "Checks")!.detail)).toContain("loot boxes");
     const only = progressSteps(app(), [release({ status: "withdrawn" })], testServer);
     expect(only.find((s) => s.title === "Release")!.state).toBe("waiting");
   });
 
-  it("is waiting for staff once a release is approved", () => {
-    expect(
-      states(
-        progressSteps(app(), [release({ status: "approved" })], testServer),
-      ),
-    ).toMatchObject({
-      "Review by a person": "done",
+  it("waits for its maker to put it in the store once a release is published", () => {
+    const steps = progressSteps(app(), [release({ status: "approved" })], testServer);
+    expect(states(steps)).toMatchObject({
+      Checks: "done",
+      Publish: "done",
       "In the store": "active",
     });
+    expect(steps.at(-1)).toMatchObject({
+      stateLabel: "Waiting for you",
+      detail: "Ready: put it in the store when you want players to find it.",
+      action: "list",
+    });
+    // A private app is shared, never listed by its maker.
+    expect(progressSteps(app({ private: true }), [release({ status: "approved" })], testServer).at(-1)).toMatchObject({
+      state: "skipped",
+      stateLabel: "Private",
+    });
+    expect(steps.at(-1)!.action).toBe("list");
     expect(
       states(
         progressSteps(
@@ -243,30 +264,67 @@ describe("progressSteps", () => {
     });
   });
 
-  it("says why a release waits for a person, and when SLAPorSLOP approved it", () => {
-    const waiting = progressSteps(
+  it("says what holds a release, and that one that passed waits for its maker to publish it", () => {
+    const summary = "On hold: a scanner flagged the Windows (.zip) build. The Releases page shows what was found.";
+    const held = progressSteps(
       app(),
       [
         release({
-          status_reason:
-            "Waiting for a person: an app's first release is always reviewed by a person",
+          status_reason: "On hold: a scanner flagged the Windows (.zip) build",
+          progress: { stage: "on_hold", files_total: 1, files_checked: 1, started_at: null, seconds_per_file: null, remaining_seconds: null, summary },
+          hold: { status: "open", kinds: ["scan"], needs_staff: true, rescans_left: 3, unanswered: false },
         }),
       ],
       testServer,
     );
-    const review = waiting.find((s) => s.title === "Review by a person")!;
-    expect(textOf(review.more)).toContain("Why a person: an app's first release is always reviewed by a person.");
-    expect(textOf(review.detail)).toBe("Waiting for review by a person at SLAPorSLOP. It usually takes a day or two.");
-    expect(textOf(review.more)).toContain("you get a notification");
-    expect(review.stateLabel).toBe("Waiting for a person");
-    const auto = progressSteps(
-      app({ status: "listed" }),
-      [release({ status: "approved", auto_approved: true })],
+    const checks = held.find((s) => s.title === "Checks")!;
+    expect(checks).toMatchObject({ state: "problem", stateLabel: "On hold", detail: summary });
+    expect(textOf(checks.more)).toBe(
+      "See what holds version 1.0.0: scan again, write to SLAPorSLOP staff, or send a new version.",
+    );
+    // A missing Defender check is the maker's: it goes on by itself once Slop Check reports.
+    const missing = progressSteps(
+      app(),
+      [release({ hold: { status: "open", kinds: ["defender_missing"], needs_staff: false, rescans_left: 3, unanswered: false } })],
       testServer,
+    ).find((s) => s.title === "Checks")!;
+    expect(missing.stateLabel).toBe("Waiting for Microsoft Defender's check");
+    expect(textOf(missing.more)).toContain("run Slop Check, and it goes on by itself");
+    // What the maker can do follows what holds it: Scan again only for a scanner's hold with re-runs left.
+    const summary1 = (kinds: string[], over: object = {}) =>
+      ({ status: "open", kinds, needs_staff: true, rescans_left: 3, unanswered: false, ...over }) as Release["hold"];
+    expect(holdActions(summary1(["rating_lowered"]), false)).toBe(": write to SLAPorSLOP staff there, or send a new version.");
+    expect(holdActions(summary1(["defender"]), false)).toBe(": write to SLAPorSLOP staff there, or send a new version.");
+    expect(holdActions(summary1(["scan"], { rescans_left: 0 }), false)).toBe(": write to SLAPorSLOP staff there, or send a new version.");
+    expect(holdActions(summary1(["scan", "rating_lowered"]), false)).toBe(": scan again, write to SLAPorSLOP staff, or send a new version.");
+    // Outside GitHub, a missing Defender check is staff's (needs_staff): no Slop Check.
+    expect(holdActions(summary1(["defender_missing"]), false)).toBe(": write to SLAPorSLOP staff there, or send a new version.");
+
+    const ready = progressSteps(app({ status: "listed" }), [release({ status: "ready" })], testServer);
+    const publish = ready.find((s) => s.title === "Publish")!;
+    expect(publish).toMatchObject({ state: "active", stateLabel: "Waiting for you" });
+    expect(textOf(publish.detail)).toBe("Version 1.0.0 passed every check. Publish it and players get it.");
+    expect(currentStep(ready).title).toBe("Publish");
+    // A draft: players get nothing until its maker puts it in the store.
+    const draftReady = progressSteps(app(), [release({ status: "ready" })], testServer).find((s) => s.title === "Publish")!;
+    expect(textOf(draftReady.detail)).toBe(
+      "Version 1.0.0 passed every check. Publish it; players can get it once you put the app in the store.",
     );
-    expect(textOf(auto.find((s) => s.title === "Review by a person")?.detail)).toContain(
-      "automatically",
+    const draftUpdate = progressSteps(app(), [release({ id: "r2", version: "1.1.0", status: "fetching" }), release({ status: "approved" })], testServer);
+    expect(draftUpdate.find((s) => s.title === "Publish")!.detail).toBe(
+      "Version 1.0.0 is published: players can get it once you put the app in the store.",
     );
+    const cleared = progressSteps(app(), [release({ status: "ready", hold: { status: "cleared", kinds: ["scan"], needs_staff: true, rescans_left: 3, unanswered: false } })], testServer);
+    expect(cleared.find((s) => s.title === "Checks")!.detail).toBe("Version 1.0.0 passed: SLAPorSLOP staff accepted its hold.");
+
+    const published = progressSteps(app({ status: "listed" }), [release({ status: "approved" })], testServer);
+    expect(published.find((s) => s.title === "Publish")!.detail).toBe("You published version 1.0.0.");
+    // An update under way leaves the published one with players.
+    const update = progressSteps(app({ status: "listed" }), [release({ id: "r2", version: "1.1.0", status: "fetching" }), release({ status: "approved" })], testServer);
+    expect(update.find((s) => s.title === "Publish")).toMatchObject({
+      state: "done",
+      detail: "Version 1.0.0 is published: players keep it until you publish a newer one.",
+    });
   });
 
   it("points at the step an app is stuck on or waiting for", () => {
@@ -275,7 +333,7 @@ describe("progressSteps", () => {
     );
     expect(
       currentStep(progressSteps(app(), [release()], testServer)).title,
-    ).toBe("Review by a person");
+    ).toBe("Checks");
     const failed = progressSteps(
       app(),
       [release({ status: "failed", status_reason: "HTTP 404" })],
@@ -333,7 +391,7 @@ describe("progressSteps", () => {
     expect(files.items![0].detail).toBe("Took 5 minutes");
     expect(files.items![1].detail).toBe("Started 2 minutes ago");
     expect(steps.find((s) => s.title === "Release")!.detail).toBe("Version 1.0.0 received from Slop Build.");
-    expect(states(steps)).toMatchObject({ Scan: "waiting", "Source check": "waiting", "Review by a person": "waiting" });
+    expect(states(steps)).toMatchObject({ Scan: "waiting", "Source check": "waiting", Checks: "waiting", Publish: "waiting" });
     expect(currentStep(steps).title).toBe("Files checked");
 
     // A file taking longer than usual says so instead of counting below zero.
@@ -374,16 +432,39 @@ describe("progressSteps", () => {
     expect(items[1].detail).toContain('signed with your key "laptop"');
     const scan = steps.find((s) => s.title === "Scan")!;
     expect(scan).toMatchObject({ state: "problem", stateLabel: "On hold", detail: "Windows (.zip) is on hold: YARA: Packed_UPX." });
-    expect(textOf(scan.more)).toContain("a person at SLAPorSLOP looks");
+    expect(textOf(scan.more)).toContain("SLAPorSLOP staff look at it, and you can scan again or tell them why it's a false positive");
     expect(states(steps)["Maker signature"]).toBe("done");
-    expect(textOf(steps.find((s) => s.title === "Review by a person")!.detail)).toContain("looks at the file on hold first");
+    expect(currentStep(steps).title).toBe("Scan");
+    // Cleared by staff: done, with their note if they left one.
+    const cleared = progressSteps(
+      app(),
+      [release({ status: "ready", files: [file({ check: "checked", scan_result: "on_hold", scan_detail: "YARA: Packed_UPX.", cleared: true })] })],
+      { scanning: true, maker_signatures_required: false },
+    );
+    expect(cleared.find((s) => s.title === "Files checked")!.items![0]).toMatchObject({
+      state: "done",
+      status: "Cleared by SLAPorSLOP staff",
+    });
+    expect(cleared.find((s) => s.title === "Files checked")!.items![0].detail).toMatch(
+      /^Found: YARA: Packed_UPX\.; cleared as a false positive · /,
+    );
+    const noted = progressSteps(
+      app(),
+      [release({ status: "ready", files: [file({ check: "checked", scan_result: "on_hold", scan_detail: "YARA: Packed_UPX.", cleared: true, cleared_reason: "UPX-packed Godot runtime." })] })],
+      { scanning: true, maker_signatures_required: false },
+    );
+    expect(noted.find((s) => s.title === "Files checked")!.items![0].detail).toContain(
+      "cleared as a false positive: UPX-packed Godot runtime.",
+    );
+    expect(noted.find((s) => s.title === "Scan")!.detail).toBe("Flagged, then cleared by SLAPorSLOP staff as a false positive.");
   });
 
-  it("refreshes often while files are checked, now and then during review, and stops when done", () => {
+  it("refreshes often while files are checked, now and then on hold, and stops when it waits for its maker", () => {
     expect(refreshEvery([release({ status: "fetching" })])).toBe(10_000);
     expect(refreshEvery([release({ status: "awaiting_review" })])).toBe(60_000);
-    // Fetched, but SLAPorSLOP hasn't read the source yet: that shows within seconds.
-    expect(refreshEvery([release({ status: "awaiting_review", repo_scan: null })])).toBe(10_000);
+    // Passed, but SLAPorSLOP hasn't read the source yet: Publish waits for that.
+    expect(refreshEvery([release({ status: "ready", repo_scan: null })])).toBe(60_000);
+    expect(refreshEvery([release({ status: "ready" })])).toBeNull();
     expect(refreshEvery([release({ status: "approved" })])).toBeNull();
     expect(refreshEvery([release({ status: "withdrawn" }), release({ status: "rejected" })])).toBeNull();
     expect(refreshEvery([])).toBeNull();
@@ -421,7 +502,7 @@ describe("progressSteps", () => {
       const none = progressSteps(game(), [], testServer);
       expect(states(none)).toEqual({ "Store page": "done", "Play address": "waiting", "In the store": "waiting" });
       expect(currentStep(none).title).toBe("Play address");
-      expect(none.find((s) => s.title === "In the store")!.detail).toBe("After the play address is approved.");
+      expect(none.find((s) => s.title === "In the store")!.detail).toBe("Once you've published its play address.");
       expect(states(progressSteps(game({ stage: "coming_soon" }), [], testServer))).toEqual({
         "Store page": "done",
         "Play address": "skipped",
@@ -437,7 +518,8 @@ describe("progressSteps", () => {
         "Address checked": "done",
         "What SLAPorSLOP can't check": "skipped",
         "Source check": "done",
-        "Review by a person": "active",
+        Checks: "problem",
+        Publish: "waiting",
         "In the store": "waiting",
       });
       expect(steps.find((s) => s.title === "Play address")!.detail).toBe("Version 1.0.0: https://games.example.com/play/ received.");
@@ -455,7 +537,15 @@ describe("progressSteps", () => {
       expect(checked.items![2].detail).toContain("No bad-link lists are loaded on this server");
       const words = all(steps);
       expect(words).not.toMatch(/\bsigned\b|\bscanned\b|downloaded|hashed/i);
-      expect(textOf(steps.find((s) => s.title === "Review by a person")!.more)).toContain("Play opens this address");
+      expect(textOf(steps.find((s) => s.title === "Checks")!.more)).toContain("write to SLAPorSLOP staff there");
+      const ready = progressSteps(game({ status: "listed" }), [address({ status: "ready" })], testServer);
+      expect(textOf(ready.find((s) => s.title === "Publish")!.detail)).toBe(
+        "Version 1.0.0 passed every check. Publish it and Play opens its address.",
+      );
+      expect(textOf(progressSteps(game(), [address({ status: "ready" })], testServer).find((s) => s.title === "Publish")!.detail)).toBe(
+        "Version 1.0.0 passed every check. Publish it; players can play it once you put the game in the store.",
+      );
+      expect(all(ready)).not.toMatch(/\bsigned\b|\bscanned\b|downloaded|hashed/i);
     });
 
     it("shows the checks under way, and a failure with its reason and what to fix", () => {
@@ -493,16 +583,14 @@ describe("progressSteps", () => {
       expect(states(steps)["Source check"]).toBe("done");
     });
 
-    it("once approved, says Play opens it, and never that it's signed", () => {
+    it("once published, says so, and never that it's signed", () => {
       const done = progressSteps(game({ status: "listed" }), [address({ status: "approved" })], testServer);
-      expect(states(done)).toMatchObject({ "Review by a person": "done", "In the store": "done" });
-      expect(textOf(done.find((s) => s.title === "Review by a person")!.detail)).toBe("Version 1.0.0 approved by a person at SLAPorSLOP.");
+      expect(states(done)).toMatchObject({ Checks: "done", Publish: "done", "In the store": "done" });
+      expect(textOf(done.find((s) => s.title === "Publish")!.detail)).toBe("You published version 1.0.0.");
       expect(all(done)).not.toMatch(/\bsigned\b|\bscanned\b/i);
-      const auto = progressSteps(game(), [address({ status: "approved", auto_approved: true })], testServer);
-      expect(textOf(auto.find((s) => s.title === "Review by a person")!.detail)).toContain("a person approved this address before");
       const revoked = progressSteps(game(), [address({ status: "revoked", status_reason: "it asks for passwords" })], testServer);
-      expect(textOf(revoked.find((s) => s.title === "Review by a person")!.detail)).toBe(
-        "Withdrawn by SLAPorSLOP: it asks for passwords. Play opens nothing until a person approves a new address: submit one on the Releases page.",
+      expect(textOf(revoked.find((s) => s.title === "Publish")!.detail)).toBe(
+        "Withdrawn by SLAPorSLOP: it asks for passwords. Play opens nothing until you publish a new address: submit one on the Releases page.",
       );
     });
 
@@ -526,16 +614,16 @@ describe("progressSteps", () => {
         [withdrawn({ plays_now: undefined }), address({ status: "approved" })],
       ]) {
         const steps = progressSteps(game({ status: "listed" }), releases, testServer);
-        expect(states(steps)).toMatchObject({ "Review by a person": "problem", "In the store": "problem" });
-        const review = steps.find((s) => s.title === "Review by a person")!;
-        expect(review.stateLabel).toBe("Withdrawn");
-        expect(textOf(review.detail)).toBe(
-          "Withdrawn by SLAPorSLOP: it asks for passwords. Play opens nothing until a person approves a new address: submit one on the Releases page.",
+        expect(states(steps)).toMatchObject({ Publish: "problem", "In the store": "problem" });
+        const publish = steps.find((s) => s.title === "Publish")!;
+        expect(publish.stateLabel).toBe("Withdrawn");
+        expect(textOf(publish.detail)).toBe(
+          "Withdrawn by SLAPorSLOP: it asks for passwords. Play opens nothing until you publish a new address: submit one on the Releases page.",
         );
         const store = steps.find((s) => s.title === "In the store")!;
         expect(store.stateLabel).toBe("Play opens nothing");
-        expect(store.detail).toBe("Players can find it, but Play opens nothing until a person at SLAPorSLOP approves a new play address.");
-        expect(currentStep(steps).title).toBe("Review by a person");
+        expect(store.detail).toBe("Players can find it, but Play opens nothing until you publish a new play address.");
+        expect(currentStep(steps).title).toBe("Publish");
         expect(all(steps)).not.toContain("Players can find it.");
       }
     });
@@ -546,10 +634,11 @@ describe("progressSteps", () => {
         [address({ id: "r3", version: "1.2.0", status: "rejected", status_reason: "it's another game", plays_now: false }), withdrawn(), older],
         testServer,
       );
-      const review = rejected.find((s) => s.title === "Review by a person")!;
-      expect(review.state).toBe("problem");
-      expect(textOf(review.detail)).toContain(
-        "Not approved: it's another game. Fix it and submit the address again with a new version. Play opens nothing meanwhile: SLAPorSLOP withdrew version 1.1.0 (it asks for passwords).",
+      const checks = rejected.find((s) => s.title === "Checks")!;
+      expect(checks.state).toBe("problem");
+      expect(textOf(checks.detail)).toContain("Turned down by SLAPorSLOP staff: it's another game. Fix it and submit a new version, or ask SLAPorSLOP staff about it.");
+      expect(textOf(rejected.find((s) => s.title === "Publish")!.detail)).toBe(
+        "Version 1.1.0 was withdrawn by SLAPorSLOP: it asks for passwords. Play opens nothing until you publish a new address: submit one on the Releases page.",
       );
       expect(states(rejected)["In the store"]).toBe("problem");
 
@@ -558,38 +647,43 @@ describe("progressSteps", () => {
         [address({ id: "r3", version: "1.2.0", plays_now: false }), withdrawn(), older],
         testServer,
       );
-      expect(textOf(waiting.find((s) => s.title === "Review by a person")!.more)).toContain(
+      expect(waiting.find((s) => s.title === "Publish")!.state).toBe("waiting");
+      expect(textOf(waiting.find((s) => s.title === "Publish")!.more)).toContain(
         "Play opens nothing meanwhile: SLAPorSLOP withdrew version 1.1.0 (it asks for passwords).",
       );
     });
 
-    it("follows the address Play opens, not the newest approved one", () => {
+    it("follows the address Play opens, not the newest published one", () => {
       // An older address is the one Play opens (approved after the newer one, then that was withdrawn).
       const steps = progressSteps(
         game({ status: "listed" }),
         [withdrawn({ status: "approved", status_reason: undefined }), address({ status: "approved", plays_now: true })],
         testServer,
       );
-      expect(states(steps)).toMatchObject({ "Review by a person": "done", "In the store": "done" });
+      expect(states(steps)).toMatchObject({ Publish: "done", "In the store": "done" });
       // Withdrawing an older address leaves Play on the current one: still done.
       const current = progressSteps(
         game({ status: "listed" }),
         [address({ id: "r2", version: "1.1.0", status: "approved", plays_now: true }), address({ status: "revoked", plays_now: false })],
         testServer,
       );
-      expect(states(current)).toMatchObject({ "Review by a person": "done", "In the store": "done" });
+      expect(states(current)).toMatchObject({ Publish: "done", "In the store": "done" });
     });
 
-    it("Coming soon: the address is approved before Beta, and Play opens it once the game is in Beta", () => {
+    it("Coming soon: the address is published before Beta, and Play opens it once the game is in Beta", () => {
       const none = progressSteps(game({ stage: "coming_soon" }), [], testServer);
       expect(none.find((s) => s.title === "Play address")!.detail).toBe(
-        "Coming soon pages go in the store without a play address. Add it, and have it approved, before you move to Beta.",
+        "Coming soon pages go in the store without a play address. Add it, and publish it, before you move to Beta.",
       );
-      const waiting = progressSteps(game({ stage: "coming_soon" }), [address()], testServer);
-      expect(textOf(waiting.find((s) => s.title === "Review by a person")!.more)).toContain(
-        "if it's approved, Play opens this address once the game is in Beta;",
+      const ready = progressSteps(game({ stage: "coming_soon", status: "listed" }), [address({ status: "ready" })], testServer);
+      expect(textOf(ready.find((s) => s.title === "Publish")!.detail)).toBe(
+        "Version 1.0.0 passed every check. Publish it and Play opens its address once the game is in Beta.",
       );
-      // A Coming soon page in the store with nothing approved yet is where it should be.
+      const draft = progressSteps(game({ stage: "coming_soon" }), [address({ status: "ready" })], testServer);
+      expect(textOf(draft.find((s) => s.title === "Publish")!.detail)).toBe(
+        "Version 1.0.0 passed every check. Publish it; Play opens its address once the game is in the store and in Beta.",
+      );
+      // A Coming soon page in the store with nothing published yet is where it should be.
       expect(states(progressSteps(game({ stage: "coming_soon", status: "listed" }), [], testServer))["In the store"]).toBe("done");
     });
   });
@@ -609,13 +703,13 @@ describe("progressSteps", () => {
 
     it("calls its code loading a note, not a problem; a download's notes read as before", () => {
       for (const said of [detail({ tags: ["dedicated-server"] }), detail({}, { dedicated_server: true })]) {
-        expect(said).toContain("1 note about the licence, selling or code loading in the app, for you and the reviewer");
+        expect(said).toContain("1 note about the licence, selling or code loading in the app: see the release below.");
         expect(said).toContain(
           "A dedicated server may load mods, maps and plugins from other places: the Content Policy's rule on outside code doesn't cover it, so that's a note, not a problem.",
         );
       }
       expect(detail({ tags: ["puzzle"] })).toBe(
-        "1 note about the licence or selling in the app, for you and the reviewer: see the release below. See what to fix (with \"Copy for your AI\"), or ask your AI agent to run get_fixes.",
+        "1 note about the licence or selling in the app: see the release below. See what to fix (with \"Copy for your AI\"), or ask your AI agent to run get_fixes.",
       );
     });
 
@@ -624,7 +718,7 @@ describe("progressSteps", () => {
       expect(detail({ tags: [], server_for: "castle" })).toContain("A dedicated server may load mods, maps and plugins");
       const draft = progressSteps(app({ status: "draft", server_for: "castle" }), [], testServer);
       expect(draft[0]).toMatchObject({ title: "Dedicated server", state: "done" });
-      expect(draft[0].detail).toBe("Saved as a draft. Once it's in the store, players get it on its game's store page.");
+      expect(draft[0].detail).toBe("Saved. Once it's in the store, players get it on its game's store page.");
       const listed = progressSteps(app({ status: undefined, server_for: "castle" }), [release({ status: "approved" })], testServer);
       expect(listed.at(-1)).toMatchObject({ title: "In the store", detail: "Players can get it on its game's store page." });
     });

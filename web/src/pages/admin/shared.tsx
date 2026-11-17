@@ -97,6 +97,46 @@ export function ReasonButton({
   );
 }
 
+/**
+ * An action with an optional note (clearing a false positive, accepting a hold, keeping a
+ * re-scanned release): the note field and the button side by side, so it's one press with no
+ * explanation needed (decided 2026-11). An empty note sends none.
+ */
+export function NoteAction({
+  label,
+  noteLabel = "Note for the maker (optional)",
+  placeholder,
+  primary,
+  disabled,
+  onSubmit,
+}: {
+  label: string;
+  noteLabel?: string;
+  placeholder?: string;
+  primary?: boolean;
+  disabled?: boolean;
+  onSubmit: (note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  return (
+    <form
+      className="reason-form note-action"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(note.trim());
+      }}
+    >
+      <label className="small">
+        {noteLabel}
+        <input value={note} maxLength={1000} placeholder={placeholder} onChange={(e) => setNote(e.target.value)} />
+      </label>
+      <button className={`btn small ${primary ? "slime" : ""}`} disabled={disabled}>
+        {label}
+      </button>
+    </form>
+  );
+}
+
 /** Picks a Content Policy rule for a decision. */
 export function RuleSelect({
   rules,

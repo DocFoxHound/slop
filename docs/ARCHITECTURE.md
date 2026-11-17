@@ -43,7 +43,7 @@ production (`slaporslop.games`, its own server set up the same way) runs only co
 
 | Goal | Consequence for the architecture |
 |---|---|
-| Nothing reaches a player without being scanned | Every build passes through one pipeline. The CDN only serves files listed in a manifest SLAPorSLOP has signed. A browser game sends nothing through SLAPorSLOP: it plays from its maker's site, whose address is checked and approved by a person instead (§6.8). |
+| Nothing reaches a player without being scanned | Every build passes through one pipeline. The CDN only serves files listed in a manifest SLAPorSLOP has signed. A browser game sends nothing through SLAPorSLOP: it plays from its maker's site, whose address is checked instead, and published by its maker (§6.8). |
 | A stolen SLAPorSLOP account can't push malware | Builds must carry the **pipeline's or maker's** signature as well as SLAPorSLOP's (§6.3). |
 | SLAPorSLOP never holds money | Payments run on makers' own Stripe accounts. SLAPorSLOP only records them (`PAYMENTS.md`). |
 | Small budget | Builds are made on GitHub's free runners (§6.2) and stay on the **maker's own release pages**. SLAPorSLOP stores only small signed manifests (§6.4). A single modular application, managed Postgres and a container service with autoscaling. No Kafka, no self-run Kubernetes, no own servers. |
@@ -190,7 +190,7 @@ staff command line included, is covered without a hook.
                                                                                                  │
           SLAPorSLOP scan environment ◄── downloads each file once, scans it, then deletes it ◄────────┘
                    │
-                   └─► SLAPorSLOP signs a small manifest: { file URL, SHA-256, size, maker/recipe signature, verdict }
+                   └─► passed (ready) ─► the maker presses Publish ─► SLAPorSLOP signs a small manifest: { file URL, SHA-256, size, maker/recipe signature, verdict }
                                    │
  Player's SLAPorSLOP app ─► reads the manifest ─► downloads from the maker's release page ─► checks hash + both signatures ─► installs ─► launches
 ```
@@ -206,7 +206,8 @@ staff command line included, is covered without a hook.
    - **A stolen SLAPorSLOP session alone can't publish anything.**
 3. **SLAPorSLOP verifies** the signature, that the commit exists in the linked repo, and the recipe identity.
 4. **Scans** run in the isolated environment (DESIGN §10, `SECURITY.md` §5.2). Files are deleted after scanning.
-5. **SLAPorSLOP signs** the release manifest (`SECURITY.md` §5.3) and publishes it, along with the transparency log entry.
+5. **The checks end** (`publish.rs` `finish_checks`): **ready** (passed, waiting for its maker), **on hold** (a scanner or Defender finding or a lowered age rating for SLAPorSLOP staff; a missing Defender check until Slop Check reports; `holds.rs`), or **failed** with the reason.
+   **The maker publishes it** (`POST /v1/apps/{slug}/releases/{id}/publish`, a person signed in on the website, never an agent), and only then **SLAPorSLOP signs** the release manifest (`SECURITY.md` §5.3; `approved_at` is the publish time) and publishes it, along with the transparency log entry. Players get the newest published release (`releases.published_at`).
 6. **The client:**
    - downloads each file from the maker's release page;
    - checks **both** signatures and the SHA-256 before writing anything;
@@ -255,7 +256,7 @@ locked-down container per file (`deploy/scanner`: ClamAV, YARA with YARA-Forge r
 network, read-only, nothing executed). Windows files also need a clean Microsoft Defender result
 from Slop Build or Slop Check on GitHub's Windows runners. Source checks (`source_scan.rs`: secrets,
 vulnerable or payment packages, licences, save folder, mods and Pulse use) run on the maker's
-runner and come back with the release. With `SLOP_SCANNER=off`, reviewers, makers and the store
+runner and come back with the release. With `SLOP_SCANNER=off`, staff, makers and the store
 see "not scanned", and nothing claims a file was scanned.
 
 Still to do (SECURITY §5.2): moving the scanner to its own cloud account, signing its verdicts, and
@@ -277,7 +278,7 @@ website. There's nothing to build, sign, store or install, so none of §6.2 to �
       only, 20 s a request and 45 s in all, ≤ 5 redirects each checked, ≤ 2 MB read, nothing kept)
       ─► releases.address_checks
                                                          │
- Source check of the repository at the commit ─► waits for a person ─► approved (no manifest, nothing signed)
+ Source check of the repository at the commit ─► ready ─► the maker publishes it (no manifest, nothing signed)
                                                          │
  Store page play_address (catalog::PLAY_ADDRESS) ─► Play: launch recorded, the player's browser opens it
 ```
@@ -287,16 +288,17 @@ website. There's nothing to build, sign, store or install, so none of §6.2 to �
   address on the way, content type, when, ok, problem);
   `release_files` stays empty, and `slop_manifest::Platform` never includes browser. A database
   check refuses a signed manifest on an address release.
-- `releases::SERVING` includes approved address releases, so votes, bounties, the label, the
+- `releases::SERVING` includes published address releases, so votes, bounties, the label, the
   admin panel and the dependency watch see them. What needs a manifest (`/manifest`, library
   updates, sandbox info, re-scans, the revocation list) still takes only releases with a signed
   manifest (`releases::SERVING_SIGNED`, or the same condition written out).
-- Where Play goes is `catalog::PLAY_ADDRESS` (and `PLAY_RELEASE`): the newest reviewed approved
+- Where Play goes is `catalog::PLAY_ADDRESS` (and `PLAY_RELEASE`): the newest published
   address, or none once that one is withdrawn. The maker's releases say which one it is
   (`plays_now`), so their progress never claims Play opens an address it doesn't. Holds, Slop Build, the GitHub picker and watcher,
   demos, mods, branches, sandbox reports and save sync refuse browser games.
-- Automatic approval (`updates::try_auto_approve`) applies only to a release with exactly the
-  address Play opens now (`releases::same_address`); a new address waits for a person.
+- Every address is published by its maker; the Publish panel says when it's a new site rather
+  than the address Play opens now (`releases::same_address`). A lowered age rating holds it for
+  SLAPorSLOP staff, as for downloads.
 - The fetcher checks addresses ahead of files, but never two in a row while a file release waits,
   with one 45-second deadline per address and a 3-minute lease (files: 40).
 - The hourly abuse checks (`abuse.rs`) look for current and pending addresses, and every address

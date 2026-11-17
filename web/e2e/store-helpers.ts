@@ -84,7 +84,7 @@ export async function draftApp(slug: string, title: string, o: AppOptions = {}):
   return slug;
 }
 
-/** An approved release (for a browser game, an approved play address), unless the app has one already. */
+/** A published release (for a browser game, a published play address), unless the app has one already. */
 export async function released(slug: string, who: Who = "maker2", browser = false): Promise<void> {
   const releases = await call<Array<{ status: string }>>(who, "GET", `/v1/apps/${slug}/releases`);
   if (releases.some((r) => r.status === "approved")) return;
@@ -92,7 +92,7 @@ export async function released(slug: string, who: Who = "maker2", browser = fals
   else await approvedRelease(slug, "1.0.0", who);
 }
 
-/** Submits a release from the fake GitHub, waits for SLAPorSLOP to fetch it, and has staff approve it. */
+/** Submits a release from the fake GitHub, waits for SLAPorSLOP's checks to pass it, and its maker publishes it. */
 export async function approvedRelease(slug: string, version = "1.0.0", who: Who = "maker2"): Promise<string> {
   const release = await call<{ id: string }>(who, "POST", `/v1/apps/${slug}/releases`, {
     version,
@@ -107,14 +107,14 @@ export async function approvedRelease(slug: string, version = "1.0.0", who: Who 
     ],
   });
   await checked(who, slug, version, release.id);
-  await call("admin", "POST", `/v1/admin/releases/${release.id}/approve`);
+  await call(who, "POST", `/v1/apps/${slug}/releases/${release.id}/publish`);
   return release.id;
 }
 
 /** Where a test's browser game plays: a page on the fake GitHub (e2e_server/main.rs serves `/<owner>/<repo>/play/`). */
 export const playAddress = (slug: string) => `${server.fake}bo/${slug}/play/`;
 
-/** Submits a browser game's play address, waits for SLAPorSLOP to check it, and has staff approve it. */
+/** Submits a browser game's play address, waits for SLAPorSLOP to check it, and its maker publishes it. */
 export async function approvedPlayAddress(slug: string, version = "1.0.0", who: Who = "maker2"): Promise<string> {
   const release = await call<{ id: string }>(who, "POST", `/v1/apps/${slug}/releases`, {
     version,
@@ -122,16 +122,16 @@ export async function approvedPlayAddress(slug: string, version = "1.0.0", who: 
     play_address: playAddress(slug),
   });
   await checked(who, slug, version, release.id);
-  await call("admin", "POST", `/v1/admin/releases/${release.id}/approve`);
+  await call(who, "POST", `/v1/apps/${slug}/releases/${release.id}/publish`);
   return release.id;
 }
 
-/** Waits until SLAPorSLOP has fetched and checked a release, and it waits for review. */
+/** Waits until SLAPorSLOP has fetched and checked a release, and it passed (ready to publish). */
 async function checked(who: Who, slug: string, version: string, id: string) {
   for (let i = 0; ; i++) {
     const releases = await call<Array<{ id: string; status: string; status_reason?: string }>>(who, "GET", `/v1/apps/${slug}/releases`);
     const release = releases.find((r) => r.id === id);
-    if (release?.status === "awaiting_review") return;
+    if (release?.status === "ready") return;
     if (i > 100 || (release && !["fetching", "scanning"].includes(release.status))) {
       throw new Error(`release ${slug} ${version} is ${release?.status}${release?.status_reason ? `: ${release.status_reason}` : ""}`);
     }
@@ -139,19 +139,21 @@ async function checked(who: Who, slug: string, version: string, id: string) {
   }
 }
 
-/** Staff put a draft in the store. */
-export async function list(slug: string) {
-  await call("admin", "POST", `/v1/admin/apps/${slug}/list`);
+/** Puts an app in the store: a draft by its maker `who` (as Put it in the store does), one a test
+ *  took out by staff (relisting is theirs). */
+export async function list(slug: string, who: Who = "maker2") {
+  if ((await mine(who, slug))?.status === "draft") await call(who, "POST", `/v1/apps/${slug}/list`);
+  else await call("admin", "POST", `/v1/admin/apps/${slug}/list`);
 }
 
-/** A game in the store: Bo's unless said, released with an approved 1.0.0 unless said (with
- * `platforms: ["browser"]`, an approved play address, playAddress). Picks up where it left off
+/** A game in the store: Bo's unless said, released with a published 1.0.0 unless said (with
+ * `platforms: ["browser"]`, a published play address, playAddress). Picks up where it left off
  * when it's there already (and lists it again if a test took it out). */
 export async function listedApp(slug: string, title: string, o: AppOptions = {}): Promise<string> {
   const who = o.who ?? "maker2";
   await draftApp(slug, title, o);
   if ((o.stage ?? "released") !== "coming_soon") await released(slug, who, o.platforms?.includes("browser"));
-  if ((await mine(who, slug))?.status !== "listed") await list(slug);
+  if ((await mine(who, slug))?.status !== "listed") await list(slug, who);
   return slug;
 }
 

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Manage an app: which release players get, the repository, update settings and the requests
 // that change them (crates/slop-api/src/manage.rs), with ratings and bug reports beside them, in
-// the maker's workspace (components/MakerFrame.tsx: the stage bar and the tabs). Anything that
-// would have players download something different is checked before it happens; everything else
-// the maker changes directly. A browser game has no release to hold players at: Play always opens
-// its newest approved address (crates/slop-api/src/catalog.rs PLAY_ADDRESS), so Manage only says
-// where Play goes.
+// the maker's workspace (components/MakerFrame.tsx: the stage bar and the tabs). Holding players
+// at a published release applies at once; moving the repository is checked by SLAPorSLOP staff;
+// everything else the maker changes directly. A browser game has no release to hold players at:
+// Play always opens its newest published address (crates/slop-api/src/catalog.rs PLAY_ADDRESS),
+// so Manage only says where Play goes.
 
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
@@ -124,7 +124,7 @@ export function Manage() {
  *  browser game's Play opens nothing for players once it has left the store. Exported for tests. */
 export function stillWorks(browser: boolean, outOfStore: boolean): string {
   if (!browser) return "Copies people installed keep working.";
-  return outOfStore ? "Players can't open it from SLAPorSLOP while it's out of the store." : "Play keeps opening the approved address.";
+  return outOfStore ? "Players can't open it from SLAPorSLOP while it's out of the store." : "Play keeps opening the published address.";
 }
 
 /** SLAPorSLOP can't read the repository (SECURITY §12.2): no new releases, and out after 14 days. */
@@ -279,12 +279,12 @@ function PulseNeeded({ received }: { received: boolean }) {
     <section className="panel panel-pad">
       <h2>Slop Pulse</h2>
       {received ? (
-        <p>✓ SLAPorSLOP has had a Pulse handshake from this build, so it can be listed once a reviewer looks at it.</p>
+        <p>✓ SLAPorSLOP has had a Pulse handshake from this build, so it can go in the store.</p>
       ) : (
         <p>
-          The game this branches from counts players with Slop Pulse, so community builds of it must include it too, and a
-          reviewer can't list this one before its first Pulse handshake. Keep the Pulse code from the original, then
-          install your approved build through SLAPorSLOP and launch it once. See the{" "}
+          The game this branches from counts players with Slop Pulse, so community builds of it must include it too, and this
+          one can't go in the store before its first Pulse handshake. Keep the Pulse code from the original, then install
+          your published build through SLAPorSLOP and launch it once. See the{" "}
           <Link to="/publish/guide#slop-pulse-player-counts">publishing guide</Link>.
         </p>
       )}
@@ -301,8 +301,8 @@ function GoPublic({ slug, requested, onChanged }: { slug: string; requested: boo
       {requested ? (
         <>
           <p>
-            Waiting for a reviewer. They check the repository again from scratch; once they list it, it's in the store for
-            everyone, and the people you shared it with keep it like anyone else. It stays private until then.
+            Waiting for SLAPorSLOP staff. They check the repository again from scratch; once they list it, it's in the store
+            for everyone, and the people you shared it with keep it like anyone else. It stays private until then.
           </p>
           <button type="button" className="btn" disabled={busy} onClick={() => void submit(() => api.cancelMakePublic(slug))}>
             Keep it private
@@ -312,7 +312,7 @@ function GoPublic({ slug, requested, onChanged }: { slug: string; requested: boo
         <>
           <p>
             Apps in the store need public source. Make the repository public under its open-source licence first, then ask
-            here. A reviewer checks it again before it goes in the store.
+            here. SLAPorSLOP staff check it again before it goes in the store.
           </p>
           <button type="button" className="btn" disabled={busy} onClick={() => void submit(() => api.makePublic(slug))}>
             Ask to make it public
@@ -354,20 +354,28 @@ function Outcome({ change }: { change: AppChange }) {
   return change.status === "approved" ? (
     <p className="notice">Done. {change.status_reason}</p>
   ) : (
-    <p className="notice">Sent for review. {change.status_reason} You'll see the decision below.</p>
+    <p className="notice">Sent to SLAPorSLOP staff. {change.status_reason} You'll see the decision below.</p>
   );
 }
 
-/** Where a release not reviewed yet is, and where it came from; a browser game's is a play address. Exported for tests. */
+/** Where a release not published yet is, and where it came from; a browser game's is a play address. Exported for tests. */
 export function describeWaiting(r: Pick<WaitingRelease, "status" | "source">, browser = false): string {
-  const where = r.status === "fetching" ? (browser ? "Checking the address" : "Checking files") : "Waiting for review";
+  const where =
+    r.status === "fetching"
+      ? browser
+        ? "Checking the address"
+        : "Checking files"
+      : r.status === "ready"
+        ? "Passed, not published"
+        : "On hold";
   const from = { maker: "submitted from your account", slop_build: "from Slop Build", github_release: "picked up from GitHub" }[
     r.source
   ];
   return `${where}, ${from}`;
 }
 
-/** Releases not reviewed yet: one the maker didn't send, or sent by mistake, can be withdrawn. */
+/** Releases not published yet: one the maker didn't send, or sent by mistake, can be withdrawn;
+ *  one that passed is published from the Releases page. */
 function WaitingReleases({
   slug,
   waiting,
@@ -382,17 +390,17 @@ function WaitingReleases({
   const { busy, error, submit } = useSubmit(onChanged);
   if (waiting.length === 0) return null;
   const withdraw = (r: WaitingRelease) => {
-    if (!window.confirm(`Withdraw v${r.version}? It won't be reviewed or reach players.`)) return;
+    if (!window.confirm(`Withdraw v${r.version}? It won't be published or reach players.`)) return;
     void submit(async () => {
       await api.withdrawRelease(slug, r.id);
     });
   };
   return (
     <section className="panel panel-pad">
-      <h2>Not reviewed yet</h2>
+      <h2>Not published yet</h2>
       <p className="muted small">
-        If you didn't send one of these, withdraw it and secure your accounts and repository. Your next release is then
-        reviewed by a person.
+        Nothing here reaches players until you publish it. If you didn't send one of these, withdraw it and secure your
+        accounts and repository.
       </p>
       {error && <p className="form-error">{error}</p>}
       <ul className="release-list">
@@ -401,9 +409,21 @@ function WaitingReleases({
             <span>
               <b>v{r.version}</b> <span className="muted small">{describeWaiting(r, browser)}, {formatDate(r.created_at)}</span>
             </span>
-            <button type="button" className="btn small" disabled={busy} onClick={() => withdraw(r)}>
-              Withdraw
-            </button>
+            <span className="row-actions">
+              {r.status === "ready" && (
+                <Link className="btn small slime" to={`/publish/${slug}/releases#release-${r.id}`}>
+                  Publish it on Releases
+                </Link>
+              )}
+              {r.status === "awaiting_review" && (
+                <Link className="btn small" to={`/publish/${slug}/releases#release-${r.id}`}>
+                  See what holds it
+                </Link>
+              )}
+              <button type="button" className="btn small" disabled={busy} onClick={() => withdraw(r)}>
+                Withdraw
+              </button>
+            </span>
           </li>
         ))}
       </ul>
@@ -412,9 +432,9 @@ function WaitingReleases({
 }
 
 /**
- * Where Play goes for a browser game: the address of its newest approved release, which can't be
- * held at another (one approved long ago may have lapsed or changed hands). After the newest was
- * withdrawn, nothing, until a person approves a new one.
+ * Where Play goes for a browser game: the address of its newest published release, which can't be
+ * held at another (one published long ago may have lapsed or changed hands). After SLAPorSLOP
+ * withdrew the newest, nothing, until its maker publishes a new one.
  */
 function WherePlayGoes({ slug, overview: m }: { slug: string; overview: ManageOverview }) {
   const releases = <Link to={`/publish/${slug}/releases`}>Releases</Link>;
@@ -428,23 +448,23 @@ function WherePlayGoes({ slug, overview: m }: { slug: string; overview: ManageOv
             <span className="muted">(v{m.serving.version})</span>
           </p>
           <p className="muted small">
-            Always the newest approved address. To send players somewhere else, submit the new address on {releases}: a
-            person checks every new address before Play opens it.
+            Always the newest published address. To send players somewhere else, submit the new address on {releases}:
+            SLAPorSLOP checks it, then you publish it.
           </p>
         </>
       ) : m.approved.length > 0 ? (
         <p className="notice">
-          Play opens nothing now: SLAPorSLOP withdrew the newest approved address. Submit a new one on {releases}; Play opens it
-          once a person approves it.
+          Play opens nothing now: SLAPorSLOP withdrew the newest published address. Submit a new one on {releases}; Play opens
+          it once it passes the checks and you publish it.
         </p>
       ) : (
-        <p className="muted">Nothing yet: no play address has been approved. Add it on {releases}.</p>
+        <p className="muted">Nothing yet: no play address has been published. Add it on {releases}.</p>
       )}
     </section>
   );
 }
 
-/** Which approved release players get: the newest, or one the maker holds them at. */
+/** Which published release players get: the newest, or one the maker holds them at. */
 function ReleaseChoice({ slug, overview: m, onChanged }: { slug: string; overview: ManageOverview; onChanged: () => void }) {
   const current = m.held && m.serving ? m.serving.id : NEWEST;
   const [choice, setChoice] = useState(current);
@@ -461,7 +481,8 @@ function ReleaseChoice({ slug, overview: m, onChanged }: { slug: string; overvie
       <section className="panel panel-pad">
         <h2>What players get</h2>
         <p className="muted">
-          Nothing yet: no release has been approved. <Link to={`/publish/${slug}/releases`}>Submit a release</Link> first.
+          Nothing yet: no release has been published. <Link to={`/publish/${slug}/releases`}>Submit a release</Link> and
+          publish it once it passes the checks.
         </p>
       </section>
     );
@@ -473,7 +494,7 @@ function ReleaseChoice({ slug, overview: m, onChanged }: { slug: string; overvie
       api.requestChange(slug, { kind: "release", release_id: choice === NEWEST ? null : choice, note: note || undefined }),
     );
   };
-  // What players would get after the change, to say whether it's checked first.
+  // What players would get after the change, to say whether their apps show an update.
   const after = choice === NEWEST ? newest?.id : choice;
   const downloads = after !== m.serving?.id;
 
@@ -482,16 +503,16 @@ function ReleaseChoice({ slug, overview: m, onChanged }: { slug: string; overvie
       <h2>What players get</h2>
       <p>
         Players get <b>v{m.serving?.version ?? "—"}</b>{" "}
-        {m.held ? <span className="badge soon">HELD AT THIS RELEASE</span> : <span className="badge official">NEWEST APPROVED</span>}
+        {m.held ? <span className="badge soon">HELD AT THIS RELEASE</span> : <span className="badge official">NEWEST PUBLISHED</span>}
       </p>
       {m.held && newest && newest.id !== m.serving?.id && (
         <p className="notice">
-          v{newest.version} is approved but isn't going out, because you're holding players at v{m.serving?.version}.
+          v{newest.version} is published but isn't going out, because you're holding players at v{m.serving?.version}.
         </p>
       )}
       {pending && (
         <p className="notice">
-          Waiting for review: {pending.release_id ? `hold players at v${pending.release_version}` : "go back to the newest release"}.
+          Waiting: {pending.release_id ? `hold players at v${pending.release_version}` : "go back to the newest release"}.
         </p>
       )}
 
@@ -500,10 +521,10 @@ function ReleaseChoice({ slug, overview: m, onChanged }: { slug: string; overvie
           <label className="check">
             <input type="radio" name="release" checked={choice === NEWEST} onChange={() => setChoice(NEWEST)} />
             <span>
-              <b>Always the newest approved release</b>{" "}
+              <b>Always the newest published release</b>{" "}
               <span className="muted small">(recommended){newest ? ` · now v${newest.version}` : ""}</span>
               <span className="muted small" style={{ display: "block" }}>
-                Each update goes out as soon as it's approved.
+                Each update goes out as soon as you publish it.
               </span>
             </span>
           </label>
@@ -513,8 +534,7 @@ function ReleaseChoice({ slug, overview: m, onChanged }: { slug: string; overvie
               <span>
                 Hold players at <b>v{r.version}</b>{" "}
                 <span className="muted small">
-                  · approved {r.reviewed_at ? formatDate(r.reviewed_at) : ""}
-                  {r.automatic ? " automatically" : ""}
+                  {(r.published_at ?? r.reviewed_at) ? ` · published ${formatDate((r.published_at ?? r.reviewed_at)!)}` : ""}
                   {r.id === m.serving?.id ? " · players get this now" : ""}
                 </span>
               </span>
@@ -524,15 +544,13 @@ function ReleaseChoice({ slug, overview: m, onChanged }: { slug: string; overvie
         {choice !== current && (
           <>
             <label>
-              Why (optional, for the reviewer)
+              Why (optional, kept with the change)
               <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="e.g. 1.2 crashes on start" />
             </label>
             <p className="muted small">
               {!downloads
                 ? "Players already get this release, so this changes straight away."
-                : m.auto_approval_ready
-                  ? "Players' apps will show an update notice. This release already passed every check, so it goes out straight away."
-                  : `Players' apps would show an update notice, so a person checks this first: ${m.auto_approval_note}.`}
+                : "Players' apps will show an update notice. You published this release, so it goes out straight away."}
             </p>
           </>
         )}
@@ -540,7 +558,7 @@ function ReleaseChoice({ slug, overview: m, onChanged }: { slug: string; overvie
         {result && <Outcome change={result} />}
         <div className="row-actions">
           <button className="btn slime" disabled={busy || choice === current}>
-            {busy ? "Sending…" : !downloads || m.auto_approval_ready ? "Switch" : "Send for review"}
+            {busy ? "Switching…" : "Switch"}
           </button>
         </div>
       </form>
@@ -582,14 +600,14 @@ function RepoMove({
         </p>
       ) : (
         <p className="muted small">
-          Players already have this app, so a move is always checked by a person, and the first release from the new
-          repository is reviewed by a person too.
+          Players already have this app, so a move is checked by SLAPorSLOP staff. The first release from the new repository
+          goes through the same checks, and you publish it.
           {/* Nothing of a browser game is installed, so there's nothing to reinstall. */}
           {!browser &&
             " Players who installed it from the old repository will be asked to reinstall before their SLAPorSLOP app takes updates from the new one."}
         </p>
       )}
-      {pending && <p className="notice">Waiting for review: move to {pending.repo_url}.</p>}
+      {pending && <p className="notice">Waiting for SLAPorSLOP staff: move to {pending.repo_url}.</p>}
       <form
         className="form"
         onSubmit={(e) => {
@@ -603,7 +621,7 @@ function RepoMove({
         </label>
         {m.repo_locked && (
           <label>
-            Why (for the reviewer)
+            Why (for SLAPorSLOP staff)
             <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="e.g. moved to our organisation's account" />
           </label>
         )}
@@ -620,7 +638,7 @@ function RepoMove({
 }
 
 const CHANGE_BADGE: Record<AppChange["status"], { label: string; badge: string }> = {
-  pending: { label: "WAITING FOR REVIEW", badge: "soon" },
+  pending: { label: "WAITING FOR SLAPorSLOP STAFF", badge: "soon" },
   approved: { label: "DONE", badge: "official" },
   rejected: { label: "TURNED DOWN", badge: "bad" },
   cancelled: { label: "CANCELLED", badge: "neutral" },
@@ -628,7 +646,7 @@ const CHANGE_BADGE: Record<AppChange["status"], { label: string; badge: string }
 
 export function describeChange(c: Pick<AppChange, "kind" | "release_id" | "release_version" | "repo_url">): string {
   if (c.kind === "repo") return `Move to ${c.repo_url}`;
-  return c.release_id ? `Hold players at v${c.release_version}` : "Follow the newest approved release";
+  return c.release_id ? `Hold players at v${c.release_version}` : "Follow the newest published release";
 }
 
 function Requests({ slug, changes, onChanged }: { slug: string; changes: AppChange[]; onChanged: () => void }) {

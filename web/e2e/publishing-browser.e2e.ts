@@ -3,8 +3,8 @@
 // play address, the first address sent with the page and checked on Releases, an address that
 // doesn't go through waiting there to be fixed, and Sam's seeded Orbit Tap's Releases tab and
 // Manage page. Mia's games are her own, made here; what she and Sam send is withdrawn after (in
-// afterAll too, so a failed test leaves nothing waiting in the shared review queue), and the
-// address Play opens on Orbit Tap stays the seeded one.
+// afterAll too, so a failed test leaves nothing unpublished behind), and the address Play opens
+// on Orbit Tap stays the seeded one.
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
@@ -29,10 +29,10 @@ interface ReleaseRow {
   play_address: string | null;
 }
 
-/** Withdraws `who`'s releases of `slug` still waiting, so the review queue is as it was. */
+/** Withdraws `who`'s releases of `slug` not published yet, so nothing is left waiting. */
 async function withdrawWaiting(who: "maker" | "sam", slug: string) {
   const releases = await call<ReleaseRow[]>(who, "GET", `/v1/apps/${slug}/releases`);
-  for (const r of releases.filter((x) => x.status === "fetching" || x.status === "awaiting_review")) {
+  for (const r of releases.filter((x) => ["fetching", "awaiting_review", "ready"].includes(x.status))) {
     await call(who, "POST", `/v1/apps/${slug}/releases/${r.id}/withdraw`);
   }
 }
@@ -44,7 +44,7 @@ const lamp = uniq("pub-web");
 const lampTitle = `Lantern Run ${lamp.slice(-4)}`;
 const kite = uniq("pub-web2");
 
-// Whatever a test that failed half way left: nothing of Mia's waits for review, and her notices
+// Whatever a test that failed half way left: nothing of Mia's waits unpublished, and her notices
 // about it are read. Each app may never have been made.
 test.afterAll(async () => {
   for (const slug of [lamp, kite]) {
@@ -106,8 +106,12 @@ test("a new game that plays in the browser: Runs on is one choice, and its play 
   await expect(page.getByText("Your game runs on your own website. Here a release is its play address")).toBeVisible();
   await expect(page.locator(".maker-head").getByText("PLAYS IN THE BROWSER")).toBeVisible();
   const release = page.locator("ul.release-list > li").filter({ hasText: "1.0.0" });
-  await expect(release.getByText("IN REVIEW", { exact: true })).toBeVisible({ timeout: 20_000 });
-  await expect(release.getByText("It passed the checks. Waiting for a person at SLAPorSLOP, who opens it and plays it.")).toBeVisible();
+  await expect(release.getByText("PASSED, NOT PUBLISHED", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(release.getByText("It passed the checks. Play opens this address once you publish it.")).toBeVisible();
+  // Nobody opens it for Mia: she publishes it, when she wants, from here.
+  const publish = release.getByRole("region", { name: "Publish version 1.0.0" });
+  await expect(publish).toContainText("It passed SLAPorSLOP's checks. Once you publish it, players can play it as soon as you put the game in the store.");
+  await expect(publish.getByRole("list", { name: "Before you publish" })).toHaveText(`A new address: Play will open ${playPage(lamp)}.`);
   await expect(release.getByRole("link", { name: playPage(lamp) })).toHaveAttribute("rel", "noopener noreferrer");
   // Each check in words: this test server allows plain http and doesn't look up where a site is,
   // so those aren't claimed; its bad-link list is the seed's one site.
@@ -129,9 +133,10 @@ test("a new game that plays in the browser: Runs on is one choice, and its play 
   }
   await expect(page.getByText("Or build and sign it yourself")).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: /Pick up new GitHub releases/ })).toHaveCount(0);
-  await expect(page.locator(".updates-panel")).toContainText("A new address always waits for a person.");
+  // Nothing to set about updates: every address is published by its maker.
+  await expect(page.locator(".updates-panel")).toHaveCount(0);
 
-  // Its progress: the address and its checks, what SLAPorSLOP can't check, then a person.
+  // Its progress: the address and its checks, what SLAPorSLOP can't check, then Mia publishes it.
   const progress = page.getByRole("region", { name: "Publishing progress" });
   await expect(progress.locator("ol.steps > li > div > b")).toHaveText([
     "Store page",
@@ -139,13 +144,14 @@ test("a new game that plays in the browser: Runs on is one choice, and its play 
     "Address checked",
     "What SLAPorSLOP can't check",
     "Source check",
-    "Review by a person",
+    "Checks",
+    "Publish",
     "In the store",
   ]);
   await expect(progress).toContainText("SLAPorSLOP checked the address, not what the site serves");
   await expect(progress).not.toContainText("Maker signature");
   // The stage bar waits for the address.
-  await expect(page.getByRole("region", { name: "Stage" })).toContainText("Release it once a play address is approved.");
+  await expect(page.getByRole("region", { name: "Stage" })).toContainText("Release it once you've published a play address.");
 
   // The form starts from the address sent, with the next version suggested.
   const form = page.locator("form").filter({ has: page.getByRole("heading", { name: "Your play address" }) });
@@ -154,12 +160,9 @@ test("a new game that plays in the browser: Runs on is one choice, and its play 
   await expect(form.getByRole("textbox", { name: /^Commit/ })).not.toHaveAttribute("required", "");
   await axe(page);
 
-  // The dashboard says where it is (this test server may still be reading the fake repository's
-  // source, which comes before the review).
+  // The dashboard says what's next: Mia publishes it.
   await page.goto("/publish");
-  await expect(page.locator("li.status-row").filter({ hasText: lampTitle })).toContainText(
-    /v1\.0\.0Waiting on: (Source check|Review by a person)/,
-  );
+  await expect(page.locator("li.status-row").filter({ hasText: lampTitle })).toContainText("v1.0.0Next: publish it");
 });
 
 test("its store page and Manage: where Play goes, and the choice kept once it has releases", async ({ page }) => {
@@ -187,14 +190,19 @@ test("its store page and Manage: where Play goes, and the choice kept once it ha
 
   await page.goto(`/publish/${lamp}/manage`);
   const bar = page.getByRole("region", { name: "Stage" });
-  await expect(bar).toContainText("Release it once a play address is approved.");
+  await expect(bar).toContainText("Release it once you've published a play address.");
   await expect(bar.getByRole("link", { name: "Add the play address" })).toHaveAttribute("href", `/publish/${lamp}/releases`);
   const where = page.getByRole("region", { name: "Where Play goes" });
-  await expect(where).toContainText("Nothing yet: no play address has been approved. Add it on Releases.");
+  await expect(where).toContainText("Nothing yet: no play address has been published. Add it on Releases.");
   await expect(page.getByRole("heading", { name: "What players get" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: /Browser demo/ })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: /Pick up new GitHub releases/ })).toHaveCount(0);
-  await expect(page.getByText(/v1\.0\.0\s+Waiting for review, submitted from your account/)).toBeVisible();
+  const waiting = page.getByRole("heading", { name: "Not published yet" }).locator("..");
+  await expect(waiting.getByText(/v1\.0\.0\s+Passed, not published, submitted from your account/)).toBeVisible();
+  await expect(waiting.getByRole("link", { name: "Publish it on Releases" })).toHaveAttribute(
+    "href",
+    new RegExp(`^/publish/${lamp}/releases#release-[0-9a-f-]+$`),
+  );
   await axe(page);
 
   await withdrawWaiting("maker", lamp);
@@ -237,7 +245,7 @@ test("an address that doesn't go through with the new page waits on Releases, fi
   await expect(form.getByRole("status")).toContainText("Version 1.0.0 sent. SLAPorSLOP is checking the address");
   await expect(form.getByText("didn't go through")).toHaveCount(0);
   const release = page.locator("ul.release-list > li").filter({ hasText: "1.0.0" });
-  await expect(release.getByText("IN REVIEW", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(release.getByText("PASSED, NOT PUBLISHED", { exact: true })).toBeVisible({ timeout: 20_000 });
   // A reload doesn't bring the old problem back.
   await page.reload();
   await expect(page.getByText("didn't go through")).toHaveCount(0);
@@ -249,22 +257,22 @@ test("an address that doesn't go through with the new page waits on Releases, fi
   await expect(page.locator("li.status-row").filter({ hasText: slug.slice(-4) })).toContainText("Next: add the play address");
 });
 
-test("Orbit Tap's Releases tab: the address Play opens, and a new one waits for a person", async ({ page }) => {
+test("Orbit Tap's Releases tab: the address Play opens, and a new one waits for Sam to publish it", async ({ page }) => {
   await signIn(page, "sam");
   try {
     await page.goto(`/publish/${ids.browserApp}/manage`);
     const where = page.getByRole("region", { name: "Where Play goes" });
     await expect(where.getByRole("link", { name: ids.browserPlayAddress })).toHaveAttribute("href", ids.browserPlayAddress);
     await expect(where).toContainText("(v1.0.0)");
-    await expect(where).toContainText("Always the newest approved address.");
+    await expect(where).toContainText("Always the newest published address.");
     // No release to hold players at.
     await expect(where.getByRole("radio")).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Stage" })).toContainText("Released: the last stage.");
 
     await page.goto(`/publish/${ids.browserApp}/releases`);
     const approved = page.locator("ul.release-list > li").filter({ hasText: "1.0.0" });
-    await expect(approved.getByText("APPROVED", { exact: true })).toBeVisible();
-    await expect(approved).toContainText("Approved: Play opens this address.");
+    await expect(approved.getByText("PUBLISHED", { exact: true })).toBeVisible();
+    await expect(approved).toContainText("Published: Play opens this address.");
     await expect(approved.getByRole("link", { name: ids.browserPlayAddress })).toBeVisible();
     await expect(approved).not.toContainText(/SHA-256|NOT SCANNED|SIGNED/);
     const form = page.locator("form").filter({ has: page.getByRole("heading", { name: "A new play address or version" }) });
@@ -275,20 +283,24 @@ test("Orbit Tap's Releases tab: the address Play opens, and a new one waits for 
     await expect(page.getByRole("heading", { name: "Let Slop Build do it" })).toHaveCount(0);
     await expect(page.getByRole("checkbox", { name: /Pick up new GitHub releases/ })).toHaveCount(0);
 
-    // A new site: checked, then it waits for a person; Play keeps opening the approved one.
+    // A new site: checked, then it waits for Sam to publish it; Play keeps opening the published one.
     const next = playPage("orbit-tap-next");
     await form.getByRole("textbox", { name: /^Play address/ }).fill(next);
     await form.getByLabel("What's new, for players (optional)").fill("Moons now wobble.");
     await form.getByRole("button", { name: "Send the address" }).click();
     await expect(form.getByRole("status")).toContainText(`Version ${sent} sent.`);
     const waiting = page.locator("ul.release-list > li").filter({ hasText: sent });
-    await expect(waiting.getByText("IN REVIEW", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(waiting.getByText("PASSED, NOT PUBLISHED", { exact: true })).toBeVisible({ timeout: 20_000 });
+    // Publishing it would move Play to another site: said first, as information.
+    await expect(waiting.getByRole("region", { name: `Publish version ${sent}` }).getByRole("list", { name: "Before you publish" })).toHaveText(
+      `A new site: Play will open ${next} instead of ${ids.browserPlayAddress}.`,
+    );
     await expect(waiting.getByRole("link", { name: next })).toBeVisible();
     await expect(waiting.getByRole("list", { name: "SLAPorSLOP's checks of the address" })).toContainText("The page loads: Yes (HTTP 200)");
     await expect(waiting.locator(".release-notes")).toHaveText("Moons now wobble.");
     const [newest] = await call<ReleaseRow[]>("sam", "GET", `/v1/apps/${ids.browserApp}/releases`);
-    // Waiting for a person, however Sam's updates are approved: a new address always is.
-    expect(newest).toMatchObject({ version: sent, status: "awaiting_review", play_address: next });
+    // Nothing goes out by itself: it waits for Sam to press Publish.
+    expect(newest).toMatchObject({ version: sent, status: "ready", play_address: next, new_play_address: true });
     const store = await call<{ play_address: string }>(null, "GET", `/v1/apps/${ids.browserApp}`);
     expect(store.play_address).toBe(ids.browserPlayAddress);
     await axe(page);

@@ -201,7 +201,7 @@ describe("the admin panel", () => {
     expect(screen.getByRole("button", { name: "Hide the request" })).toBeTruthy();
   });
 
-  it("denies only after Are you sure?, with the reason the maker reads; cancelling keeps it", async () => {
+  it("rejects only after Are you sure?, with the reason the maker reads; cancelling keeps it", async () => {
     const release = {
       id: "rel1",
       version: "2.0.0",
@@ -216,15 +216,16 @@ describe("the admin panel", () => {
       repo_scan: null,
       advisories: [],
       app: { slug: "miner", title: "Miner", stage: "released", status: "draft", repo_url: "https://github.com/o/miner", maker: "Mia" },
+      hold: { status: "open", kinds: ["scan"], needs_staff: true, problems: [], you_can: [], messages: [], unanswered: false },
       notes: [],
     };
     const queue = vi.spyOn(api.admin, "queue").mockResolvedValue({ ...empty, releases: [release] } as unknown as AdminQueue);
     const reject = vi.spyOn(api.admin, "reject").mockResolvedValue(undefined);
     show("/admin?tab=queue&box=releases");
-    const deny = await screen.findByRole("button", { name: "Deny Miner 2.0.0" });
+    const deny = await screen.findByRole("button", { name: "Reject Miner 2.0.0" });
     fireEvent.click(deny);
     expect(screen.getByText("Are you sure?")).toBeTruthy();
-    const yes = screen.getByRole("button", { name: "Yes, deny" }) as HTMLButtonElement;
+    const yes = screen.getByRole("button", { name: "Yes, reject" }) as HTMLButtonElement;
     // The reason comes first.
     expect(yes.disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -234,10 +235,54 @@ describe("the admin panel", () => {
     fireEvent.click(deny);
     fireEvent.change(screen.getByRole("textbox", { name: /Why \(the maker reads this\)/ }), { target: { value: "No program in the zip." } });
     queue.mockResolvedValue(empty);
-    fireEvent.click(screen.getByRole("button", { name: "Yes, deny" }));
+    fireEvent.click(screen.getByRole("button", { name: "Yes, reject" }));
     await waitFor(() => expect(reject).toHaveBeenCalledWith("rel1", "No program in the zip."));
     expect(await screen.findByText("Rejected “Miner 2.0.0”.")).toBeTruthy();
     expect(await screen.findByText("Nothing waiting here.")).toBeTruthy();
+  });
+
+  it("accepts a hold from the list with no note at all; a question about a failed release has no quick buttons", async () => {
+    const hold = { status: "open", kinds: ["scan"], needs_staff: true, problems: [], you_can: [], messages: [], unanswered: false };
+    const release = (id: string, title: string, over: object = {}) => ({
+      id,
+      version: "2.0.0",
+      commit_sha: "a".repeat(40),
+      status: "awaiting_review",
+      commit_verified: true,
+      created_at: "2026-10-20T00:00:00Z",
+      source: "maker",
+      auto_approved: false,
+      files: [],
+      source_checks: null,
+      repo_scan: null,
+      advisories: [],
+      app: { slug: id, title, stage: "released", status: "draft", repo_url: "https://github.com/o/x", maker: "Mia" },
+      hold,
+      notes: [],
+      ...over,
+    });
+    const queue = vi.spyOn(api.admin, "queue").mockResolvedValue({
+      ...empty,
+      releases: [
+        release("rel1", "Miner"),
+        release("rel2", "Asker", { status: "failed", status_reason: "No signature.", hold: { ...hold, kinds: ["question"] } }),
+      ],
+    } as unknown as AdminQueue);
+    const approve = vi.spyOn(api.admin, "approve").mockResolvedValue(undefined);
+    show("/admin?tab=queue&box=releases");
+    const accept = await screen.findByRole("button", { name: "Accept Miner 2.0.0" });
+    expect(screen.getByText("Asker 2.0.0")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accept Asker 2.0.0" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reject Asker 2.0.0" })).toBeNull();
+    fireEvent.click(accept);
+    expect(screen.getByRole("textbox", { name: "Note for the maker (optional)" })).toBeTruthy();
+    const yes = screen.getByRole("button", { name: "Yes, accept" }) as HTMLButtonElement;
+    // No explanation needed.
+    expect(yes.disabled).toBe(false);
+    queue.mockResolvedValue(empty);
+    fireEvent.click(yes);
+    await waitFor(() => expect(approve).toHaveBeenCalledWith("rel1", ""));
+    expect(await screen.findByText("Accepted, for its maker to publish: “Miner 2.0.0”.")).toBeTruthy();
   });
 
   it("lists apps a page at a time, and asks for only those needing attention, most urgent first", async () => {

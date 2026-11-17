@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Publishing, part 3: the Manage page. Which release players get (straight away, or checked by a
-// person), moving the repository, withdrawing a release not reviewed yet, requests and cancelling
-// them; and, read-only on the seeded Lantern Keep, ratings, its history, how each release landed and
-// bug triage.
+// Publishing, part 3: the Manage page. Which release players get (straight away: the maker
+// published it), moving the repository (checked by SLAPorSLOP staff), withdrawing a release not
+// published yet, requests and cancelling them, and putting a draft in the store the first time;
+// and, read-only on the seeded Lantern Keep, ratings, its history, how each release landed and bug
+// triage.
 import AxeBuilder from "@axe-core/playwright";
 
 import type { AppHistory } from "../src/api";
 import { expect, ids, signIn, test } from "./fixtures";
-import { answer, approve, call, createApp, fakeRepo, readNotices, submitRelease, uniq } from "./publishing-helpers";
+import { answer, call, createApp, fakeRepo, publish, readNotices, submitRelease, uniq } from "./publishing-helpers";
 
 test.describe.configure({ mode: "serial" });
 
-// Mia's app for this file: two approved releases, from the fake host.
+// Mia's app for this file: two published releases, from the fake host.
 const slug = uniq("pub-kite");
 const title = `Kite Runner ${slug.slice(-4)}`;
 const repo = fakeRepo("mia", slug);
@@ -19,8 +20,8 @@ const manage = `/publish/${slug}/manage`;
 
 test.beforeAll(async () => {
   await createApp("maker", slug, title, repo, { bug_reports: false });
-  await approve(await submitRelease("maker", slug, repo, "1.0.0"));
-  await approve(await submitRelease("maker", slug, repo, "1.1.0"));
+  await publish("maker", slug, await submitRelease("maker", slug, repo, "1.0.0"));
+  await publish("maker", slug, await submitRelease("maker", slug, repo, "1.1.0"));
 });
 
 test.afterAll(async () => {
@@ -48,62 +49,49 @@ test("what players get: hold them at a release, then follow the newest again", a
   await expect(tabs.getByRole("link", { name: "Edit store page" })).toHaveAttribute("href", `/publish/${slug}`);
   await expect(tabs.getByRole("link", { name: "Releases" })).toHaveAttribute("href", `/publish/${slug}/releases`);
   const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "What players get" }) });
-  await expect(section).toContainText("Players get v1.1.0 NEWEST APPROVED");
+  await expect(section).toContainText("Players get v1.1.0 NEWEST PUBLISHED");
   const choice = section.getByRole("radiogroup", { name: "Release players get" });
-  await expect(choice.getByRole("radio", { name: /Always the newest approved release/ })).toBeChecked();
-  const send = section.getByRole("button", { name: /Switch|Send for review/ });
+  await expect(choice.getByRole("radio", { name: /Always the newest published release/ })).toBeChecked();
+  const send = section.getByRole("button", { name: "Switch" });
   await expect(send).toBeDisabled();
 
-  // Every check passed already, so holding them at 1.0.0 happens at once.
+  // Mia published it, so holding them at 1.0.0 happens at once.
   await choice.getByRole("radio", { name: /Hold players at v1\.0\.0/ }).check();
-  await expect(section.getByText(/This release already passed every check, so it goes out straight away\./)).toBeVisible();
+  await expect(section.getByText(/You published this release, so it goes out straight away\./)).toBeVisible();
   await section.getByRole("textbox", { name: /Why/ }).fill("1.1.0 crashes on start");
   await section.getByRole("button", { name: "Switch" }).click();
   await expect(section.getByText(/^Done\./)).toBeVisible();
   await expect(section).toContainText("Players get v1.0.0 HELD AT THIS RELEASE");
-  await expect(section.getByText("v1.1.0 is approved but isn't going out, because you're holding players at v1.0.0.")).toBeVisible();
+  await expect(section.getByText("v1.1.0 is published but isn't going out, because you're holding players at v1.0.0.")).toBeVisible();
   const request = page.locator("ul.release-list > li").filter({ hasText: "Hold players at v1.0.0" });
   await expect(request).toContainText("DONE AUTOMATICALLY");
   await expect(request).toContainText("Your note: 1.1.0 crashes on start");
 
   // Back to the newest.
-  await choice.getByRole("radio", { name: /Always the newest approved release/ }).check();
+  await choice.getByRole("radio", { name: /Always the newest published release/ }).check();
   await section.getByRole("button", { name: "Switch" }).click();
-  await expect(section).toContainText("Players get v1.1.0 NEWEST APPROVED");
-  await expect(page.locator("ul.release-list > li").filter({ hasText: "Follow the newest approved release" })).toContainText("DONE");
+  await expect(section).toContainText("Players get v1.1.0 NEWEST PUBLISHED");
+  await expect(page.locator("ul.release-list > li").filter({ hasText: "Follow the newest published release" })).toContainText("DONE");
 });
 
-test("with automatic approval off, a change waits for a person and can be cancelled", async ({ page }) => {
+test("the update settings are on Manage too, with nothing to approve automatically", async ({ page }) => {
   await signIn(page, "maker");
   await page.goto(manage);
-  // The update settings are on Manage too.
-  const auto = page.locator("section.updates-panel").getByRole("checkbox", { name: /Approve updates automatically/ });
-  await expect(auto).toBeChecked();
-  await auto.click();
-  await expect(auto).not.toBeChecked();
-
-  const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "What players get" }) });
-  await section.getByRole("radio", { name: /Hold players at v1\.0\.0/ }).check();
-  await expect(section.getByText(/so a person checks this first: /)).toBeVisible();
-  await section.getByRole("button", { name: "Send for review" }).click();
-  await expect(section.getByText(/^Sent for review\./)).toBeVisible();
-  await expect(section.getByText("Waiting for review: hold players at v1.0.0.")).toBeVisible();
-  await expect(section).toContainText("Players get v1.1.0");
-  const request = page.locator("ul.release-list > li").filter({ hasText: "Hold players at v1.0.0" }).filter({ hasText: "WAITING FOR REVIEW" });
-  await request.getByRole("button", { name: "Cancel request" }).click();
-  await expect(page.locator("ul.release-list > li").filter({ hasText: "CANCELLED" })).toContainText("Hold players at v1.0.0");
-  await expect(section.getByText("Waiting for review: hold players at v1.0.0.")).toBeHidden();
-
-  await auto.click();
-  await expect(auto).toBeChecked();
+  const panel = page.locator("section.updates-panel");
+  await expect(panel.getByRole("checkbox", { name: /Pick up new GitHub releases/ })).toBeVisible();
+  await expect(panel.getByRole("checkbox", { name: /Approve updates automatically/ })).toHaveCount(0);
 });
 
-test("moving the repository: players have it, so a person checks the move first", async ({ page }) => {
+test("moving the repository: players have it, so SLAPorSLOP staff check the move first", async ({ page }) => {
   await signIn(page, "maker");
   await page.goto(manage);
   const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "Repository", exact: true }) });
   await expect(section.getByRole("link", { name: repo })).toHaveAttribute("href", repo);
-  await expect(section.getByText(/Players already have this app, so a move is always checked by a person/)).toBeVisible();
+  await expect(
+    section.getByText(
+      /Players already have this app, so a move is checked by SLAPorSLOP staff\. The first release from the new repository goes through the same checks, and you publish it\./,
+    ),
+  ).toBeVisible();
   const request = section.getByRole("button", { name: "Request the move" });
   await expect(request).toBeDisabled();
 
@@ -118,29 +106,34 @@ test("moving the repository: players have it, so a person checks the move first"
   await section.getByRole("textbox", { name: "Move to" }).fill(moved);
   await section.getByRole("textbox", { name: /Why/ }).fill("Moved to the studio's account.");
   await request.click();
-  await expect(section.getByText(/^Sent for review\./)).toBeVisible();
-  await expect(section.getByText(`Waiting for review: move to ${moved}.`)).toBeVisible();
+  await expect(section.getByText(/^Sent to SLAPorSLOP staff\./)).toBeVisible();
+  await expect(section.getByText(`Waiting for SLAPorSLOP staff: move to ${moved}.`)).toBeVisible();
   await expect(section.getByRole("textbox", { name: "Move to" })).toHaveValue("");
   const row = page.locator("ul.release-list > li").filter({ hasText: `Move to ${moved}` });
-  await expect(row).toContainText("WAITING FOR REVIEW");
+  await expect(row).toContainText("WAITING FOR SLAPorSLOP STAFF");
   await expect(row).toContainText("Your note: Moved to the studio's account.");
-  // Still the old repository until a person approves.
+  // Still the old repository until staff approve.
   await expect(section.getByRole("link", { name: repo })).toBeVisible();
   await row.getByRole("button", { name: "Cancel request" }).click();
   await expect(row).toContainText("CANCELLED");
-  await expect(section.getByText(/Waiting for review: move to/)).toBeHidden();
+  await expect(section.getByText(/Waiting for SLAPorSLOP staff: move to/)).toBeHidden();
 });
 
-test("a release not reviewed yet can be withdrawn", async ({ page }) => {
+test("a release not published yet can be published from Releases, or withdrawn", async ({ page }) => {
   await submitRelease("maker", slug, repo, "1.2.0");
   await signIn(page, "maker");
   await page.goto(manage);
-  const waiting = page.locator("section").filter({ has: page.getByRole("heading", { name: "Not reviewed yet" }) });
+  const waiting = page.locator("section").filter({ has: page.getByRole("heading", { name: "Not published yet" }) });
+  await expect(waiting).toContainText("Nothing here reaches players until you publish it.");
   const row = waiting.getByRole("listitem").filter({ hasText: "v1.2.0" });
-  await expect(row).toContainText("Waiting for review, submitted from your account");
+  await expect(row).toContainText("Passed, not published, submitted from your account");
+  await expect(row.getByRole("link", { name: "Publish it on Releases" })).toHaveAttribute(
+    "href",
+    new RegExp(`^/publish/${slug}/releases#release-[0-9a-f-]+$`),
+  );
   // Asked first; saying no keeps it.
   page.once("dialog", (d) => {
-    expect(d.message()).toBe("Withdraw v1.2.0? It won't be reviewed or reach players.");
+    expect(d.message()).toBe("Withdraw v1.2.0? It won't be published or reach players.");
     void d.dismiss();
   });
   await row.getByRole("button", { name: "Withdraw" }).click();
@@ -149,7 +142,7 @@ test("a release not reviewed yet can be withdrawn", async ({ page }) => {
   await row.getByRole("button", { name: "Withdraw" }).click();
   await expect(waiting).toBeHidden();
   await page.goto(`/publish/${slug}/releases`);
-  await expect(page.locator("ul.release-list > li").filter({ hasText: "1.2.0" }).getByText("WITHDRAWN BEFORE REVIEW")).toBeVisible();
+  await expect(page.locator("ul.release-list > li").filter({ hasText: "1.2.0" }).getByText("WITHDRAWN BEFORE PUBLISHING")).toBeVisible();
 });
 
 test("pictures only come from GitHub repositories so far", async ({ page }) => {
@@ -186,7 +179,7 @@ test("community builds of a game that counts players are told about Slop Pulse",
   await answer(page, `/v1/apps/${build}/manage`, { ...overview, pulse_required: false });
   await page.goto(`/publish/${build}/manage`);
   const pulse = page.locator("section").filter({ has: page.getByRole("heading", { name: "Slop Pulse" }) });
-  await expect(pulse).toContainText("a reviewer can't list this one before its first Pulse handshake");
+  await expect(pulse).toContainText("this one can't go in the store before its first Pulse handshake");
   await expect(pulse.getByRole("link", { name: "publishing guide" })).toHaveAttribute("href", "/publish/guide#slop-pulse-player-counts");
   await page.unroute(`**/v1/apps/${build}/manage`);
   await answer(page, `/v1/apps/${build}/manage`, { ...overview, pulse_required: true });
@@ -280,7 +273,9 @@ test("Lantern Keep's maker reads its history: players, first plays and library a
   expect(serious, serious.join("\n")).toEqual([]);
 });
 
-test("the stage bar: Coming soon until a release is approved, then Beta and Released, only forward", async ({ page }) => {
+test("a Coming soon page goes in the store by its maker; the stage bar waits for a published release, then Beta and Released, only forward", async ({
+  page,
+}) => {
   const soon = uniq("pub-dawn");
   const soonTitle = `Dawn Patrol ${soon.slice(-4)}`;
   const soonRepo = fakeRepo("mia", soon);
@@ -288,14 +283,31 @@ test("the stage bar: Coming soon until a release is approved, then Beta and Rele
   await signIn(page, "maker");
   await page.goto(`/publish/${soon}/manage`);
   const bar = page.getByRole("region", { name: "Stage" });
+  // The first listing is Mia's: a Coming soon page needs no release. Asked first.
+  await expect(page.locator(".maker-head")).toContainText("DRAFT: NOT IN THE STORE YET");
+  const list = page.getByRole("region", { name: "Not in the store yet" });
+  await expect(list).toContainText("Only you can see this draft. Put it in the store when you're ready for players to find it: a Coming soon page needs no release.");
+  await list.getByRole("button", { name: "Put it in the store…" }).click();
+  const sure = list.getByRole("group", { name: "Put it in the store" });
+  await expect(sure).toContainText("Anyone can find its page and get what you've published. Taking it out again is for SLAPorSLOP staff.");
+  await sure.getByRole("button", { name: "Not yet" }).click();
+  await expect(sure).toBeHidden();
+  await list.getByRole("button", { name: "Put it in the store…" }).click();
+  // The keyboard lands on the button that does it.
+  await expect(sure.getByRole("button", { name: "Yes, put it in the store" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".maker-head")).toContainText("IN THE STORE");
+  await expect(page.getByRole("region", { name: "Not in the store yet" })).toHaveCount(0);
+  expect((await call<{ status?: string }>("maker", "GET", `/v1/apps/${soon}`)).status ?? "listed").toBe("listed");
+
   await expect(bar.getByRole("listitem").filter({ hasText: "Coming soon" })).toHaveAttribute("aria-current", "step");
   await expect(bar).toContainText("Must reach Beta by");
   // Nothing to play yet: the way on is a release.
-  await expect(bar).toContainText("Move to Beta or Release it once a release is approved.");
+  await expect(bar).toContainText("Move to Beta or Release it once you've published a release.");
   await expect(bar.getByRole("link", { name: "Submit a release" })).toHaveAttribute("href", `/publish/${soon}/releases`);
   await expect(bar.getByRole("button")).toHaveCount(0);
 
-  await approve(await submitRelease("maker", soon, soonRepo, "0.1.0"));
+  await publish("maker", soon, await submitRelease("maker", soon, soonRepo, "0.1.0"));
   await page.reload();
   await bar.getByRole("button", { name: "Move to Beta…" }).click();
   const confirm = bar.getByRole("group", { name: "Move to Beta" });

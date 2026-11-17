@@ -225,7 +225,7 @@ struct SourceCheck {
     dry_run: &'static str,
 }
 
-const ONLY_ON_A_RELEASE: &str = "Only a release gets the rest: Slop Build's own checks (secrets, packages with known vulnerabilities), the scan of the release's files, and a person's review where one is due.";
+const ONLY_ON_A_RELEASE: &str = "Only a release gets the rest: Slop Build's own checks (secrets, packages with known vulnerabilities) and the scan of the release's files. Once it passes, your maker publishes it.";
 
 /// A dry run of the source check at a commit the maker has pushed.
 async fn source_check(
@@ -435,7 +435,7 @@ pub fn from_checks(scan: &Value, build: &Value, app_type: AppType) -> Vec<Fix> {
                 s["rule"].as_str().unwrap_or("secret")
             ),
             format!(
-                "If it's a real key, password or token: revoke it with whoever issued it first (it's in the repository's history, so removing the line isn't enough), then remove it from {file} and read it from an environment variable or a file outside the repository. If it isn't a secret, leave it and say so in your reply to the reviewer."
+                "If it's a real key, password or token: revoke it with whoever issued it first (it's in the repository's history, so removing the line isn't enough), then remove it from {file} and read it from an environment variable or a file outside the repository. If it isn't a secret, leave it: nothing needs changing."
             ),
             None,
         );

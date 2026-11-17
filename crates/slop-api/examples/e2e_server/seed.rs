@@ -248,7 +248,7 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
         "online = '{player_servers}'",
     )
     .await?;
-    let play_address = browser_game(ctx, &admin, &sam).await.context("Orbit Tap")?;
+    let play_address = browser_game(ctx, &sam).await.context("Orbit Tap")?;
     listed(ctx, maker.id, "mias-first", "Mia's First Game", "").await?;
     // Messages Mia's AI agent wrote to the admins (admin_messages.rs), for the AI messages tab.
     agent_message(
@@ -494,7 +494,7 @@ async fn listed(
 /// through the review queue. Nobody has played it. Also a bad-link list with one site on it,
 /// `bad-games.example`, so a play address there is refused without the network. Returns the
 /// play address.
-async fn browser_game(ctx: &Ctx, admin: &Who, sam: &Who) -> anyhow::Result<String> {
+async fn browser_game(ctx: &Ctx, sam: &Who) -> anyhow::Result<String> {
     ctx.sql(
         "insert into bad_links (url, host, source) values ('bad-games.example/play', 'bad-games.example', 'the e2e test list')",
         &[],
@@ -544,14 +544,26 @@ async fn browser_game(ctx: &Ctx, admin: &Who, sam: &Who) -> anyhow::Result<Strin
     .execute(&ctx.db)
     .await
     .context("Orbit Tap's release")?;
+    // Its checks end (it's ready), and Sam publishes it and puts the game in the store.
+    ctx.sql(
+        "update releases set repo_scan = '{\"status\": \"not_checked\"}', repo_scanned_at = now() where id = $1",
+        &[&release],
+    )
+    .await?;
+    slop_api::publish::finish_checks(
+        &ctx.db,
+        slop_api::admin::ReviewRules::from_config(&ctx.config),
+        release,
+        slop_api::updates::AUTO_REVIEWER,
+    )
+    .await?;
     ctx.post(
-        admin,
-        &format!("/v1/admin/releases/{release}/approve"),
+        sam,
+        &format!("/v1/apps/orbit-tap/releases/{release}/publish"),
         json!({}),
     )
     .await?;
-    ctx.post(admin, "/v1/admin/apps/orbit-tap/list", json!({}))
-        .await?;
+    ctx.post(sam, "/v1/apps/orbit-tap/list", json!({})).await?;
     // Listing touched it; keep the store's "recent" order the browser tests expect.
     ctx.sql(
         "update apps set updated_at = created_at where slug = 'orbit-tap'",
@@ -1068,15 +1080,18 @@ async fn people(ctx: &Ctx, admin: &Who) -> anyhow::Result<People> {
 // ---------------------------------------------------------------------------------------------
 // Store and publishing
 
-/// A release waiting for review, as the fetcher leaves one: its file fetched (the fake GitHub's
-/// zip), hashed and scanned. `platform` "any" for a mod (no program to start).
-async fn release_for_review(
+/// A release as the fetcher leaves one: its file fetched (the fake GitHub's zip), hashed and
+/// scanned, and its source read, then its checks ended (publish.rs): ready for its maker to
+/// publish, or on hold for staff when `held` (a scanner finding). `platform` "any" for a mod (no
+/// program to start).
+async fn fetched_release(
     ctx: &Ctx,
     app: Uuid,
     slug: &str,
     version: &str,
     by: Uuid,
     platform: &str,
+    held: bool,
 ) -> anyhow::Result<Uuid> {
     use sha2::Digest as _;
     let zip = crate::release_zip();
@@ -1088,8 +1103,9 @@ async fn release_for_review(
     )
     .await?;
     ctx.sql(
-        "insert into release_files (release_id, platform, kind, url, file_name, exec, size_bytes, sha256, scan_result)
-         values ($1, $2, 'archive', $3, $4, $5, $6, $7, 'passed')",
+        "insert into release_files (release_id, platform, kind, url, file_name, exec, size_bytes, sha256, scan_result,
+                                    scan_detail, scan_report)
+         values ($1, $2, 'archive', $3, $4, $5, $6, $7, $8, $9, $10::jsonb)",
         &[
             &id,
             &platform,
@@ -1105,29 +1121,63 @@ async fn release_for_review(
             },
             &(zip.len() as i64),
             &hex::encode(sha2::Sha256::digest(&zip)),
+            &if held { "on_hold" } else { "passed" },
+            &held.then(|| "Flagged by ClamAV: Win.Test.Seed in pong.exe".to_string()),
+            &held.then(|| {
+                json!({ "findings": [{ "engine": "ClamAV", "name": "Win.Test.Seed", "file": "pong.exe" }],
+                        "capabilities": [], "engines": { "clamav": "seed" } })
+                .to_string()
+            }),
         ],
+    )
+    .await?;
+    ctx.sql(
+        "update releases set repo_scan = '{\"status\": \"not_checked\"}', repo_scanned_at = now() where id = $1",
+        &[&id],
+    )
+    .await?;
+    slop_api::publish::finish_checks(
+        &ctx.db,
+        slop_api::admin::ReviewRules::from_config(&ctx.config),
+        id,
+        slop_api::updates::AUTO_REVIEWER,
     )
     .await?;
     Ok(id)
 }
 
-/// A release approved (and signed) by staff, through the review queue.
-async fn approved_release(
+/// A release on hold for SLAPorSLOP staff: a scanner flagged its file (the staff queue).
+async fn release_for_review(
     ctx: &Ctx,
-    admin: &Who,
     app: Uuid,
     slug: &str,
     version: &str,
     by: Uuid,
     platform: &str,
 ) -> anyhow::Result<Uuid> {
-    let id = release_for_review(ctx, app, slug, version, by, platform).await?;
-    ctx.post(
-        admin,
-        &format!("/v1/admin/releases/{id}/approve"),
-        json!({}),
+    fetched_release(ctx, app, slug, version, by, platform, true).await
+}
+
+/// A release that passed its checks and that its maker `by` published (publish.rs, as the
+/// Publish button does), so it's signed and players get it.
+async fn approved_release(
+    ctx: &Ctx,
+    app: Uuid,
+    slug: &str,
+    version: &str,
+    by: Uuid,
+    platform: &str,
+) -> anyhow::Result<Uuid> {
+    let id = fetched_release(ctx, app, slug, version, by, platform, false).await?;
+    slop_api::publish::publish(
+        &ctx.db,
+        ctx.config.releases.signing_key.as_ref(),
+        slop_api::admin::ReviewRules::from_config(&ctx.config),
+        id,
+        by,
     )
-    .await?;
+    .await
+    .with_context(|| format!("publishing {slug} {version}"))?;
     Ok(id)
 }
 
@@ -1165,11 +1215,10 @@ async fn new_app(
     ctx.app_id(slug).await
 }
 
-/// A maker's app with a signed release, listed by staff.
-#[allow(clippy::too_many_arguments)]
+/// A maker's app with a signed release, put in the store by its maker (staff list only an app
+/// reinstated on appeal, admin.rs `STAFF_LISTS`).
 async fn published(
     ctx: &Ctx,
-    admin: &Who,
     maker: &Who,
     slug: &str,
     title: &str,
@@ -1187,8 +1236,8 @@ async fn published(
         &["windows"],
     )
     .await?;
-    approved_release(ctx, admin, id, slug, "1.0.0", maker.id, "windows").await?;
-    ctx.post(admin, &format!("/v1/admin/apps/{slug}/list"), json!({}))
+    approved_release(ctx, id, slug, "1.0.0", maker.id, "windows").await?;
+    ctx.post(maker, &format!("/v1/apps/{slug}/list"), json!({}))
         .await?;
     Ok(id)
 }
@@ -1267,7 +1316,6 @@ async fn store(
     // Lantern Keep: signed release, pictures approved by staff.
     let lantern = published(
         ctx,
-        admin,
         c.maker,
         "lantern-keep",
         "Lantern Keep",
@@ -1429,7 +1477,6 @@ async fn store(
     // (players have it, so it's checked by a person).
     let golf = published(
         ctx,
-        admin,
         c.maker2,
         "pocket-golf",
         "Pocket Golf",
@@ -1479,7 +1526,6 @@ async fn store(
     let build = ctx.app_id("lantern-keep-linux").await?;
     approved_release(
         ctx,
-        admin,
         build,
         "lantern-keep-linux",
         "1.0.0",
@@ -1487,7 +1533,7 @@ async fn store(
         "linux",
     )
     .await?;
-    ctx.post(admin, "/v1/admin/apps/lantern-keep-linux/list", json!({}))
+    ctx.post(c.maker2, "/v1/apps/lantern-keep-linux/list", json!({}))
         .await?;
     ctx.post(
         c.maker2,
@@ -1502,7 +1548,6 @@ async fn store(
     let lanterns_mod = ctx.app_id("lantern-keep-more-lanterns").await?;
     approved_release(
         ctx,
-        admin,
         lanterns_mod,
         "lantern-keep-more-lanterns",
         "1.0.0",
@@ -1511,8 +1556,8 @@ async fn store(
     )
     .await?;
     ctx.post(
-        admin,
-        "/v1/admin/apps/lantern-keep-more-lanterns/list",
+        c.maker2,
+        "/v1/apps/lantern-keep-more-lanterns/list",
         json!({}),
     )
     .await?;
@@ -1536,7 +1581,6 @@ async fn store(
     // Frozen by staff, and taken out of the store by staff.
     published(
         ctx,
-        admin,
         c.maker2,
         "frozen-fjord",
         "Frozen Fjord",
@@ -1552,7 +1596,6 @@ async fn store(
     .await?;
     published(
         ctx,
-        admin,
         c.maker2,
         "delisted-dash",
         "Delisted Dash",

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Admin → Review queue as an inbox (web/src/pages/admin/Inbox.tsx): the categories and their
-// counts (and the tab's total), one line per item, the order, quick Approve and Deny ("Are you
-// sure?" first), opening an item in full, the address and Back, People pages (Ivy's first
+// counts (and the tab's total), one line per item, the order, quick decisions (a release on hold
+// is accepted with no note needed; Reject and Deny ask "Are you sure?" first, with the reason),
+// opening an item in full, the address and Back, People pages (Ivy's first
 // portfolio is approved for real: the seed made it for this test), the phone layout and axe.
 // admin-queue.e2e.ts and the others decide each kind of item from its full card.
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
-import { call, closePages, inbox, inboxRow, newApp, newPage, newRelease, ok, tag } from "./admin-helpers";
+import { call, closePages, inbox, inboxRow, newApp, newPage, ok, ratingHold, tag } from "./admin-helpers";
 import { expect, ids, signIn, test, type Who } from "./fixtures";
 
 test.afterEach(closePages);
@@ -22,8 +23,8 @@ async function counts(): Promise<Record<string, number>> {
   const legal = await ok("admin", "GET", "/v1/admin/legal-requests");
   const holds = await ok("admin", "GET", "/v1/admin/donation-holds?show=open");
   return {
-    "New releases": q.releases.length,
-    "Release holds & moves": q.changes.length,
+    "Releases on hold": q.releases.length,
+    "Repository moves": q.changes.length,
     "Store pictures": q.media.length,
     "Apps to list": q.ready_to_list.length,
     "Re-scan flags": q.rescans.length,
@@ -62,24 +63,25 @@ test("categories with their counts, the tab's total, one line per item, and the 
   for (const [label, n] of Object.entries(want)) {
     await expect(categories(page).getByRole("link", { name: `${label} ${n} waiting`, exact: true })).toBeVisible();
   }
-  for (const label of ["New releases", "People pages", "Reports", "Appeals", "Second approvals", "Re-scan flags", "Abuse alerts"]) {
+  for (const label of ["Releases on hold", "People pages", "Reports", "Appeals", "Second approvals", "Re-scan flags", "Abuse alerts"]) {
     expect(want[label], label).toBeGreaterThan(0);
   }
   const total = Object.values(want).reduce((a, b) => a + b, 0);
   await expect(page.getByRole("tab", { name: `Review queue ${total} waiting`, exact: true })).toHaveAttribute("aria-selected", "true");
   // With no category in the address, the first with something waiting.
-  await expect(categories(page).getByRole("link", { name: /^New releases/ })).toHaveAttribute("aria-current", "page");
+  await expect(categories(page).getByRole("link", { name: /^Releases on hold/ })).toHaveAttribute("aria-current", "page");
 
   // One line each: what it is, a blurb, its status and how long it has waited.
-  const list = page.getByRole("list", { name: "New releases" });
-  await expect(list.getByRole("listitem")).toHaveCount(want["New releases"]);
+  const list = page.getByRole("list", { name: "Releases on hold" });
+  await expect(list.getByRole("listitem")).toHaveCount(want["Releases on hold"]);
+  // The seed's hold: a scanner flagged Pocket Golf 1.1.0.
   const golf = list.getByRole("listitem").filter({ hasText: "Pocket Golf 1.1.0" });
   await expect(golf.getByRole("link", { name: "Pocket Golf 1.1.0 by Bo Builder" })).toBeVisible();
-  await expect(golf.getByText(/^1 file · /)).toBeVisible();
-  await expect(golf.getByText("AWAITING REVIEW")).toBeVisible();
+  await expect(golf.getByText(/^1 file · scan found something/)).toBeVisible();
+  await expect(golf.getByText("SCAN HOLD")).toBeVisible();
   await expect(golf.locator("time")).toHaveText(/^(just now|\d+ (min|h|days?)) waiting$/);
-  await expect(golf.getByRole("button", { name: "Approve Pocket Golf 1.1.0" })).toBeVisible();
-  await expect(golf.getByRole("button", { name: "Deny Pocket Golf 1.1.0" })).toBeVisible();
+  await expect(golf.getByRole("button", { name: "Accept Pocket Golf 1.1.0" })).toBeVisible();
+  await expect(golf.getByRole("button", { name: "Reject Pocket Golf 1.1.0" })).toBeVisible();
   for (const line of await page.locator(".inbox-line").all()) {
     expect((await line.boundingBox())!.height).toBeLessThan(60);
   }
@@ -106,44 +108,50 @@ test("categories with their counts, the tab's total, one line per item, and the 
   await expect(page).toHaveURL(/[?&]box=appeals/);
   await expect(page.getByRole("heading", { name: `Appeals (${want.Appeals})` })).toBeVisible();
   await page.goBack();
-  await expect(page.getByRole("heading", { name: /^New releases \(/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Releases on hold \(/ })).toBeVisible();
 });
 
-test("Approve from the list: signed, the line goes, focus moves on, and it's said", async ({ page }) => {
+test("Accept from the list, with no note: the line goes, it waits for its maker, focus moves on, and it's said", async ({ page }) => {
   const t = tag();
   const app = { slug: `adm-ib1-${t}`, title: `Beacon ${t}` };
   await newApp(app, MAKER);
-  const id = await newRelease(app.slug, "1.0.0", MAKER);
+  const id = await ratingHold(app.slug, "1.1.0", MAKER);
   await signIn(page, "admin");
   await page.goto(inbox("releases"));
-  const row = inboxRow(page, `${app.title} 1.0.0`);
-  await expect(row.getByText("AWAITING REVIEW")).toBeVisible();
-  await row.getByRole("button", { name: `Approve ${app.title} 1.0.0` }).click();
+  const row = inboxRow(page, `${app.title} 1.1.0`);
+  await expect(row.getByText("LOWER RATING")).toBeVisible();
+  await row.getByRole("button", { name: `Accept ${app.title} 1.1.0` }).click();
+  // A note is offered, never required.
+  const ask = row.getByRole("form", { name: `Accept “${app.title} 1.1.0”.` });
+  const note = ask.getByRole("textbox", { name: "Note for the maker (optional)" });
+  await expect(note).toBeFocused();
+  await expect(ask.getByRole("button", { name: "Yes, accept" })).toBeEnabled();
+  await page.keyboard.press("Enter");
   await expect(row).toHaveCount(0);
-  await expect(page.getByRole("status").filter({ hasText: `Approved and signed “${app.title} 1.0.0”.` })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: `Accepted, for its maker to publish: “${app.title} 1.1.0”.` })).toBeVisible();
   // Focus is on the line now in its place (or the heading, when none is left).
   await expect(page.locator(".inbox-open:focus, h2:focus")).toHaveCount(1);
   const releases = await ok(MAKER, "GET", `/v1/apps/${app.slug}/releases`);
-  expect(releases.find((r: { id: string }) => r.id === id).status).toBe("approved");
+  expect(releases.find((r: { id: string }) => r.id === id).status).toBe("ready");
 });
 
-test("Deny asks “Are you sure?” first: Cancel keeps it; confirming rejects it with the reason", async ({ page }) => {
+test("Reject asks “Are you sure?” first: Cancel keeps it; confirming rejects it with the reason", async ({ page }) => {
   const t = tag();
   const app = { slug: `adm-ib2-${t}`, title: `Lagoon ${t}` };
   await newApp(app, MAKER);
-  const id = await newRelease(app.slug, "0.2.0", MAKER);
+  const id = await ratingHold(app.slug, "0.2.0", MAKER);
   await signIn(page, "admin");
   await page.goto(inbox("releases"));
   const row = inboxRow(page, `${app.title} 0.2.0`);
-  const deny = row.getByRole("button", { name: `Deny ${app.title} 0.2.0` });
+  const deny = row.getByRole("button", { name: `Reject ${app.title} 0.2.0` });
 
   await deny.click();
   await expect(deny).toHaveAttribute("aria-expanded", "true");
-  const ask = row.getByRole("form", { name: `Are you sure? Deny “${app.title} 0.2.0”.` });
+  const ask = row.getByRole("form", { name: `Are you sure? Reject “${app.title} 0.2.0”.` });
   await expect(ask).toBeVisible();
   const reason = ask.getByRole("textbox", { name: "Why (the maker reads this)" });
   await expect(reason).toBeFocused();
-  await expect(ask.getByRole("button", { name: "Yes, deny" })).toBeDisabled();
+  await expect(ask.getByRole("button", { name: "Yes, reject" })).toBeDisabled();
   await ask.getByRole("button", { name: "Cancel" }).click();
   await expect(ask).toHaveCount(0);
   await expect(deny).toBeFocused();
@@ -153,7 +161,7 @@ test("Deny asks “Are you sure?” first: Cancel keeps it; confirming rejects i
 
   await deny.click();
   await reason.fill("The zip has no program in it.");
-  await ask.getByRole("button", { name: "Yes, deny" }).click();
+  await ask.getByRole("button", { name: "Yes, reject" }).click();
   await expect(row).toHaveCount(0);
   await expect(page.getByRole("status").filter({ hasText: `Rejected “${app.title} 0.2.0”.` })).toBeVisible();
   const rejected = (await ok(MAKER, "GET", `/v1/apps/${app.slug}/releases`)).find((r: { id: string }) => r.id === id);
@@ -251,7 +259,7 @@ test("on a phone the categories are a menu and the lines wrap", async ({ page })
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.goBack();
   // A line's buttons fit on the screen.
-  const approve = inboxRow(page, "Pocket Golf 1.1.0").getByRole("button", { name: "Approve Pocket Golf 1.1.0" });
+  const approve = inboxRow(page, "Pocket Golf 1.1.0").getByRole("button", { name: "Accept Pocket Golf 1.1.0" });
   await approve.scrollIntoViewIfNeeded();
   await expect(approve).toBeInViewport();
   const box = (await approve.boundingBox())!;
@@ -262,9 +270,14 @@ test("on a phone the categories are a menu and the lines wrap", async ({ page })
 test("the inbox, a list and an item have no serious accessibility problems", async ({ page }) => {
   await signIn(page, "admin");
   await page.goto(inbox("releases"));
-  await expect(page.getByRole("list", { name: "New releases" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Releases on hold" })).toBeVisible();
   await axe(page);
-  await inboxRow(page, "Pocket Golf 1.1.0").getByRole("button", { name: "Deny Pocket Golf 1.1.0" }).click();
+  await inboxRow(page, "Pocket Golf 1.1.0").getByRole("button", { name: "Reject Pocket Golf 1.1.0" }).click();
+  await axe(page);
+  // The seed's hold in full: what the scanner found, the reply box and Accept, labelled.
+  await page.goto(inbox("releases"));
+  await inboxRow(page, "Pocket Golf 1.1.0").getByRole("link").first().click();
+  await expect(page.locator(".inbox-detail").getByRole("textbox", { name: "Reply to the maker" })).toBeVisible();
   await axe(page);
   await page.goto(inbox("people"));
   await inboxRow(page, "Remy Pending").getByRole("link").click();

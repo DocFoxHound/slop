@@ -480,7 +480,9 @@ test("a draft is only for its maker: others can't find it", async ({ browser }) 
   await maker.goto(`/app/${ids.draftApp}`);
   const notice = maker.locator(".notice").filter({ hasText: "Only you can see this page." });
   await expect(notice.getByText("DRAFT", { exact: true })).toBeVisible();
-  await expect(notice.getByText(/It goes in the store once it's published and passes every scan\./)).toBeVisible();
+  // A Coming soon page: its maker puts it in the store, from Manage.
+  await expect(notice.getByText(/Put it in the store from/)).toBeVisible();
+  await expect(notice.getByRole("link", { name: "Manage" })).toHaveAttribute("href", `/publish/${ids.draftApp}/manage`);
   await expect(notice.getByRole("link", { name: "Edit draft" })).toHaveAttribute("href", `/publish/${ids.draftApp}`);
 
   for (const who of ["player", null] as const) {

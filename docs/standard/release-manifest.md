@@ -2,9 +2,10 @@
 
 **Purpose prefix:** `slop/release-manifest/v1` · **Schema:** [`schemas/release-manifest.schema.json`](schemas/release-manifest.schema.json) · **Example:** [`vectors/release-manifest.json`](vectors/release-manifest.json)
 
-SLAPorSLOP signs a release manifest when a person approves a release. It lists every file of the
-release. The files themselves stay on the maker's release page; the manifest is what makes them
-safe to install from there, since a file whose hash doesn't match is refused.
+SLAPorSLOP signs a release manifest when the release's maker publishes it, after it passed
+SLAPorSLOP's checks. It lists every file of the release. The files themselves stay on the maker's
+release page; the manifest is what lets them be installed from there, since a file whose hash
+doesn't match is refused.
 
 `GET /v1/apps/{slug}/manifest` returns the manifest of the release SLAPorSLOP currently serves for an
 app, in the [signed envelope](README.md#the-signed-envelope). It answers 404 for an app the asker
@@ -24,7 +25,7 @@ can't see.
 | `version` | string | The release's version |
 | `commit` | string | The 40-character commit the release was built from |
 | `files` | array of [files](#a-file) | One per platform |
-| `approved_at` | string | When a person approved it (RFC 3339) |
+| `approved_at` | string | When its maker published it, after it passed SLAPorSLOP's checks (RFC 3339). The name is kept for compatibility |
 | `mod_for` | [app](#an-app) | Optional. A mod: the game it's for. Install it only into that game |
 | `build_of` | [app](#an-app) | Optional. A community build: the original it's a build of |
 | `mods_folder` | [mods folder](#a-mods-folder) | Optional. Where the app reads mods from, when the maker named a folder |

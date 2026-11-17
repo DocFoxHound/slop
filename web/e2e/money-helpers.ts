@@ -43,7 +43,7 @@ async function exists(who: Who, slug: string): Promise<boolean> {
   return (await call(who, "GET", `/v1/apps/${slug}`)).status === 200;
 }
 
-/** Submits release 1.0.0 (the fake GitHub's zip), waits for SLAPorSLOP to fetch it, and has staff approve it. */
+/** Submits release 1.0.0 (the fake GitHub's zip), waits for SLAPorSLOP's checks to pass it, and its maker publishes it. */
 async function approvedRelease(maker: Who, slug: string) {
   const releases = await api<Array<{ id: string; status: string }>>(maker, "GET", `/v1/apps/${slug}/releases`);
   if (releases.some((r) => r.status === "approved")) return;
@@ -62,13 +62,15 @@ async function approvedRelease(maker: Who, slug: string) {
       ],
     });
   }
-  for (let i = 0; i < 100 && release!.status !== "awaiting_review"; i++) {
+  for (let i = 0; i < 100 && release!.status !== "ready" && release!.status !== "approved"; i++) {
     await new Promise((r) => setTimeout(r, 200));
     const now = await api<Array<{ id: string; status: string }>>(maker, "GET", `/v1/apps/${slug}/releases`);
     release = now.find((r) => r.id === release!.id)!;
   }
-  if (release!.status !== "awaiting_review") throw new Error(`release of ${slug} is ${release!.status}`);
-  await api("admin", "POST", `/v1/admin/releases/${release!.id}/approve`, {});
+  if (release!.status === "approved") return;
+  if (release!.status !== "ready") throw new Error(`release of ${slug} is ${release!.status}`);
+  // Its maker publishes it, as the Publish button does.
+  await api(maker, "POST", `/v1/apps/${slug}/releases/${release!.id}/publish`, {});
 }
 
 async function donationsOn(maker: Who, slug: string, servers: string | null) {
@@ -103,7 +105,7 @@ export async function listedApp(
       platforms: ["windows"],
     });
     await approvedRelease(maker, slug);
-    await api("admin", "POST", `/v1/admin/apps/${slug}/list`, {});
+    await api(maker, "POST", `/v1/apps/${slug}/list`, {});
     if (opts.donations) await donationsOn(maker, slug, opts.servers ?? null);
   }
   return slug;
@@ -130,7 +132,7 @@ export async function communityBuild(
     });
     if (opts.released !== false) {
       await approvedRelease(author, slug);
-      await api("admin", "POST", `/v1/admin/apps/${slug}/list`, {});
+      await api(author, "POST", `/v1/apps/${slug}/list`, {});
       if (opts.donations) await donationsOn(author, slug, null);
     }
   }
@@ -223,7 +225,7 @@ export async function offerApps() {
       tags: ["puzzle"],
       platforms: ["windows"],
     });
-    await api("admin", "POST", "/v1/admin/apps/firefly-garden/list", {});
+    await api("maker", "POST", "/v1/apps/firefly-garden/list", {});
   }
   if (!(await exists("maker2", "firefly-garden-remix"))) {
     await api("maker2", "POST", "/v1/apps/firefly-garden/branches", {

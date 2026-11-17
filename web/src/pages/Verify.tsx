@@ -65,7 +65,7 @@ export function Verify() {
     <div className="page narrow doc">
       <h1>Check a file</h1>
       <p>
-        Got a game or app from somewhere else? See whether it's a build SLAPorSLOP scanned and approved, or one SLAPorSLOP withdrew.
+        Got a game or app from somewhere else? See whether it's a build SLAPorSLOP scanned and signed, or one SLAPorSLOP withdrew.
         Your file stays on your computer: only its fingerprint (SHA-256) is sent.
       </p>
       <p>

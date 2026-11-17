@@ -130,9 +130,10 @@ enum KeysCommand {
 
 #[derive(Subcommand)]
 enum ReviewCommand {
-    /// Releases waiting for review.
+    /// Releases on hold that need staff, and makers' questions about failed releases.
     Pending,
-    /// Approve a release and sign its manifest.
+    /// Accept a release on hold (its findings are false positives): it's ready for its maker to
+    /// publish. Nothing reaches players until they do.
     Approve {
         release_id: Uuid,
         #[arg(long)]
@@ -146,7 +147,8 @@ enum ReviewCommand {
         #[arg(long)]
         reason: String,
     },
-    /// Put a reviewed app in the store.
+    /// Put an app back in the store after an appeal reinstated it (makers put their own drafts
+    /// in the store from the Manage page).
     List {
         slug: String,
         #[arg(long)]
@@ -283,17 +285,23 @@ async fn main() -> anyhow::Result<()> {
                 ReviewCommand::Pending => {
                     let pending = admin::pending(&db).await?;
                     if pending.is_empty() {
-                        println!("Nothing waiting for review.");
+                        println!("No release on hold needs staff.");
                     }
                     if !config.releases.scanner.is_on() {
                         println!("Note: scanning is off on this server; files are NOT scanned.");
                     }
                     for r in pending {
                         println!(
-                            "{}  {} {}  commit {}{}  {}",
+                            "{}  {} {}  [{}{}]  commit {}{}  {}",
                             r.id,
                             r.app_slug,
                             r.version,
+                            r.kinds.join(", "),
+                            if r.unanswered {
+                                "; the maker is waiting for an answer"
+                            } else {
+                                ""
+                            },
                             &r.commit_sha[..12],
                             if r.commit_verified {
                                 " (found in repo)"
@@ -302,7 +310,7 @@ async fn main() -> anyhow::Result<()> {
                             },
                             r.repo_url
                         );
-                        // A browser game: open the address and play it before approving.
+                        // A browser game: its address, should staff want to look.
                         if let Some(address) = &r.play_address {
                             println!(
                                 "    plays at {address} (SLAPorSLOP checked the address, not what the site serves)"
@@ -314,19 +322,31 @@ async fn main() -> anyhow::Result<()> {
                     release_id,
                     reviewer,
                 } => {
+                    use slop_api::publish::Outcome;
                     match admin::approve(
                         &db,
-                        config.releases.signing_key.as_ref(),
                         admin::ReviewRules::from_config(&config),
                         release_id,
                         &reviewer,
                     )
                     .await?
                     {
-                        admin::Approval::Signed => println!("Approved and signed {release_id}."),
-                        admin::Approval::PlayAddress => {
-                            println!("Approved {release_id}: Play opens its address now.")
+                        Outcome::Ready => {
+                            println!("Accepted: it's ready for its maker to publish.")
                         }
+                        Outcome::Held { kinds, .. } => println!(
+                            "Still on hold ({}).",
+                            kinds
+                                .iter()
+                                .map(|k| k.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        Outcome::Failed(reason) => println!("It failed its checks: {reason}"),
+                        Outcome::Replaced(by) => {
+                            println!("Version {by} was published since: it's replaced.")
+                        }
+                        Outcome::NotChecking => println!("It isn't on hold."),
                     }
                 }
                 ReviewCommand::Reject {
@@ -512,7 +532,7 @@ async fn serve() -> anyhow::Result<()> {
     }
     if config.releases.signing_key.is_none() {
         tracing::warn!(
-            "SLOP_SIGNING_KEY not set: releases can't be approved and there's no revocation list"
+            "SLOP_SIGNING_KEY not set: releases can't be published and there's no revocation list"
         );
     }
 
@@ -540,6 +560,23 @@ async fn serve() -> anyhow::Result<()> {
     }
     let bind = config.bind;
     let state = AppState::new(db, config)?;
+    // Copies of release files left by a server that stopped mid-check (none are kept).
+    let swept = releases::sweep_temp_files(
+        &std::env::temp_dir(),
+        std::time::Duration::from_secs(2 * 3600),
+    );
+    if swept > 0 {
+        tracing::info!(swept, "deleted leftover temporary release files");
+    }
+    // Releases left waiting for a person's review by the old flow: their checks end now.
+    tokio::spawn({
+        let state = state.clone();
+        async move {
+            if let Err(err) = slop_api::publish::settle_after_upgrade(&state).await {
+                tracing::error!(error = ?err, "settling releases after the upgrade");
+            }
+        }
+    });
     tokio::spawn(releases::run_fetcher(state.clone()));
     tokio::spawn(slop_api::bounties::run_charger(state.clone()));
     tokio::spawn(slop_api::repo_identity::run_fill(state.clone()));

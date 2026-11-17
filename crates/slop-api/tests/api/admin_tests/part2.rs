@@ -769,6 +769,18 @@ fn tool_cases(ids: &ToolIds) -> Vec<(&'static str, Value, &'static str, &'static
         ),
         ("approve_release", json!({ "id": any }), "review", &["id"]),
         (
+            "release_hold",
+            json!({ "id": ids.release.to_string() }),
+            "read",
+            &["id"],
+        ),
+        (
+            "answer_release_hold",
+            json!({ "id": any, "body": "We're looking at it." }),
+            "review",
+            &["id"],
+        ),
+        (
             "reject_release",
             json!({ "id": any, "reason": "Crashes at start." }),
             "review",
@@ -1067,6 +1079,8 @@ fn tool_cases(ids: &ToolIds) -> Vec<(&'static str, Value, &'static str, &'static
 struct ToolIds {
     troll: Uuid,
     game: Uuid,
+    /// A release of "game", for reading its hold.
+    release: Uuid,
     hold: Uuid,
     request: Uuid,
     action: Uuid,
@@ -1159,9 +1173,19 @@ async fn tool_fixtures(db: PgPool) -> (TestApp, [String; 3], ToolIds) {
         .execute(&app.db)
         .await
         .unwrap();
+    let release = Uuid::now_v7();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by)
+         select $1, id, '1.0.0', repeat('a', 40), 'fetching', maker_id from apps where slug = 'game'",
+    )
+    .bind(release)
+    .execute(&app.db)
+    .await
+    .unwrap();
     let ids = ToolIds {
         troll,
         game: app_id(&app, "game").await,
+        release,
         hold,
         request,
         action,
@@ -1393,7 +1417,8 @@ async fn the_status_overview_counts_whats_waiting_and_reads_the_servers_folders(
     .await;
     let (_, owner) = make_admin(&app, "Olive Owner").await;
     let (maker_id, maker) = maker_with_app(&app, "released").await;
-    submit_and_fetch(&app, &maker, "1.0.0").await;
+    let held = submit_and_fetch(&app, &maker, "1.0.0").await;
+    flag_release(&app, &held).await;
     listed_with(&app, maker_id, "one", "released", "").await;
     listed_with(&app, maker_id, "two", "released", "").await;
     report(&app, 0, "1 hour", "open").await;
@@ -1529,6 +1554,7 @@ async fn the_review_feed_filters_by_kind_and_says_who_can_decide(db: PgPool) {
     let (_, support) = staff(&app, "Sue Support", "support").await;
     let (maker_id, maker) = maker_with_app(&app, "released").await;
     let release = submit_and_fetch(&app, &maker, "1.0.0").await;
+    flag_release(&app, &release).await;
     listed_with(&app, maker_id, "other", "released", "").await;
     let (job, problem) = job_with_trouble(&app, "other").await;
     let read = token(&app, &owner, "read").await;
@@ -1613,6 +1639,7 @@ async fn review_notes_need_a_real_subject_a_known_verdict_and_some_words(db: PgP
     let (_, owner) = make_admin(&app, "Olive Owner").await;
     let (_, maker) = maker_with_app(&app, "released").await;
     let release = submit_and_fetch(&app, &maker, "1.0.0").await;
+    flag_release(&app, &release).await;
     let read = token(&app, &owner, "read").await;
     let note = |kind: &str, id: &str, body: Value| {
         req(Method::POST, format!("/v1/admin/review/{kind}/{id}/notes"))
@@ -2598,7 +2625,7 @@ async fn the_command_line_reviews_rejects_and_withdraws_releases(db: PgPool) {
     let run = cli(&["review", "pending"], &env).await;
     assert!(run.ok, "{}", run.err);
     assert!(
-        run.out.contains("Nothing waiting for review."),
+        run.out.contains("No release on hold needs staff."),
         "{}",
         run.out
     );
@@ -2610,6 +2637,9 @@ async fn the_command_line_reviews_rejects_and_withdraws_releases(db: PgPool) {
     let (maker_id, maker) = maker_with_app(&app, "released").await;
     let first = submit_and_fetch(&app, &maker, "1.0.0").await;
     let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    // On hold, both: a scanner flagged them.
+    flag_release(&app, &first).await;
+    flag_release(&app, &second).await;
     sqlx::query("update releases set commit_verified = true where id = $1::uuid")
         .bind(&second)
         .execute(&app.db)
@@ -2621,8 +2651,8 @@ async fn the_command_line_reviews_rejects_and_withdraws_releases(db: PgPool) {
     assert_eq!(
         lines,
         [
-            format!("{first}  game 1.0.0  commit aaaaaaaaaaaa (NOT checked)  {repo}"),
-            format!("{second}  game 1.1.0  commit aaaaaaaaaaaa (found in repo)  {repo}"),
+            format!("{first}  game 1.0.0  [scan]  commit aaaaaaaaaaaa (NOT checked)  {repo}"),
+            format!("{second}  game 1.1.0  [scan]  commit aaaaaaaaaaaa (found in repo)  {repo}"),
         ],
         "{}",
         run.out
@@ -2708,7 +2738,7 @@ async fn the_command_line_reviews_rejects_and_withdraws_releases(db: PgPool) {
     )
     .await;
     assert!(
-        !run.ok && run.err.contains("no release waiting for review"),
+        !run.ok && run.err.contains("no unpublished release with that ID"),
         "{}",
         run.err
     );
@@ -2724,15 +2754,8 @@ async fn the_command_line_reviews_rejects_and_withdraws_releases(db: PgPool) {
         "{}",
         run.err
     );
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        second.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    // Accepted (publishing_tests has the command line's), then published by its maker.
+    accept_and_publish(&app, &second).await;
     sqlx::query("update apps set pinned_release_id = $1::uuid where slug = 'game'")
         .bind(&second)
         .execute(&app.db)
@@ -2816,7 +2839,7 @@ async fn the_command_line_moves_and_delists_apps(db: PgPool) {
     )
     .await;
     assert!(
-        !run.ok && run.err.contains("approve a release first"),
+        !run.ok && run.err.contains("publishes a release first"),
         "{}",
         run.err
     );
@@ -3497,7 +3520,7 @@ async fn the_fetcher_wakes_for_new_releases_and_retakes_abandoned_ones(db: PgPoo
         .await
         .unwrap();
     assert!(releases::fetch_next(&app.state).await.unwrap());
-    assert_eq!(release_state(&app, &first).await, "awaiting_review");
+    assert_eq!(release_state(&app, &first).await, "ready");
     assert!(
         !releases::fetch_next(&app.state).await.unwrap(),
         "nothing left"
@@ -3510,7 +3533,7 @@ async fn the_fetcher_wakes_for_new_releases_and_retakes_abandoned_ones(db: PgPoo
     assert_eq!(res.status(), StatusCode::CREATED);
     let second = body_json(res).await["id"].as_str().unwrap().to_string();
     eventually(10, "the woken fetcher fetched it", || async {
-        release_state(&app, &second).await == "awaiting_review"
+        release_state(&app, &second).await == "ready"
     })
     .await;
     fetcher.abort();

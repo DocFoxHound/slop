@@ -142,7 +142,7 @@ async fn updates(
         let pending: Option<Pending> = sqlx::query_as(
             "select r.version, r.status::text as status from releases r
              where r.app_id = $1 and r.status::text in ('fetching', 'awaiting_review')
-               and r.created_at > coalesce((select max(x.reviewed_at) from releases x
+               and r.created_at > coalesce((select max(x.published_at) from releases x
                                             where x.app_id = $1 and x.status = 'approved'), '-infinity')
              order by r.created_at desc limit 1",
         )
@@ -177,7 +177,7 @@ async fn updates(
                   left join lateral (
                       select r.repo_scan from releases r
                       where r.app_id = a.id and r.status = 'approved' and r.signed_manifest is not null
-                      order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc limit 1) n on true
+                      order by coalesce(r.id = a.pinned_release_id, false) desc, r.published_at desc limit 1) n on true
              where a.branch_kind = 'addon' and a.parent_app_id = ",
         );
         qb.push_bind(app_id).push(" and (");

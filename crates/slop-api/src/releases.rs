@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Releases: makers submit them, SLAPorSLOP fetches and hashes their files, a reviewer approves them
-//! and SLAPorSLOP signs the manifest (docs/ARCHITECTURE.md §6.3, docs/SECURITY.md §5).
+//! Releases: makers submit them, SLAPorSLOP fetches, hashes and scans their files, and once they
+//! pass every check their maker publishes them, which signs the manifest (publish.rs,
+//! docs/ARCHITECTURE.md §6.3, docs/SECURITY.md §5).
 //!
 //! Builds stay on the maker's release page. SLAPorSLOP downloads each file once to hash it, keeps
 //! nothing but the hash and size, and the client later downloads from the same URL and checks
 //! the hash against SLAPorSLOP's signed manifest.
 //!
 //! A browser game's release is a play address instead of files (DESIGN §8): SLAPorSLOP checks it
-//! (https, a public site, the bad-link lists, and that the page loads), a person approves it, and
-//! nothing is signed. Play then opens it (`catalog::PLAY_ADDRESS`). SLAPorSLOP checks the
+//! (https, a public site, the bad-link lists, and that the page loads), its maker publishes it,
+//! and nothing is signed. Play then opens it (`catalog::PLAY_ADDRESS`). SLAPorSLOP checks the
 //! address, not what the site serves.
 
 use std::{sync::atomic::Ordering, time::Duration as StdDuration};
@@ -43,9 +44,15 @@ pub const REVOCATION_LIST_LIFETIME: Duration = Duration::hours(6);
 /// A fetch that hasn't moved on for this long is presumed dead and retried. Each step of each
 /// file renews it (`file_stage`), so it only has to outlast one file's longest scan (scan.rs).
 const FETCH_LEASE: Duration = Duration::minutes(40);
-/// The same for a play address, whose check takes seconds (at most `AppState.page_check_deadline`
-/// for the page, plus the commit): one that died with the server is checked again soon.
-const ADDRESS_FETCH_LEASE: Duration = Duration::minutes(3);
+/// The same for a play address, whose own check takes seconds (at most
+/// `AppState.page_check_deadline` for the page, plus the commit), but whose source check
+/// downloads the repository: each step after the fetch renews the lease (`fetch_next`), so this
+/// only has to outlast the longest one. One that died with the server is checked again soon.
+const ADDRESS_FETCH_LEASE: Duration = Duration::minutes(15);
+/// Times the fetcher starts checking one release: one that keeps failing after its files were
+/// fetched (the pictures, the source check or the end of its checks erroring) fails with a plain
+/// reason after this many, instead of being downloaded again forever.
+const MAX_FETCH_ATTEMPTS: i16 = 3;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -125,20 +132,135 @@ pub(crate) struct Rating {
     pub content_labels: Vec<String>,
 }
 
-/// Whether `release`'s rating is below the last approved release's: a lower age or a label
-/// dropped. Such an update waits for a person (updates.rs).
-pub(crate) async fn rating_lowered(db: &sqlx::PgPool, release: Uuid) -> sqlx::Result<bool> {
-    sqlx::query_scalar(
-        "select coalesce((
-             select r.min_age < p.min_age or not (r.content_labels @> p.content_labels)
-             from releases r, releases p
-             where r.id = $1 and p.app_id = r.app_id and p.id <> r.id and p.status = 'approved'
-               and p.min_age is not null and r.min_age is not null
-             order by p.reviewed_at desc limit 1), false)",
+/// How publishing a release would lower the rating players are shown (AGE-7): a lower age,
+/// content labels dropped, or both. SLAPorSLOP staff check it before its maker can publish it
+/// (publish.rs). `from_age` is the rating players are shown now; `to_age` the one they'd be shown
+/// after (the release's, or the floor SLAPorSLOP staff set, if higher).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RatingChange {
+    pub from_age: i16,
+    pub to_age: i16,
+    pub dropped_labels: Vec<String>,
+}
+
+impl RatingChange {
+    /// "16+", or "all ages" for 0.
+    pub(crate) fn age(age: i16) -> String {
+        if age == 0 {
+            "all ages".into()
+        } else {
+            format!("{age}+")
+        }
+    }
+
+    /// "lowers the age rating from 16+ to 12+", "drops the content labels violence and gambling".
+    pub(crate) fn describe(&self) -> String {
+        let mut out = Vec::new();
+        if self.to_age < self.from_age {
+            out.push(format!(
+                "lowers the age rating from {} to {}",
+                Self::age(self.from_age),
+                Self::age(self.to_age)
+            ));
+        }
+        let words: Vec<&str> = self
+            .dropped_labels
+            .iter()
+            .map(|l| catalog::content_label_words(l))
+            .collect();
+        match words.as_slice() {
+            [] => {}
+            [one] => out.push(format!("drops the content label {one}")),
+            [rest @ .., last] => out.push(format!(
+                "drops the content labels {} and {last}",
+                rest.join(", ")
+            )),
+        }
+        out.join(" and ")
+    }
+}
+
+/// Whether publishing `release` would lower the rating players are shown (a lower age or a label
+/// dropped), and how. Players are shown the store page's rating, which is at least the last
+/// published release's (and rises when the maker holds players at a higher-rated one, manage.rs);
+/// publishing gives the store page the release's rating, never below what SLAPorSLOP staff set
+/// (`apps.min_age_floor`, `content_labels_floor`). A first release never lowers anything. It holds
+/// the release for SLAPorSLOP staff (publish.rs), and is shown to its maker and logged.
+pub(crate) async fn rating_change(
+    conn: &mut sqlx::PgConnection,
+    release: Uuid,
+) -> sqlx::Result<Option<RatingChange>> {
+    type Row = (
+        i16,
+        Vec<String>,
+        i16,
+        Vec<String>,
+        i16,
+        Vec<String>,
+        Option<i16>,
+        Vec<String>,
+    );
+    let row: Option<Row> = sqlx::query_as(
+        "select p.min_age, p.content_labels, a.min_age, a.content_labels, r.min_age, r.content_labels,
+                a.min_age_floor, a.content_labels_floor
+         from releases r join apps a on a.id = r.app_id
+         join lateral (select p.min_age, p.content_labels from releases p
+                       where p.app_id = r.app_id and p.id <> r.id and p.status = 'approved'
+                         and p.min_age is not null
+                       order by p.published_at desc nulls last limit 1) p on true
+         where r.id = $1 and r.min_age is not null",
     )
     .bind(release)
-    .fetch_one(db)
-    .await
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.and_then(
+        |(published_age, published, store_age, store, age, labels, floor_age, floor)| {
+            let from_age = published_age.max(store_age);
+            let to_age = age.max(floor_age.unwrap_or(0));
+            let mut shown = published;
+            for l in store {
+                if !shown.contains(&l) {
+                    shown.push(l);
+                }
+            }
+            let dropped_labels: Vec<String> = shown
+                .into_iter()
+                .filter(|l| !labels.contains(l) && !floor.contains(l))
+                .collect();
+            (to_age < from_age || !dropped_labels.is_empty()).then_some(RatingChange {
+                from_age,
+                to_age,
+                dropped_labels,
+            })
+        },
+    ))
+}
+
+/// Whether SLAPorSLOP staff accepted `change` for `release`: they accepted a lowered rating for
+/// it, and this change is no worse than the one they saw (players aren't shown a higher rating
+/// now, it doesn't go lower, and it drops no other label).
+pub(crate) async fn rating_accepted(
+    conn: &mut sqlx::PgConnection,
+    release: Uuid,
+    change: &RatingChange,
+) -> sqlx::Result<bool> {
+    let row: (Option<i16>, Option<i16>, Option<Vec<String>>) = sqlx::query_as(
+        "select rating_accepted_from, rating_accepted_to, rating_accepted_labels from releases
+         where id = $1 and rating_accepted_at is not null",
+    )
+    .bind(release)
+    .fetch_optional(conn)
+    .await?
+    .unwrap_or_default();
+    Ok(match row {
+        (Some(from), Some(to), labels) => {
+            let labels = labels.unwrap_or_default();
+            change.from_age <= from
+                && change.to_age >= to
+                && change.dropped_labels.iter().all(|l| labels.contains(l))
+        }
+        _ => false,
+    })
 }
 
 struct CheckedFile {
@@ -370,8 +492,9 @@ fn drop_trailing_dot(url: &mut Url) -> Result<(), url::ParseError> {
 
 /// Whether two play addresses are the same, exactly as they're kept (`validate_play_address`):
 /// the scheme, the site (`www.` included), the port, the path, the query and the fragment all
-/// count, so automatic approval (updates.rs) never takes a changed address for the one a person
-/// approved. The bad-link lists compare more loosely (bad_links.rs `normalize`).
+/// count, so a changed address is never taken for the one Play opens now (a new site, shown to
+/// its maker when they publish). The bad-link lists compare more loosely (bad_links.rs
+/// `normalize`).
 pub(crate) fn same_address(a: &str, b: &str) -> bool {
     let kept = |s: &str| {
         let mut url = Url::parse(s.trim()).ok()?;
@@ -582,8 +705,15 @@ struct ReleaseFileInfo {
     scan_report: Option<serde_json::Value>,
     /// Microsoft Defender's check (Windows builds).
     defender: Option<serde_json::Value>,
-    /// A reviewer cleared a finding as a false positive, and why.
+    /// SLAPorSLOP staff cleared a finding as a false positive (with or without a note).
+    cleared: bool,
+    /// The note they left for the maker, if any.
     cleared_reason: Option<String>,
+    /// SLAPorSLOP staff cleared Microsoft Defender's detections in it as a false positive.
+    defender_cleared: bool,
+    /// SLAPorSLOP staff checked it by hand and waived its missing Microsoft Defender check (a
+    /// repository outside GitHub, where Slop Check can't run).
+    defender_waived: bool,
     /// What SLAPorSLOP is doing with this file right now: downloading, signature or scanning
     /// (release_progress.rs). Null when it isn't being checked.
     check_stage: Option<String>,
@@ -609,8 +739,23 @@ pub(crate) struct ReleaseInfo {
     created_at: OffsetDateTime,
     /// maker, slop_build or github_release.
     source: String,
-    /// True when SLAPorSLOP approved it automatically as an update (updates.rs).
+    /// True when SLAPorSLOP's automatic checks passed it (rather than SLAPorSLOP staff).
     auto_approved: bool,
+    /// When its maker published it: players get the newest published release (`SERVING`).
+    #[serde(with = "time::serde::rfc3339::option")]
+    published_at: Option<OffsetDateTime>,
+    /// For its maker, before it's published: what the source check found that the last
+    /// published release didn't have (source_scan.rs `new_concerns`), as information.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_concerns: Option<String>,
+    /// For its maker, before it's published: how it lowers the last published release's rating.
+    /// SLAPorSLOP staff check that before it can be published (publish.rs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rating_change: Option<RatingChange>,
+    /// For its maker, a browser game's release that passed its checks: whether it brings another
+    /// address than the one Play opens now (a new site).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_play_address: Option<bool>,
     /// Its rating (AGE-7).
     rating: Option<Rating>,
     /// Shared runtimes it needs.
@@ -635,6 +780,10 @@ pub(crate) struct ReleaseInfo {
     repo_scan: Option<serde_json::Value>,
     /// Advisories for its packages (dep_watch.rs), newest first.
     advisories: Vec<Advisory>,
+    /// For its maker: its hold in brief (holds.rs), when it's on hold or was, or they asked
+    /// SLAPorSLOP staff about it. `GET …/hold` has the whole of it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hold: Option<crate::holds::HoldSummary>,
     /// Where it is in SLAPorSLOP's checks, file by file, with a summary for the maker.
     progress: crate::release_progress::ReleaseProgress,
 }
@@ -783,9 +932,9 @@ async fn edit_release(
     Ok(Json(load_release(&state, release_id).await?))
 }
 
-/// The maker withdraws a release that hasn't been reviewed yet: one they didn't publish (the
-/// "was submitted" notice says how), or one sent by mistake. It never reaches players, and the
-/// app's next release waits for a person (updates.rs), in case it wasn't the maker who sent it.
+/// The maker withdraws a release that hasn't been published yet: one they didn't send (the "was
+/// submitted" notice says how), one sent by mistake, or one on hold they fixed with a new
+/// version. It never reaches players.
 async fn withdraw_release(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -802,21 +951,31 @@ async fn withdraw_release(
     .await?;
     match status.as_deref() {
         None => return Err(ApiError::NotFound),
-        Some("fetching" | "awaiting_review") => {}
+        Some("fetching" | "awaiting_review" | "ready") => {}
         Some(_) => {
             return Err(ApiError::Conflict(
-                "only a release that hasn't been reviewed yet can be withdrawn".into(),
+                "only a release that hasn't been published yet can be withdrawn".into(),
             ));
         }
     }
     let version: String = sqlx::query_scalar(
         "update releases set status = 'withdrawn', reviewed_at = now(),
-                status_reason = 'Withdrawn by the maker before review.'
+                status_reason = 'Withdrawn by the maker before it was published.'
          where id = $1 returning version",
     )
     .bind(release_id)
     .fetch_one(&mut *tx)
     .await?;
+    let by = user.id.to_string();
+    if crate::publish::close_hold(&mut tx, release_id, "withdrawn", &by).await? {
+        crate::publish::system_line(
+            &mut tx,
+            release_id,
+            "Withdrawn by the maker before it was published.",
+            None,
+        )
+        .await?;
+    }
     crate::admin::audit(
         &mut tx,
         &user.id.to_string(),
@@ -831,7 +990,7 @@ async fn withdraw_release(
     Ok(Json(load_release(&state, release_id).await?))
 }
 
-/// Checks and records a new release for fetching and review. Shared by makers' own submissions,
+/// Checks and records a new release for fetching and checking. Shared by makers' own submissions,
 /// Slop Build's (slop_build.rs) and the GitHub release watcher (updates.rs), so all go through
 /// the same checks. `source` is maker, slop_build or github_release. A browser game's release
 /// brings `play_address` and no files, and only from its maker.
@@ -933,7 +1092,7 @@ pub(crate) async fn create_release(
         }
         None => sqlx::query_scalar(
             "select runtimes from releases where app_id = $1 and status = 'approved'
-             order by reviewed_at desc limit 1",
+             order by published_at desc limit 1",
         )
         .bind(app_id)
         .fetch_optional(&state.db)
@@ -980,7 +1139,7 @@ pub(crate) async fn create_release(
     .await?;
     if pending >= 3 {
         return Err(ApiError::Conflict(
-            "three releases are already waiting for review".into(),
+            "three releases are already being checked or on hold".into(),
         ));
     }
 
@@ -1076,13 +1235,43 @@ pub(crate) async fn create_release(
 }
 
 /// What happened to a release, for its maker. `Withdrawn` is SLAPorSLOP's kill switch;
-/// `WithdrawnByMaker` is the maker taking one back before review (`withdraw_release`).
+/// `WithdrawnByMaker` is the maker taking one back before publishing it (`withdraw_release`).
 pub enum ReleaseEvent<'a> {
-    Received { source: &'a str },
-    Approved { automatically: bool },
-    Rejected { reason: &'a str },
-    Failed { reason: &'a str },
-    Withdrawn { reason: &'a str },
+    Received {
+        source: &'a str,
+    },
+    /// It passed every check and waits for its maker to press Publish (publish.rs). Sent again
+    /// when its app's new pictures are decided.
+    Ready {
+        pictures_pending: bool,
+        /// What the source check found that the last published release didn't have.
+        concerns: Option<&'a str>,
+        rating: Option<&'a RatingChange>,
+    },
+    /// On hold: a scanner or Microsoft Defender flagged a file, Defender's check is missing, or it
+    /// lowers the age rating.
+    Held {
+        holds: &'a [crate::publish::Hold],
+    },
+    /// The scans ran again on a held release (holds.rs) and it's still on hold, or they couldn't
+    /// run (`ran` false): `line` says what happened.
+    Rescanned {
+        ran: bool,
+        line: &'a str,
+    },
+    /// SLAPorSLOP staff answered in the release's hold conversation.
+    StaffReplied,
+    /// Its maker published it: players get it.
+    Published,
+    Rejected {
+        reason: &'a str,
+    },
+    Failed {
+        reason: &'a str,
+    },
+    Withdrawn {
+        reason: &'a str,
+    },
     WithdrawnByMaker,
 }
 
@@ -1094,33 +1283,39 @@ pub async fn tell_maker(
     release_id: Uuid,
     event: ReleaseEvent<'_>,
 ) -> sqlx::Result<()> {
-    let row: Option<(Uuid, String, String, String, bool, bool)> = sqlx::query_as(
+    type Row = (Uuid, String, String, String, bool, bool, bool, String);
+    let row: Option<Row> = sqlx::query_as(
         "select a.maker_id, a.slug, a.title, r.version, r.play_address is not null,
-                a.stage = 'coming_soon'
+                a.stage = 'coming_soon', a.status = 'draft', a.repo_url
          from releases r join apps a on a.id = r.app_id where r.id = $1",
     )
     .bind(release_id)
     .fetch_optional(&mut *conn)
     .await?;
-    let Some((maker, slug, title, version, address, coming_soon)) = row else {
+    let Some((maker, slug, title, version, address, coming_soon, draft, repo_url)) = row else {
         return Ok(());
     };
-    // Coming soon, Play opens nothing for players: an approved address waits for Beta.
+    // Coming soon, Play opens nothing for players: a published address waits for Beta.
     let play_opens = if coming_soon {
-        "Play opens it once the game is in Beta."
+        "Play opens this address once the game is in Beta."
     } else {
-        "Play opens it now."
+        "Play opens this address now."
     };
     // Where to act on it: an unexpected release is withdrawn from the app's Manage page.
     let page = match event {
         ReleaseEvent::Received { .. } => "manage",
         _ => "releases",
     };
+    // Unread "passed the checks" notices for the app merge: pictures decided later say it again.
+    let collapse_key = match event {
+        ReleaseEvent::Ready { .. } => Some(format!("ready:{slug}")),
+        _ => None,
+    };
     let (headline, body) = match event {
         ReleaseEvent::Received { source } => (
             format!("{title} {version} was submitted"),
             format!(
-                "{}. SLAPorSLOP is checking {} now. If you didn't publish this, withdraw it on the app's Manage page and secure your accounts and repository.",
+                "{}. SLAPorSLOP is checking {} now. If you didn't send this, withdraw it on the app's Manage page and secure your accounts and repository.",
                 match source {
                     "slop_build" => "Slop Build sent it from your repository",
                     "github_release" => "SLAPorSLOP picked it up from a GitHub release",
@@ -1129,25 +1324,96 @@ pub async fn tell_maker(
                 if address { "its play address" } else { "it" }
             ),
         ),
-        ReleaseEvent::Approved { automatically } => (
-            format!("{title} {version} is approved"),
-            match (address, automatically) {
-                (true, true) => format!(
-                    "A person approved its play address before, and it passed every check, so it \
-                     was approved automatically. {play_opens}"
-                ),
-                (true, false) => format!("A reviewer approved its play address. {play_opens}"),
-                (false, true) => "It passed every check and was approved automatically. Players get it as an update."
-                    .into(),
-                (false, false) => "A reviewer approved it. Players get it as an update.".into(),
+        ReleaseEvent::Ready {
+            pictures_pending,
+            concerns,
+            rating,
+        } => {
+            let mut body = vec![if draft {
+                // Not in the store yet: publishing alone doesn't reach players.
+                "Press Publish on the Releases page. Players can get it once you put the app in the store.".to_string()
+            } else if address {
+                "Play opens it once you press Publish on the Releases page.".to_string()
+            } else {
+                "Players get it once you press Publish on the Releases page.".to_string()
+            }];
+            if pictures_pending {
+                body.push("Its new pictures are waiting for review first.".into());
+            }
+            if let Some(concerns) = concerns {
+                body.push(format!("{}. See the release.", capitalized(concerns)));
+            }
+            if let Some(r) = rating {
+                body.push(format!("It {}.", r.describe()));
+            }
+            (
+                format!("{title} {version} passed SLAPorSLOP's checks"),
+                body.join(" "),
+            )
+        }
+        ReleaseEvent::Held { holds } => (
+            format!("{title} {version} is on hold"),
+            {
+                use crate::publish::HoldKind;
+                let mut lines: Vec<String> = Vec::new();
+                for h in holds {
+                    let line = match h.kind {
+                        HoldKind::Scan => format!("{}: a scanner flagged it.", h.file_label),
+                        HoldKind::Defender => {
+                            format!("{}: Microsoft Defender flagged it.", h.file_label)
+                        }
+                        HoldKind::DefenderMissing if crate::holds::slop_check_runs(&repo_url) => {
+                            "Waiting for Microsoft Defender's check: run Slop Check.".to_string()
+                        }
+                        HoldKind::DefenderMissing => "The Windows build needs Microsoft Defender's check, which Slop Check can't get for a repository outside GitHub yet: SLAPorSLOP staff check it by hand. You can write to them on the Releases page.".to_string(),
+                        HoldKind::RatingLowered => "It lowers the age rating, so a SLAPorSLOP staff member checks it first. You'll be told when it's ready to publish.".to_string(),
+                    };
+                    if !lines.contains(&line) {
+                        lines.push(line);
+                    }
+                }
+                if holds
+                    .iter()
+                    .any(|h| matches!(h.kind, HoldKind::Scan | HoldKind::Defender))
+                {
+                    lines.push(
+                        "The Releases page shows what was found and what you can do.".into(),
+                    );
+                }
+                lines.join(" ")
+            },
+        ),
+        ReleaseEvent::Rescanned { ran, line } => (
+            if ran {
+                format!("{title} {version} was scanned again")
+            } else {
+                format!("{title} {version} couldn't be scanned again")
+            },
+            format!("{line} The Releases page shows what you can do."),
+        ),
+        ReleaseEvent::StaffReplied => (
+            format!("SLAPorSLOP staff answered about {title} {version}"),
+            "Read it on the Releases page.".into(),
+        ),
+        ReleaseEvent::Published => (
+            format!("{title} {version} is out"),
+            if draft {
+                // Not in the store yet: nobody can find it until its maker lists it.
+                format!(
+                    "You published it. Put {title} in the store from its Manage page so players can find it."
+                )
+            } else if address {
+                format!("You published it. {play_opens}")
+            } else {
+                "You published it. Players get it as an update.".into()
             },
         ),
         ReleaseEvent::Rejected { reason } => (
-            format!("{title} {version} wasn't approved"),
+            format!("{title} {version} was turned down by SLAPorSLOP staff"),
             reason.to_string(),
         ),
         ReleaseEvent::Failed { reason } => (
-            format!("{title} {version} couldn't be checked"),
+            format!("{title} {version} didn't pass SLAPorSLOP's checks"),
             reason.to_string(),
         ),
         ReleaseEvent::Withdrawn { reason } => (
@@ -1160,7 +1426,7 @@ pub async fn tell_maker(
         ),
         ReleaseEvent::WithdrawnByMaker => (
             format!("{title} {version} was withdrawn"),
-            "It was withdrawn from your account before review, so it never reached players. If you didn't do this, secure your accounts."
+            "It was withdrawn from your account before it was published, so it never reached players. If you didn't do this, secure your accounts."
                 .into(),
         ),
     };
@@ -1172,10 +1438,19 @@ pub async fn tell_maker(
             title: headline,
             body,
             link: format!("/publish/{slug}/{page}"),
-            collapse_key: None,
+            collapse_key,
         },
     )
     .await
+}
+
+/// `s` with its first letter in capitals.
+fn capitalized(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<ReleaseInfo> {
@@ -1190,6 +1465,7 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         created_at: OffsetDateTime,
         source: String,
         auto_approved: bool,
+        repo_url: String,
         min_age: Option<i16>,
         content_labels: Option<Vec<String>>,
         runtimes: Vec<String>,
@@ -1199,13 +1475,17 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         /// The address Play opens now (`catalog::PLAY_RELEASE`).
         plays_now: bool,
         coming_soon: bool,
+        draft: bool,
+        published_at: Option<OffsetDateTime>,
+        app_id: Uuid,
     }
     let row: Row = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "select r.id, r.version, r.commit_sha, r.status::text as status, r.status_reason, r.commit_verified,
+        "select r.id, r.app_id, r.version, r.commit_sha, r.status::text as status, r.status_reason, r.commit_verified,
                 r.created_at, r.source, coalesce(r.reviewed_by = 'slop', false) as auto_approved, r.min_age,
                 r.content_labels, r.runtimes, r.notes, r.play_address, r.address_checks,
                 r.play_address is not null and r.id is not distinct from {} as plays_now,
-                a.stage = 'coming_soon' as coming_soon
+                a.stage = 'coming_soon' as coming_soon, a.status = 'draft' as draft, r.published_at,
+                a.repo_url
          from releases r join apps a on a.id = r.app_id where r.id = $1",
         catalog::PLAY_RELEASE
     )))
@@ -1214,17 +1494,32 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
     .await?;
     let mut files: Vec<ReleaseFileInfo> = sqlx::query_as(
         "select platform, kind, url, file_name, exec, args, size_bytes, sha256, provenance, provenance_problem,
-                scan_result, scan_detail, scan_report, defender, cleared_reason,
-                maker_signature - 'signature' - 'public_key' as maker_key,
+                scan_result, scan_detail, scan_report, defender, cleared_at is not null as cleared,
+                cleared_reason, defender_cleared_at is not null as defender_cleared,
+                defender_waived_at is not null as defender_waived, maker_signature - 'signature' - 'public_key' as maker_key,
                 check_stage, check_started_at, checked_at
          from release_files where release_id = $1 order by platform",
     )
     .bind(id)
     .fetch_all(&state.db)
     .await?;
+    let mut conn = state.db.acquire().await?;
+    let hold = crate::holds::summary(&mut conn, id).await?;
+    let hold_kinds = match &hold {
+        Some(h) if h.status == "open" => h.kinds.clone(),
+        _ => Vec::new(),
+    };
+    let pictures_pending =
+        row.status == "ready" && crate::media::has_pending(&mut conn, row.app_id).await?;
     let progress = release_progress(
         state,
         (&row.status, row.status_reason.as_deref(), row.auto_approved),
+        (
+            &hold_kinds,
+            crate::holds::slop_check_runs(&row.repo_url),
+            pictures_pending,
+            row.draft,
+        ),
         &mut files,
         row.play_address
             .as_ref()
@@ -1246,6 +1541,18 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
     .bind(id)
     .fetch_all(&state.db)
     .await?;
+    // What its maker sees before publishing it (publish.rs); `list_releases` keeps it from
+    // everyone else.
+    let (mut new_concerns, mut lowered, mut new_play_address) = (None, None, None);
+    if matches!(row.status.as_str(), "awaiting_review" | "ready") {
+        new_concerns = crate::source_scan::new_concerns(&mut conn, id)
+            .await
+            .map_err(ApiError::Internal)?;
+        lowered = rating_change(&mut conn, id).await?;
+        if row.play_address.is_some() && row.status == "ready" {
+            new_play_address = Some(new_play_address_of(&state.db, id).await?);
+        }
+    }
     Ok(ReleaseInfo {
         notes: row.notes,
         source_checks,
@@ -1260,6 +1567,11 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         created_at: row.created_at,
         source: row.source,
         auto_approved: row.auto_approved,
+        published_at: row.published_at,
+        new_concerns,
+        rating_change: lowered,
+        new_play_address,
+        hold,
         rating: row.min_age.map(|min_age| Rating {
             min_age,
             content_labels: row.content_labels.unwrap_or_default(),
@@ -1278,6 +1590,7 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
 async fn release_progress(
     state: &AppState,
     (status, status_reason, auto_approved): (&str, Option<&str>, bool),
+    (hold_kinds, slop_check, pictures_pending, draft): (&[String], bool, bool, bool),
     files: &mut [ReleaseFileInfo],
     address: Option<crate::release_progress::Address>,
 ) -> ApiResult<crate::release_progress::ReleaseProgress> {
@@ -1305,6 +1618,10 @@ async fn release_progress(
         status,
         status_reason,
         auto_approved,
+        hold_kinds,
+        slop_check,
+        pictures_pending,
+        draft,
         files: &states,
         now: OffsetDateTime::now_utc(),
         seconds_per_file,
@@ -1365,6 +1682,10 @@ async fn list_releases(
             release.source_checks = None;
             release.repo_scan = None;
             release.advisories.clear();
+            release.new_concerns = None;
+            release.rating_change = None;
+            release.new_play_address = None;
+            release.hold = None;
             for f in &mut release.files {
                 f.cleared_reason = None;
                 if let Some(report) = f.scan_report.as_mut().and_then(|r| r.as_object_mut()) {
@@ -1382,20 +1703,20 @@ async fn list_releases(
     Ok(Json(out))
 }
 
-/// The approved releases players can get, the one they do get first: the release the maker
-/// holds the app at, otherwise the newest approved. A browser game's approved addresses count
+/// The published (approved) releases players can get, the one they do get first: the release
+/// the maker holds the app at, otherwise the newest published. A browser game's addresses count
 /// (they have no manifest); where Play goes is `catalog::PLAY_ADDRESS`, and what needs files to
 /// install uses `SERVING_SIGNED`. Bind the app's ID as $1.
 pub const SERVING: &str = "from releases r join apps a on a.id = r.app_id
      where r.app_id = $1 and r.status = 'approved'
        and (r.signed_manifest is not null or r.play_address is not null)
-     order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc";
+     order by coalesce(r.id = a.pinned_release_id, false) desc, r.published_at desc";
 
 /// `SERVING`, for what's installed: releases with a signed manifest only, so a browser game
 /// never has one.
 pub const SERVING_SIGNED: &str = "from releases r join apps a on a.id = r.app_id
      where r.app_id = $1 and r.status = 'approved' and r.signed_manifest is not null
-     order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc";
+     order by coalesce(r.id = a.pinned_release_id, false) desc, r.published_at desc";
 
 /// The signed manifest of the release players get, for installing. A browser game has none:
 /// there's nothing to install. Desktop apps from before browser games offer to install every
@@ -1523,6 +1844,60 @@ pub async fn download_link(state: &AppState, url: &str) -> anyhow::Result<String
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| anyhow!("GitHub's redirect had no location"))?;
     Ok(location.to_string())
+}
+
+/// Below this many requests left on SLAPorSLOP's shared GitHub token, a re-scan of a held release
+/// on a private GitHub repository waits (as the release watcher stops, updates.rs).
+const LOW_BUDGET: i64 = 500;
+
+/// Whether downloading `url` again would spend SLAPorSLOP's shared GitHub allowance while it's
+/// low: a file of a private repository's GitHub release (a public release's own link costs no
+/// API request), where the GitHub App isn't installed (an installation has its own allowance).
+/// Only re-scans of held releases ask (holds.rs): they can wait.
+pub(crate) async fn shared_github_budget_low(state: &AppState, url: &str) -> bool {
+    let cfg = &state.config.releases;
+    let Some((repo, _, _)) = github_release_file(url) else {
+        return false;
+    };
+    if cfg.github_token.is_none() && cfg.github_app.is_none() {
+        return false;
+    }
+    if let Ok(res) = state
+        .http
+        .head(url)
+        .header("user-agent", "slop-api")
+        .send()
+        .await
+        && (res.status().is_success() || res.status().is_redirection())
+    {
+        return false;
+    }
+    let Ok(repo_api) = cfg.github_api_base.join(&format!("repos/{repo}")) else {
+        return false;
+    };
+    let Some((token, true)) = crate::github_app::auth_for(state, &repo_api).await else {
+        return false;
+    };
+    let Ok(limits) = cfg.github_api_base.join("rate_limit") else {
+        return false;
+    };
+    // Asking how much is left doesn't count against it.
+    let remaining = match state
+        .fetch_http
+        .get(limits)
+        .header("accept", "application/vnd.github+json")
+        .header("user-agent", "slop-api")
+        .bearer_auth(token)
+        .send()
+        .await
+    {
+        Ok(res) => res
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok()?.parse::<i64>().ok()),
+        Err(_) => None,
+    };
+    remaining.is_some_and(|r| r < LOW_BUDGET)
 }
 
 #[derive(Serialize)]
@@ -1664,7 +2039,7 @@ async fn verify_file(
           and (r.status = 'revoked' and a.visibility = 'public' or r.status = 'approved' and ",
     );
     catalog::push_store_visible(&mut qb, state.config.catalog, policy);
-    qb.push(") order by r.reviewed_at desc limit 20");
+    qb.push(") order by r.published_at desc nulls last limit 20");
     type Row = (
         String,
         String,
@@ -1782,13 +2157,20 @@ async fn keys(State(state): State<AppState>) -> Json<Vec<PublicKey>> {
 // ---------------------------------------------------------------------------------------------
 // Fetching (the semi-automatic first step of scanning)
 
-/// Runs forever: picks up releases waiting to be fetched and hashes their files.
+/// Runs forever: picks up releases waiting to be fetched and hashes their files, and when none
+/// is waiting, runs the scans again on a held release whose maker asked (holds.rs), so checks
+/// stay one at a time and share the scanner.
 pub async fn run_fetcher(state: AppState) {
     loop {
         match fetch_next(&state).await {
             Ok(true) => continue,
             Ok(false) => {}
             Err(err) => tracing::error!(error = ?err, "release fetcher"),
+        }
+        match crate::holds::rescan_next(&state).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(err) => tracing::error!(error = ?err, "held release re-scan"),
         }
         tokio::select! {
             _ = state.fetch_wakeup.notified() => {}
@@ -1802,8 +2184,8 @@ pub async fn run_fetcher(state: AppState) {
 /// never two in a row while a file release waits, so a run of addresses can't hold files up.
 pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
     let files_first = state.fetched_address_last.load(Ordering::Relaxed);
-    let claimed: Option<(Uuid, Uuid, String, String, Option<String>)> = sqlx::query_as(
-        "update releases r set fetch_started_at = now()
+    let claimed: Option<(Uuid, Uuid, String, String, Option<String>, i16)> = sqlx::query_as(
+        "update releases r set fetch_started_at = now(), fetch_attempts = r.fetch_attempts + 1
          from apps a
          where a.id = r.app_id and r.id = (
              select id from releases
@@ -1813,16 +2195,36 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
              order by case when $3 then play_address is not null else play_address is null end,
                       created_at
              limit 1 for update skip locked)
-         returning r.id, r.app_id, r.commit_sha, a.repo_url, r.play_address",
+         returning r.id, r.app_id, r.commit_sha, a.repo_url, r.play_address, r.fetch_attempts",
     )
     .bind(FETCH_LEASE)
     .bind(ADDRESS_FETCH_LEASE)
     .bind(files_first)
     .fetch_optional(&state.db)
     .await?;
-    let Some((id, app_id, commit, repo_url, play_address)) = claimed else {
+    let Some((id, app_id, commit, repo_url, play_address, attempts)) = claimed else {
         return Ok(false);
     };
+    if attempts > MAX_FETCH_ATTEMPTS {
+        tracing::warn!(release = %id, attempts, "release checks keep failing; giving up");
+        let reason = format!(
+            "SLAPorSLOP couldn't finish checking it after {MAX_FETCH_ATTEMPTS} tries. Send it again as a new version; if that fails too, write to SLAPorSLOP staff from the release."
+        );
+        let mut tx = state.db.begin().await?;
+        let updated = sqlx::query(
+            "update releases set status = 'failed', status_reason = $2 where id = $1 and status = 'fetching'",
+        )
+        .bind(id)
+        .bind(&reason)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if updated == 1 {
+            tell_maker(&mut tx, id, ReleaseEvent::Failed { reason: &reason }).await?;
+        }
+        tx.commit().await?;
+        return Ok(true);
+    }
     state
         .fetched_address_last
         .store(play_address.is_some(), Ordering::Relaxed);
@@ -1841,9 +2243,10 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
     };
     match checked {
         Ok(commit_verified) => {
+            // It stays `fetching` until every check is done ("finishing up" for its maker), so
+            // it never flashes into the staff queue.
             let updated = sqlx::query(
-                "update releases set status = 'awaiting_review', commit_verified = $2
-                 where id = $1 and status = 'fetching'",
+                "update releases set commit_verified = $2 where id = $1 and status = 'fetching'",
             )
             .bind(id)
             .bind(commit_verified)
@@ -1854,12 +2257,23 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
             if updated == 0 {
                 return Ok(true);
             }
-            tracing::info!(release = %id, "release fetched; awaiting review");
+            tracing::info!(release = %id, "release fetched; finishing its checks");
+            // Each step renews the lease, so a slow one isn't taken for a dead fetch.
+            renew_lease(state, id).await?;
             // Pictures that changed with this release wait for their own review.
             crate::media::refresh_for_release(state, app_id, &repo_url, &commit).await;
-            // Licence, monetization and packages, before an update can be approved on its own.
+            renew_lease(state, id).await?;
+            // Licence, monetization and packages: shown to the maker before they publish.
             crate::source_scan::check_release(state, id).await?;
-            crate::updates::try_auto_approve(state, id).await?;
+            renew_lease(state, id).await?;
+            // Ready for its maker to publish, on hold, or failed (publish.rs).
+            crate::publish::finish_checks(
+                &state.db,
+                crate::admin::ReviewRules::from_config(&state.config),
+                id,
+                crate::updates::AUTO_REVIEWER,
+            )
+            .await?;
         }
         Err(err) => {
             tracing::warn!(release = %id, error = %err, "release fetch failed");
@@ -1878,6 +2292,50 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
         }
     }
     Ok(true)
+}
+
+/// What a release file's temporary copy is called while it's checked: the fetcher's, a
+/// re-scan's (holds.rs, rescan.rs) and the source check's archive (source_scan.rs).
+const TEMP_PREFIXES: [&str; 3] = ["slop-release-", "slop-rescan-", "slop-source-"];
+
+/// Deletes temporary copies of release files and source archives in `dir` that weren't touched
+/// for `older_than`: left by a server that stopped in the middle of a check (SLAPorSLOP keeps no
+/// copies, publisher.md). Run at startup; another instance's copy in use is younger than any
+/// check takes (a download keeps writing, a scan takes at most 30 minutes). Returns how many.
+pub fn sweep_temp_files(dir: &std::path::Path, older_than: StdDuration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !TEMP_PREFIXES.iter().any(|p| name.starts_with(p)) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age > older_than);
+        if meta.is_file() && stale && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Renews release `id`'s fetch lease while it's still being checked.
+async fn renew_lease(state: &AppState, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query(
+        "update releases set fetch_started_at = now() where id = $1 and status = 'fetching'",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?;
+    Ok(())
 }
 
 async fn fetch_release(
@@ -2362,8 +2820,8 @@ fn page_error(e: &reqwest::Error) -> String {
 }
 
 /// Whether a browser game's release brings another address than the one Play opens now (or
-/// Play opens none yet). A new address always waits for a person (updates.rs).
-pub(crate) async fn new_play_address(db: &sqlx::PgPool, release_id: Uuid) -> sqlx::Result<bool> {
+/// Play opens none yet): a new site, which its maker's Publish dialog points out.
+async fn new_play_address_of(db: &sqlx::PgPool, release_id: Uuid) -> sqlx::Result<bool> {
     let row: Option<(Option<String>, Option<String>)> =
         sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "select r.play_address, {} from releases r join apps a on a.id = r.app_id where r.id = $1",
@@ -2379,8 +2837,8 @@ pub(crate) async fn new_play_address(db: &sqlx::PgPool, release_id: Uuid) -> sql
 }
 
 /// Where Play goes, for a person reviewing a browser game's release (review.rs, admin_web.rs), so
-/// they never take a resubmitted address for a first one, or miss that approving an older one
-/// moves Play back to it. All null for a download.
+/// they never take a resubmitted address for a first one, or miss that a newer one is already
+/// published. All null for a download.
 #[derive(Serialize)]
 pub(crate) struct AddressContext {
     /// The address Play opens now (`catalog::PLAY_ADDRESS`), or null.
@@ -2388,8 +2846,8 @@ pub(crate) struct AddressContext {
     /// The address Play opened until SLAPorSLOP withdrew it, when that's why Play opens none now.
     /// With `current_play_address` null too, the game never had an approved address.
     pub withdrawn_play_address: Option<String>,
-    /// An approved address release sent after this one: approving this one makes Play open this
-    /// older address instead (Play opens the newest approved).
+    /// A published address release sent after this one: this one can't be published any more
+    /// (Publish refuses a release older than a published one), so Play keeps opening the newer.
     pub newer_approved: Option<NewerApproved>,
 }
 
@@ -2430,7 +2888,7 @@ pub(crate) async fn address_context(
         withdrawn_play_address,
         newer_approved: newer_approved.map(|n| NewerApproved {
             note: format!(
-                "Version {} ({}) is approved and newer: approving this makes Play open this older address",
+                "Version {} ({}) is newer and already published, so this older address can't be published: Play keeps opening the newer one",
                 n.version, n.play_address
             ),
             ..n
@@ -2684,7 +3142,7 @@ pub async fn download_full(
 /// A file released in parts: each downloaded in order, hashed on its own and as the joined file
 /// (and appended to `keep` for scanning). Each part is held to the per-file limit, the whole to
 /// `MAX_PARTS` of them. Returns the joined file's digests and each part's (size, SHA-256).
-async fn download_parts(
+pub(crate) async fn download_parts(
     state: &AppState,
     urls: &[String],
     auth: Option<&str>,
@@ -2992,7 +3450,7 @@ mod tests {
         ] {
             assert!(same_address(a, b), "{a} {b}");
         }
-        // Anything else is another address, which a person looks at.
+        // Anything else is another address: a new site.
         for (a, b) in [
             (
                 "https://games.example.com/play/",
@@ -3028,6 +3486,38 @@ mod tests {
             assert!(!same_address(a, b), "{a} {b}");
         }
         assert!(!same_address("not an address", "not an address"));
+    }
+
+    #[test]
+    fn leftover_copies_of_release_files_are_swept() {
+        let dir = std::env::temp_dir().join(format!("slop-sweep-test-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let three_hours_ago = std::time::SystemTime::now() - StdDuration::from_secs(3 * 3600);
+        let make = |name: &str, old: bool| {
+            let path = dir.join(name);
+            std::fs::write(&path, b"x").unwrap();
+            if old {
+                std::fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_modified(three_hours_ago)
+                    .unwrap();
+            }
+            path
+        };
+        let fetched = make("slop-release-1", true);
+        let rescanned = make("slop-rescan-2", true);
+        let source = make("slop-source-3.tar.gz", true);
+        let in_use = make("slop-rescan-4", false);
+        let other = make("someone-elses-file", true);
+        assert_eq!(sweep_temp_files(&dir, StdDuration::from_secs(2 * 3600)), 3);
+        for gone in [&fetched, &rescanned, &source] {
+            assert!(!gone.exists(), "{gone:?}");
+        }
+        assert!(in_use.exists(), "a copy in use is left alone");
+        assert!(other.exists(), "only SLAPorSLOP's own copies");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

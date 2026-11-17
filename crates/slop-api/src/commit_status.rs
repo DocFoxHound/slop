@@ -88,16 +88,14 @@ pub fn available(config: &Config) -> bool {
 pub(crate) fn wanted(status: &str) -> Option<(&'static str, &'static str)> {
     Some(match status {
         "fetching" => ("pending", "SLAPorSLOP is checking this release"),
-        "awaiting_review" => (
-            "pending",
-            "Checked by SLAPorSLOP: waiting for a person's review",
-        ),
-        "approved" => ("success", "Passed SLAPorSLOP's checks"),
+        "awaiting_review" => ("pending", "Checked by SLAPorSLOP: on hold"),
+        "ready" => ("success", "Passed SLAPorSLOP's checks"),
+        "approved" => ("success", "Passed SLAPorSLOP's checks and published"),
         "rejected" => ("failure", "Not approved by SLAPorSLOP"),
-        "failed" => ("error", "SLAPorSLOP couldn't check this release"),
+        "failed" => ("error", "Didn't pass SLAPorSLOP's checks"),
         // Replaces a green status, or "Passed" would stay on a release that no longer launches.
         "revoked" => ("failure", "Withdrawn by SLAPorSLOP after it was approved"),
-        "withdrawn" => ("error", "Withdrawn by the maker before review"),
+        "withdrawn" => ("error", "Withdrawn before it was published"),
         _ => return None,
     })
 }
@@ -498,11 +496,11 @@ fn push_may_post(
 /// public, and no release on the commit is approved any more.
 fn push_correction(qb: &mut QueryBuilder<Postgres>, commit: &'static str) {
     qb.push(format!(
-        "(p.posted_status = 'approved'
+        "(p.posted_status in ('ready', 'approved')
           and a.visibility = 'public'
           and not exists (select 1 from releases g
                           where g.app_id = a.id and g.commit_sha = {commit}
-                            and g.status = 'approved'))"
+                            and g.status in ('ready', 'approved')))"
     ));
 }
 
@@ -519,7 +517,7 @@ async fn claim(state: &AppState) -> sqlx::Result<Vec<(Uuid, String, OffsetDateTi
              where (s.wait_until is null or s.wait_until <= now())
                and (s.switched_off_at is null
                     or exists (select 1 from commit_statuses g
-                               where g.app_id = s.app_id and g.posted_status = 'approved'))
+                               where g.app_id = s.app_id and g.posted_status in ('ready', 'approved')))
              order by r.app_id, r.commit_sha, (r.status = 'withdrawn'), r.created_at desc, r.id desc
          ), due as (
              select k.app_id, k.commit_sha
@@ -934,9 +932,10 @@ fn plain_repo(repo: &str) -> bool {
 mod tests {
     use super::*;
 
-    const STATES: [&str; 7] = [
+    const STATES: [&str; 8] = [
         "fetching",
         "awaiting_review",
+        "ready",
         "approved",
         "rejected",
         "failed",

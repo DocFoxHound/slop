@@ -9,9 +9,13 @@
 //! file 2 of 4: Linux (.deb), scanning for malware" with an estimate from how long recent files
 //! took, instead of one step that looks stuck.
 //!
+//! The checks end with the release ready for its maker to publish, on hold (holds.rs: a
+//! scanner or Microsoft Defender flagged a file, Defender's check is missing, or it lowers the age
+//! rating), or failed (publish.rs).
+//!
 //! A browser game's release has no files: its play address is checked in seconds (releases.rs,
-//! `check_play_address`), then waits for a person. Its words never say signed, scanned or files,
-//! since none of that happens to an address.
+//! `check_play_address`), then its maker publishes it. Its words never say signed, scanned or
+//! files, since none of that happens to an address.
 
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -102,8 +106,8 @@ pub struct CurrentFile {
 
 #[derive(Debug, Serialize)]
 pub struct ReleaseProgress {
-    /// queued, checking_files (a browser game's release: checking_address), waiting_for_review,
-    /// approved, rejected, failed, revoked or withdrawn.
+    /// queued, checking_files (a browser game's release: checking_address), on_hold, ready (for
+    /// its maker to publish), approved (published), rejected, failed, revoked or withdrawn.
     pub stage: &'static str,
     pub files_total: usize,
     pub files_checked: usize,
@@ -125,6 +129,16 @@ pub struct Inputs<'a> {
     pub status: &'a str,
     pub status_reason: Option<&'a str>,
     pub auto_approved: bool,
+    /// What holds it (holds.rs `kinds`), while it's on hold.
+    pub hold_kinds: &'a [String],
+    /// Slop Check can run for the app's repository (holds.rs `slop_check_runs`): a missing
+    /// Defender check is the maker's to get; otherwise SLAPorSLOP staff check the build by hand.
+    pub slop_check: bool,
+    /// The app's new pictures wait for review: publishing waits for them (publish.rs).
+    pub pictures_pending: bool,
+    /// The app isn't in the store yet (a draft): players can't get a published release until its
+    /// maker puts it there.
+    pub draft: bool,
     pub files: &'a [FileState<'a>],
     pub now: OffsetDateTime,
     pub seconds_per_file: Option<i64>,
@@ -164,24 +178,32 @@ fn address_progress(i: &Inputs, a: Address) -> (&'static str, String) {
             "Checking the play address: https, a public site, the bad-link lists, and that the page loads."
                 .into(),
         ),
-        "awaiting_review" => (
-            "waiting_for_review",
-            "The play address passed SLAPorSLOP's checks. Waiting for review by a person at SLAPorSLOP, who opens it and plays it, usually within a day or two; you'll get a notification when it's decided."
-                .into(),
+        "awaiting_review" => ("on_hold", on_hold(i)),
+        "ready" if i.draft => (
+            "ready",
+            format!(
+                "The play address passed SLAPorSLOP's checks. {}Press Publish on the Releases page; players can play it once you put the game in the store.",
+                pictures_first(i)
+            ),
+        ),
+        "ready" => (
+            "ready",
+            format!(
+                "The play address passed SLAPorSLOP's checks. {}Press Publish on the Releases page: then Play opens this address{}.",
+                pictures_first(i),
+                once_in_beta(a)
+            ),
+        ),
+        "approved" if i.draft => (
+            "approved",
+            "Published: players can play it once you put the game in the store.".into(),
         ),
         "approved" => (
             "approved",
-            match (a.plays_now, i.auto_approved) {
-                (true, true) => format!(
-                    "Approved automatically: a person approved this play address before. Play opens this address{}.",
-                    once_in_beta(a)
-                ),
-                (true, false) => format!(
-                    "Approved by a person at SLAPorSLOP: Play opens this address{}.",
-                    once_in_beta(a)
-                ),
-                (false, true) => "Approved automatically; it's no longer the address Play opens.".into(),
-                (false, false) => "Approved by a person at SLAPorSLOP; it's no longer the address Play opens.".into(),
+            if a.plays_now {
+                format!("Published: Play opens this address{}.", once_in_beta(a))
+            } else {
+                "Published; it's no longer the address Play opens.".into()
             },
         ),
         "rejected" => (
@@ -207,7 +229,7 @@ fn address_progress(i: &Inputs, a: Address) -> (&'static str, String) {
         ),
         _ => (
             "withdrawn",
-            "Withdrawn before review; it never reached players.".to_string(),
+            "Withdrawn before it was published; it never reached players.".to_string(),
         ),
     }
 }
@@ -234,9 +256,46 @@ pub fn about(seconds: i64) -> String {
     }
 }
 
-/// The scan results that keep a release waiting for a person.
-fn held(result: Option<&str>) -> bool {
-    matches!(result, Some("on_hold" | "rejected" | "blocked"))
+/// "Its new pictures are waiting for review: you can publish once they're reviewed. ", or nothing.
+fn pictures_first(i: &Inputs) -> &'static str {
+    if i.pictures_pending {
+        "Its new pictures are waiting for review: you can publish once they're reviewed. "
+    } else {
+        ""
+    }
+}
+
+/// A release on hold: what holds it (the release's one-line summary, publish.rs) and what
+/// happens next, by what holds it (holds.rs). The Releases page has each problem in full.
+fn on_hold(i: &Inputs) -> String {
+    let has = |k: &str| i.hold_kinds.iter().any(|x| x == k);
+    let mut s = i
+        .status_reason
+        .unwrap_or("On hold.")
+        .trim_end_matches('.')
+        .to_string();
+    s.push('.');
+    if has("scan") {
+        s.push_str(" You can run the scans again, or tell SLAPorSLOP staff why it's a false positive; the Releases page shows what was found.");
+    }
+    if has("defender") {
+        s.push_str(" SLAPorSLOP can't run Microsoft Defender again on the same file: tell SLAPorSLOP staff why it's a false positive, or submit a new build.");
+    }
+    let by_hand = has("defender_missing") && !i.slop_check;
+    if has("defender_missing") && i.slop_check {
+        s.push_str(" Run Slop Check in your repository: the release goes on by itself once Defender's result arrives.");
+    }
+    if by_hand {
+        s.push_str(" Slop Check can't run for a repository outside GitHub yet, so SLAPorSLOP staff check the Windows build by hand.");
+    }
+    // A lowered rating: the summary above says staff check it first.
+    if has("scan") || has("defender") || has("rating_lowered") || by_hand {
+        s.push_str(" You'll get a notification when it's decided.");
+    }
+    if i.hold_kinds.is_empty() {
+        s.push_str(" The Releases page says what holds it and what you can do.");
+    }
+    s
 }
 
 pub fn build(i: &Inputs) -> ReleaseProgress {
@@ -304,35 +363,28 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
             }
             ("checking_files", s)
         }
-        "awaiting_review" => {
-            let on_hold: Vec<&FileState> = i.files.iter().filter(|f| held(f.scan_result)).collect();
-            let s = if let Some(first) = on_hold.first() {
-                format!(
-                    "{} on hold: {}. A person at SLAPorSLOP looks at it, and can clear a false positive; you'll get a notification when the release is decided.",
-                    if on_hold.len() == 1 {
-                        format!("{} is", file_label(first.platform, first.file_name))
-                    } else {
-                        format!("{} files are", on_hold.len())
-                    },
-                    first
-                        .scan_detail
-                        .unwrap_or("the scanner found something to look at")
-                        .trim_end_matches('.')
-                )
-            } else {
-                format!(
-                    "All {files_word} are checked. Waiting for review by a person at SLAPorSLOP, usually within a day or two; you'll get a notification when it's decided."
-                )
-            };
-            ("waiting_for_review", s)
-        }
+        "awaiting_review" => ("on_hold", on_hold(i)),
+        "ready" if i.draft => (
+            "ready",
+            format!(
+                "All {files_word} passed SLAPorSLOP's checks. {}Press Publish on the Releases page; players can get it once you put the app in the store.",
+                pictures_first(i)
+            ),
+        ),
+        "ready" => (
+            "ready",
+            format!(
+                "All {files_word} passed SLAPorSLOP's checks. {}Players get it once you press Publish on the Releases page.",
+                pictures_first(i)
+            ),
+        ),
+        "approved" if i.draft => (
+            "approved",
+            "Published, and signed by SLAPorSLOP. Players can get it once you put the app in the store.".to_string(),
+        ),
         "approved" => (
             "approved",
-            if i.auto_approved {
-                "Approved automatically as an update, and signed by SLAPorSLOP.".to_string()
-            } else {
-                "Approved by a person at SLAPorSLOP, and signed.".to_string()
-            },
+            "Published, and signed by SLAPorSLOP: players get it.".to_string(),
         ),
         "rejected" => (
             "rejected",
@@ -363,7 +415,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
         ),
         _ => (
             "withdrawn",
-            "Withdrawn before review; it never reached players.".to_string(),
+            "Withdrawn before it was published; it never reached players.".to_string(),
         ),
     };
     ReleaseProgress {
@@ -434,6 +486,10 @@ mod tests {
             status,
             status_reason: None,
             auto_approved: false,
+            hold_kinds: &[],
+            slop_check: true,
+            pictures_pending: false,
+            draft: false,
             files,
             now: NOW,
             seconds_per_file: Some(300),
@@ -524,30 +580,73 @@ mod tests {
     }
 
     #[test]
-    fn checked_files_wait_for_a_person() {
+    fn a_release_on_hold_says_what_holds_it_and_what_happens_next() {
         let files = [
             done(file("linux", "g.tar.gz"), 30, 5),
             done(file("windows", "g.zip"), 25, 5),
         ];
-        let p = build(&inputs("awaiting_review", &files));
-        assert_eq!(p.stage, "waiting_for_review");
+        let kinds = ["scan".to_string()];
+        let mut i = inputs("awaiting_review", &files);
+        i.status_reason = Some("On hold: a scanner flagged the Windows (.zip) build.");
+        i.hold_kinds = &kinds;
+        let p = build(&i);
+        assert_eq!(p.stage, "on_hold");
         assert_eq!(p.files_checked, 2);
         assert_eq!((p.seconds_per_file, p.remaining_seconds), (None, None));
-        assert!(
-            p.summary.contains(
-                "Waiting for review by a person at SLAPorSLOP, usually within a day or two"
-            )
-        );
-        assert!(p.summary.contains("notification"));
-
-        let mut held = done(file("windows", "g.zip"), 25, 5);
-        held.scan_result = Some("on_hold");
-        held.scan_detail = Some("YARA: Packed_UPX.");
-        let files = [done(file("linux", "g.tar.gz"), 30, 5), held];
-        let p = build(&inputs("awaiting_review", &files));
         assert_eq!(
             p.summary,
-            "Windows (.zip) is on hold: YARA: Packed_UPX. A person at SLAPorSLOP looks at it, and can clear a false positive; you'll get a notification when the release is decided."
+            "On hold: a scanner flagged the Windows (.zip) build. You can run the scans again, or tell SLAPorSLOP staff why it's a false positive; the Releases page shows what was found. You'll get a notification when it's decided."
+        );
+
+        // Waiting for Defender's check is the maker's to fix, and goes on by itself.
+        let kinds = ["defender_missing".to_string()];
+        i.hold_kinds = &kinds;
+        i.status_reason =
+            Some("On hold: the Windows (.zip) build is waiting for Microsoft Defender's check.");
+        let p = build(&i);
+        assert!(p.summary.contains("Run Slop Check"), "{}", p.summary);
+        assert!(!p.summary.contains("notification"), "{}", p.summary);
+        // Outside GitHub Slop Check can't run: staff check the build, and nothing says to run it.
+        i.slop_check = false;
+        let p = build(&i);
+        assert!(!p.summary.contains("Run Slop Check"), "{}", p.summary);
+        assert!(
+            p.summary.contains("SLAPorSLOP staff check the Windows build by hand. You'll get a notification when it's decided."),
+            "{}",
+            p.summary
+        );
+        i.slop_check = true;
+
+        // A lowered age rating waits for staff, said once.
+        let kinds = ["rating_lowered".to_string()];
+        i.hold_kinds = &kinds;
+        i.status_reason =
+            Some("On hold: it lowers the age rating, so SLAPorSLOP staff check it first.");
+        let p = build(&i);
+        assert_eq!(
+            p.summary,
+            "On hold: it lowers the age rating, so SLAPorSLOP staff check it first. You'll get a notification when it's decided."
+        );
+        assert!(!p.summary.contains("a person"), "{}", p.summary);
+
+        // Ready, with pictures still waiting.
+        i.status = "ready";
+        i.pictures_pending = true;
+        assert_eq!(
+            build(&i).summary,
+            "All 2 files passed SLAPorSLOP's checks. Its new pictures are waiting for review: you can publish once they're reviewed. Players get it once you press Publish on the Releases page."
+        );
+        // An app not in the store yet: publishing alone doesn't reach players.
+        i.pictures_pending = false;
+        i.draft = true;
+        assert_eq!(
+            build(&i).summary,
+            "All 2 files passed SLAPorSLOP's checks. Press Publish on the Releases page; players can get it once you put the app in the store."
+        );
+        i.status = "approved";
+        assert_eq!(
+            build(&i).summary,
+            "Published, and signed by SLAPorSLOP. Players can get it once you put the app in the store."
         );
     }
 
@@ -567,11 +666,19 @@ mod tests {
             p.summary
                 .starts_with("Not approved: The program doesn't start. get_fixes")
         );
+        i.status = "ready";
+        assert_eq!(build(&i).stage, "ready");
+        assert!(
+            build(&i)
+                .summary
+                .ends_with("Players get it once you press Publish on the Releases page."),
+            "{}",
+            build(&i).summary
+        );
         i.status = "approved";
-        i.auto_approved = true;
         assert_eq!(
             build(&i).summary,
-            "Approved automatically as an update, and signed by SLAPorSLOP."
+            "Published, and signed by SLAPorSLOP: players get it."
         );
         i.status = "withdrawn";
         assert_eq!(build(&i).stage, "withdrawn");
@@ -595,27 +702,33 @@ mod tests {
         );
         said.push(p.summary);
         i.status = "awaiting_review";
+        i.status_reason =
+            Some("On hold: it lowers the age rating, so SLAPorSLOP staff check it first.");
+        let rating = ["rating_lowered".to_string()];
+        i.hold_kinds = &rating;
         let p = build(&i);
-        assert_eq!(p.stage, "waiting_for_review");
+        assert_eq!(p.stage, "on_hold");
         assert!(
-            p.summary.contains("Waiting for review by a person"),
+            p.summary.starts_with(
+                "On hold: it lowers the age rating, so SLAPorSLOP staff check it first."
+            ),
             "{}",
             p.summary
         );
+        assert!(!p.summary.contains("a person"), "{}", p.summary);
         said.push(p.summary);
+        i.status_reason = None;
         i.status = "approved";
         i.address = Some(Address {
             plays_now: true,
             coming_soon: false,
         });
         let p = build(&i);
-        assert_eq!(
-            p.summary,
-            "Approved by a person at SLAPorSLOP: Play opens this address."
-        );
+        assert_eq!(p.summary, "Published: Play opens this address.");
         said.push(p.summary);
-        i.auto_approved = true;
+        i.status = "ready";
         said.push(build(&i).summary);
+        i.status = "approved";
         i.address = Some(Address {
             plays_now: false,
             coming_soon: false,
@@ -657,9 +770,9 @@ mod tests {
         });
         assert_eq!(
             build(&i).summary,
-            "Approved by a person at SLAPorSLOP: Play opens this address once the game is in Beta."
+            "Published: Play opens this address once the game is in Beta."
         );
-        i.auto_approved = true;
+        i.status = "ready";
         assert!(
             build(&i)
                 .summary

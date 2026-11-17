@@ -4,12 +4,16 @@
 // setup doesn't make fold away with the rest.
 import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it } from "vitest";
+import { fireEvent } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Release, ReleaseFile } from "../api";
+import { api, type Release, type ReleaseFile } from "../api";
 import { PublishProgress } from "./PublishProgress";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const server = { scanning: false, maker_signatures_required: false };
 
@@ -29,6 +33,7 @@ const file = (over: Partial<ReleaseFile> = {}): ReleaseFile => ({
   scan_detail: null,
   scan_report: null,
   defender: null,
+  cleared: false,
   cleared_reason: null,
   ...over,
 });
@@ -94,5 +99,41 @@ describe("Publishing progress's lists", () => {
     );
     const checks = screen.getByRole("list", { name: "Address checked: each check" });
     expect(checks.closest("details")).not.toBeNull();
+  });
+
+  it("puts a draft with a published release in the store from its last step, after asking", async () => {
+    const list = vi.spyOn(api, "listApp").mockResolvedValue(undefined);
+    const onListed = vi.fn();
+    render(
+      <MemoryRouter>
+        <PublishProgress
+          app={{ slug: "game", stage: "beta", status: "draft" }}
+          releases={[release({ status: "approved", status_reason: undefined, files: [] })]}
+          server={server}
+          onListed={onListed}
+        />
+      </MemoryRouter>,
+    );
+    // Not yet goes back, with focus on the button again.
+    fireEvent.click(screen.getByRole("button", { name: "Put it in the store…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Not yet" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Put it in the store…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Put it in the store…" }));
+    const confirm = screen.getByRole("group", { name: "Put it in the store" });
+    expect(confirm.textContent).toContain("Taking it out again is for SLAPorSLOP staff.");
+    // No checkbox and no signing in again: one press.
+    expect(confirm.querySelector("input")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Yes, put it in the store" }));
+    expect(list).toHaveBeenCalledWith("game");
+    expect(await screen.findByText("It's in the store.")).toBeTruthy();
+    expect(onListed).toHaveBeenCalled();
+  });
+
+  it("shows why it can't go in the store when the server says so", async () => {
+    vi.spyOn(api, "listApp").mockRejectedValue(new (await import("../api")).ApiError(409, "conflict", "Its new pictures are waiting for review."));
+    show([release({ status: "approved", status_reason: undefined, files: [] })]);
+    fireEvent.click(screen.getByRole("button", { name: "Put it in the store…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Yes, put it in the store" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Its new pictures are waiting for review.");
   });
 });

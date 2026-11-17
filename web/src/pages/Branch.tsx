@@ -143,8 +143,8 @@ function BranchForm({ parent: p }: { parent: AppDetail }) {
       )}
       <div className="notice small" role="note">
         <b>The same rules as a new app.</b> Every release is checked like any other: the files are scanned, the source is
-        read (licence, anything for sale, code from outside SLAPorSLOP, networking, where saves go), and a person reviews it
-        before players see it. It can't be rated below {p.title}, and keeps its content labels.
+        read (licence, anything for sale, code from outside SLAPorSLOP, networking, where saves go), and players get it only
+        once you publish it. It can't be rated below {p.title}, and keeps its content labels.
       </div>
       <form className="panel panel-pad form" onSubmit={(e) => void submit(e)}>
         <fieldset>

@@ -404,9 +404,19 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
         ));
     }
 
-    let waiting: i64 = sqlx::query_scalar(
-        "select count(*) from releases where status = 'awaiting_review' and created_at < $1",
-    )
+    // Holds that need staff (holds.rs): a finding, a lowered rating, or a maker who wrote. Aged
+    // from the maker's latest message staff haven't answered, else from when it opened; one where
+    // staff wrote last waits for the maker, not staff.
+    let waiting: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select count(*) from release_holds h join releases r on r.id = h.release_id
+         where {needs}
+           and (case when {unanswered} then h.maker_asked_at
+                     when exists (select 1 from release_hold_messages m
+                                  where m.release_id = h.release_id and m.from_staff) then null
+                     else h.opened_at end) < $1",
+        needs = crate::holds::NEEDS_STAFF,
+        unanswered = crate::holds::UNANSWERED,
+    )))
     .bind(now - REVIEW_WAIT)
     .fetch_one(db)
     .await?;
@@ -414,7 +424,7 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
         out.push(alert(
             "reviews-waiting",
             format!(
-                "{waiting} release{} waiting over a day for review",
+                "{waiting} release{} on hold over a day, waiting for staff",
                 if waiting == 1 { "" } else { "s" }
             ),
             "Makers are waiting. Open the admin queue.",

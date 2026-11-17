@@ -91,7 +91,10 @@ pub fn urls_in(text: &str) -> Vec<String> {
 }
 
 /// Which of `urls` are known bad: (the address as written, the list that names it).
-pub async fn find(db: &sqlx::PgPool, urls: &[String]) -> sqlx::Result<Vec<(String, String)>> {
+pub async fn find<'c>(
+    db: impl sqlx::PgExecutor<'c>,
+    urls: &[String],
+) -> sqlx::Result<Vec<(String, String)>> {
     let normal: Vec<(String, (String, String))> = urls
         .iter()
         .filter_map(|u| normalize(u).map(|n| (u.clone(), n)))

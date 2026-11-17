@@ -333,7 +333,7 @@ test("staff with one role see what their role allows, and refusals for the rest"
   // Their own work is there.
   await reviewer.goto("/admin?tab=queue");
   const categories = reviewer.getByRole("navigation", { name: "Review categories" });
-  await expect(categories.getByRole("link", { name: /^New releases \d+ waiting$/ })).toBeVisible();
+  await expect(categories.getByRole("link", { name: /^Releases on hold \d+ waiting$/ })).toBeVisible();
   // Legal requests are for staff who take sensitive actions: not a category for them.
   await expect(categories.getByRole("link", { name: /^Legal requests/ })).toHaveCount(0);
 
@@ -365,14 +365,13 @@ test("Home counts what's waiting, links to it, and finds apps and accounts", asy
       [queue.reports.length, "Reports"],
       [queue.appeals.length, "Appeals"],
       [queue.rescans.length, "Re-scan flags"],
-      [queue.releases.length, "New releases"],
-      [queue.changes.length, "Release holds & moves"],
+      [queue.releases.length, "Releases on hold"],
+      [queue.changes.length, "Repository moves"],
       [queue.media.length, "Store pictures"],
       [queue.portfolios.length, "People pages"],
       [queue.problems.length, "People problems"],
       [queue.review_disputes.length, "Review disputes"],
       [queue.abuse.length, "Abuse alerts"],
-      [queue.ready_to_list.length, "Apps to list"],
       [ai.length, "AI messages"],
     ];
     return { queue, counts };

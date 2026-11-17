@@ -2082,9 +2082,11 @@ async fn fake_host() -> String {
 }
 
 /// The maker's release of `game` (maker_with_app), fetched and waiting for review.
+/// A release on hold for SLAPorSLOP staff: a scanner flagged its build.
 async fn release_waiting(app: &TestApp) -> (Uuid, String, String) {
     let (maker_id, maker) = maker_with_app(app, "released").await;
     let id = submit_and_fetch(app, &maker, "1.0.0").await;
+    flag_release(app, &id).await;
     (maker_id, maker, id)
 }
 
@@ -2105,12 +2107,14 @@ fn as_who(method: Method, uri: String, who: &str) -> Req {
     }
 }
 
+/// Accepting a held release (staff, `approve`) makes it ready for its maker; nothing is signed
+/// and the store page keeps its rating until the maker publishes it.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn approving_a_release_signs_it_and_copies_its_rating_to_the_store_page(db: PgPool) {
+async fn accepting_a_hold_makes_it_ready_and_publishing_signs_it_and_copies_its_rating(db: PgPool) {
     let app = test_app(db).await;
     let (_, owner) = make_admin(&app, "Olive Owner").await;
     let (_, support) = staff(&app, "Sue Support", "support").await;
-    let (maker_id, _, id) = release_waiting(&app).await;
+    let (maker_id, maker, id) = release_waiting(&app).await;
     let approve = |who: &str| {
         as_who(
             Method::POST,
@@ -2135,7 +2139,7 @@ async fn approving_a_release_signs_it_and_copies_its_rating_to_the_store_page(db
             .to_string()
     };
 
-    // A frozen app's releases wait.
+    // A frozen app's releases wait: staff can't accept what the maker has to fix.
     sqlx::query("update apps set frozen_at = now(), frozen_reason = 'Checking a report' where slug = 'game'")
         .execute(&app.db)
         .await
@@ -2146,21 +2150,25 @@ async fn approving_a_release_signs_it_and_copies_its_rating_to_the_store_page(db
         .execute(&app.db)
         .await
         .unwrap();
-    // A file that was never hashed can't be signed.
+    // A file that was never hashed can't be accepted.
     sqlx::query("update release_files set sha256 = null where release_id = $1::uuid")
         .bind(&id)
         .execute(&app.db)
         .await
         .unwrap();
     let why = refusal(app.send(approve(&owner)).await).await;
-    assert!(why.contains("windows build hasn't been hashed"), "{why}");
+    assert!(
+        why.contains("Windows (.zip) build wasn't downloaded and hashed"),
+        "{why}"
+    );
+    assert_eq!(release_state(&app, &id).await.0, "awaiting_review");
     sqlx::query("update release_files set sha256 = repeat('b', 64) where release_id = $1::uuid")
         .bind(&id)
         .execute(&app.db)
         .await
         .unwrap();
 
-    // The release carries an age rating and content labels: approving puts them on the page.
+    // The release carries an age rating and content labels.
     sqlx::query(
         "update releases set min_age = 16, content_labels = '{violence,horror}' where id = $1::uuid",
     )
@@ -2173,6 +2181,40 @@ async fn approving_a_release_signs_it_and_copies_its_rating_to_the_store_page(db
         app.send(approve(&review)).await.status(),
         StatusCode::NO_CONTENT
     );
+    let (status, reviewed_by, signed): (String, String, bool) = sqlx::query_as(
+        "select status::text, reviewed_by, signed_manifest is not null from releases where id = $1::uuid",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(status, "ready");
+    assert!(
+        reviewed_by.starts_with("AI reviewer \"review agent\""),
+        "{reviewed_by}"
+    );
+    assert!(!signed, "nothing is signed before its maker publishes it");
+    let min_age: i16 = sqlx::query_scalar("select min_age from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_ne!(
+        min_age, 16,
+        "the store page keeps its rating until it's published"
+    );
+    // Not twice.
+    let why = refusal(app.send(approve(&owner)).await).await;
+    assert!(why.contains("release is ready, not on hold"), "{why}");
+
+    // Its maker publishes it: signed, and the store page takes its rating (AGE-7).
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/apps/game/releases/{id}/publish"))
+                .cookie(&maker)
+                .json(json!({})),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
     let (min_age, labels): (i16, Vec<String>) =
         sqlx::query_as("select min_age, content_labels from apps where slug = 'game'")
             .fetch_one(&app.db)
@@ -2182,48 +2224,44 @@ async fn approving_a_release_signs_it_and_copies_its_rating_to_the_store_page(db
         (min_age, labels),
         (16, vec!["violence".into(), "horror".into()])
     );
-    let (status, reviewed_by, signed): (String, String, bool) = sqlx::query_as(
-        "select status::text, reviewed_by, signed_manifest is not null from releases where id = $1::uuid",
+    let (status, signed): (String, bool) = sqlx::query_as(
+        "select status::text, signed_manifest is not null from releases where id = $1::uuid",
     )
     .bind(&id)
     .fetch_one(&app.db)
     .await
     .unwrap();
-    assert_eq!(status, "approved");
+    assert_eq!((status.as_str(), signed), ("approved", true));
+    let titles = notice_titles(&app, maker_id).await;
     assert!(
-        reviewed_by.starts_with("AI reviewer \"review agent\""),
-        "{reviewed_by}"
-    );
-    assert!(signed);
-    assert!(
-        notice_titles(&app, maker_id)
-            .await
-            .contains(&"Game 1.0.0 is approved".to_string())
-    );
-    // Not twice.
-    let why = refusal(app.send(approve(&owner)).await).await;
-    assert!(
-        why.contains("release is approved, not awaiting review"),
-        "{why}"
+        titles.contains(&"Game 1.0.0 is out".to_string()),
+        "{titles:?}"
     );
 }
 
+/// Without a signing key nothing can be published; accepting a hold still works.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn without_a_signing_key_nothing_can_be_approved(db: PgPool) {
+async fn without_a_signing_key_nothing_can_be_published(db: PgPool) {
     let app = test_app_with(db, |c| c.releases.signing_key = None).await;
     let (_, owner) = make_admin(&app, "Olive Owner").await;
-    let (_, _, id) = release_waiting(&app).await;
+    let (_, maker, id) = release_waiting(&app).await;
     let res = app
         .send(req(Method::POST, format!("/v1/admin/releases/{id}/approve")).cookie(&owner))
         .await;
-    assert_eq!(res.status(), StatusCode::CONFLICT);
-    assert!(
-        body_json(res).await["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("SLOP_SIGNING_KEY")
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/apps/game/releases/{id}/publish"))
+                .cookie(&maker)
+                .json(json!({})),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        body_json(res).await["error"]["message"],
+        "SLAPorSLOP can't publish releases right now"
     );
-    assert_eq!(release_state(&app, &id).await.0, "awaiting_review");
+    assert_eq!(release_state(&app, &id).await.0, "ready");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -2273,7 +2311,7 @@ async fn rejecting_a_release_tells_the_maker_why(db: PgPool) {
         )
     );
     let told: (String, String) = sqlx::query_as(
-        "select title, body from notifications where user_id = $1 and title like '%wasn''t approved'",
+        "select title, body from notifications where user_id = $1 and title like '%was turned down by SLAPorSLOP staff'",
     )
     .bind(maker_id)
     .fetch_one(&app.db)
@@ -2282,7 +2320,7 @@ async fn rejecting_a_release_tells_the_maker_why(db: PgPool) {
     assert_eq!(
         told,
         (
-            "Game 1.0.0 wasn't approved".to_string(),
+            "Game 1.0.0 was turned down by SLAPorSLOP staff".to_string(),
             "The Windows build asks for administrator rights.".to_string()
         )
     );
@@ -2292,6 +2330,13 @@ async fn rejecting_a_release_tells_the_maker_why(db: PgPool) {
             .await
             .unwrap();
     assert!(actor.starts_with("Rex Reviewer ("));
+    let hold: String =
+        sqlx::query_scalar("select status from release_holds where release_id = $1::uuid")
+            .bind(&waiting)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(hold, "rejected");
     assert_eq!(subject, waiting);
     // Rejected already: not again.
     assert_eq!(
@@ -2334,20 +2379,14 @@ async fn rejecting_a_release_tells_the_maker_why(db: PgPool) {
             .status(),
         StatusCode::NO_CONTENT
     );
-    // (One more waiting, for the command line below: once a person approved a release, later
-    // ones are approved automatically.)
-    let fresh = submit_and_fetch(&app, &maker, "1.4.0").await;
-    // An approved release is withdrawn, not rejected; the command line has the same rule.
+    // A published release is withdrawn, not rejected; the command line has the same rule.
     let approved = submit_and_fetch(&app, &maker, "1.3.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        approved.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), approved.parse().unwrap())
+        .await
+        .unwrap();
+    // One that passed its checks but isn't published never reached players: it can be.
+    let fresh = submit_and_fetch(&app, &maker, "1.4.0").await;
+    assert_eq!(release_state(&app, &fresh).await.0, "ready");
     assert_eq!(
         app.send(reject(&approved, &owner, "Changed my mind."))
             .await
@@ -2405,14 +2444,6 @@ async fn a_reviewer_clears_a_false_positive_with_a_reason(db: PgPool) {
     .await
     .unwrap();
     let approve = || req(Method::POST, format!("/v1/admin/releases/{id}/approve")).cookie(&owner);
-    let res = app.send(approve()).await;
-    assert_eq!(res.status(), StatusCode::CONFLICT);
-    assert!(
-        body_json(res).await["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("clear it with a reason")
-    );
     let clear = |platform: &str, who: &str, reason: &str| {
         as_who(
             Method::POST,
@@ -2429,15 +2460,11 @@ async fn a_reviewer_clears_a_false_positive_with_a_reason(db: PgPool) {
             StatusCode::FORBIDDEN
         );
     }
-    // A reason of 10 to 1000 characters, for a file that's there.
-    for short_or_long in ["too short", &"x".repeat(1001)] {
-        assert_eq!(
-            app.send(clear("windows", &reviewer, short_or_long))
-                .await
-                .status(),
-            StatusCode::CONFLICT
-        );
-    }
+    // A note is optional, up to 1,000 characters, for a file that's there.
+    let res = app
+        .send(clear("windows", &reviewer, &"x".repeat(1001)))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         app.send(clear("macos", &reviewer, reason)).await.status(),
         StatusCode::CONFLICT
@@ -2461,8 +2488,9 @@ async fn a_reviewer_clears_a_false_positive_with_a_reason(db: PgPool) {
     assert_eq!(subject, "game");
     assert_eq!(detail["platform"], "windows");
     assert_eq!(detail["reason"], reason);
-    // Now it can be approved; after that, nothing is waiting to be cleared.
-    assert_eq!(app.send(approve()).await.status(), StatusCode::NO_CONTENT);
+    // Nothing else held it: it's ready for its maker now, and nothing is left to clear.
+    assert_eq!(release_state(&app, &id).await.0, "ready");
+    assert_eq!(app.send(approve()).await.status(), StatusCode::CONFLICT);
     assert_eq!(
         app.send(clear("windows", &reviewer, reason)).await.status(),
         StatusCode::CONFLICT
@@ -2476,15 +2504,7 @@ async fn a_live_release_a_rescan_flagged_can_be_kept_with_a_reason(db: PgPool) {
     let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
     let (_, support) = staff(&app, "Sue Support", "support").await;
     let (_, _, id) = release_waiting(&app).await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        id.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    accept_and_publish(&app, &id).await;
     let keep = |platform: &str, who: &str, reason: &str| {
         as_who(
             Method::POST,
@@ -2519,11 +2539,12 @@ async fn a_live_release_a_rescan_flagged_can_be_kept_with_a_reason(db: PgPool) {
             StatusCode::FORBIDDEN
         );
     }
-    for bad in ["short", &"x".repeat(1001)] {
-        let res = app.send(keep("windows", &reviewer, bad)).await;
-        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(body_json(res).await["error"]["field"], "reason");
-    }
+    // The note is optional (a short one is fine), up to 1,000 characters.
+    let res = app
+        .send(keep("windows", &reviewer, &"x".repeat(1001)))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(res).await["error"]["field"], "reason");
     assert_eq!(
         app.send(keep("linux", &reviewer, reason)).await.status(),
         StatusCode::NOT_FOUND
@@ -2533,6 +2554,14 @@ async fn a_live_release_a_rescan_flagged_can_be_kept_with_a_reason(db: PgPool) {
         app.send(keep("windows", &review, reason)).await.status(),
         StatusCode::NO_CONTENT
     );
+    let kept_by: Option<String> = sqlx::query_scalar(
+        "select rescan_cleared_by from release_files where release_id = $1::uuid and rescan_cleared_at is not null",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(kept_by.is_some());
     let (flagged, why): (bool, Option<String>) = sqlx::query_as(
         "select rescan_flagged_at is not null, rescan_cleared_reason from release_files where release_id = $1::uuid",
     )
@@ -2588,21 +2617,39 @@ async fn listing_an_app_checks_it_is_ready(db: PgPool) {
         let slug = slug.to_string();
         async move { listed_with(app, maker, &slug, "coming_soon", &set).await }
     };
+    // Reinstated on appeal and waiting to go back in: staff's to list.
+    let relist = |slug: &str, set: &str| {
+        let set = if set.is_empty() {
+            "status = 'delisted', relist_after_appeal = true, stage = 'coming_soon'".to_string()
+        } else {
+            format!("status = 'delisted', relist_after_appeal = true, stage = 'coming_soon', {set}")
+        };
+        let app = &app;
+        let slug = slug.to_string();
+        async move { listed_with(app, maker, &slug, "coming_soon", &set).await }
+    };
 
     draft("soon", "").await;
     assert_eq!(
         app.send(list("soon", &support)).await.status(),
         StatusCode::FORBIDDEN
     );
+    // A plain draft is its maker's to put in the store (manage.rs `list_app`).
+    let why = refusal(app.send(list("soon", &owner)).await).await;
+    assert!(
+        why.contains("its maker puts a draft in the store themselves"),
+        "{why}"
+    );
+    relist("back", "").await;
     // Frozen, or with pictures waiting: not yet.
-    draft(
+    relist(
         "frozen",
         "frozen_at = now(), frozen_reason = 'Repository gone'",
     )
     .await;
     let why = refusal(app.send(list("frozen", &owner)).await).await;
     assert!(why.contains("frozen (Repository gone)"), "{why}");
-    draft("pictures", "").await;
+    relist("pictures", "").await;
     sqlx::query(
         "insert into media_sets (id, app_id, commit_sha, fingerprint, source)
          select $1, id, repeat('a', 40), 'f', 'maker' from apps where slug = 'pictures'",
@@ -2614,7 +2661,7 @@ async fn listing_an_app_checks_it_is_ready(db: PgPool) {
     let why = refusal(app.send(list("pictures", &owner)).await).await;
     assert!(why.contains("review the app's pictures first"), "{why}");
     // A private app goes in the store only when its owner asked.
-    draft("private", "visibility = 'private'").await;
+    relist("private", "visibility = 'private'").await;
     let why = refusal(app.send(list("private", &owner)).await).await;
     assert!(why.contains("a private app"), "{why}");
     // Asked, but the repository is still private, or GitHub can't say.
@@ -2646,10 +2693,10 @@ async fn listing_an_app_checks_it_is_ready(db: PgPool) {
     // Ready: listed, once.
     let review = token(&app, &owner, "review").await;
     assert_eq!(
-        app.send(list("soon", &review)).await.status(),
+        app.send(list("back", &review)).await.status(),
         StatusCode::NO_CONTENT
     );
-    let why = refusal(app.send(list("soon", &owner)).await).await;
+    let why = refusal(app.send(list("back", &owner)).await).await;
     assert_eq!(why, "already listed");
     let why = refusal(app.send(list("nothing", &owner)).await).await;
     assert_eq!(why, "no such app");
@@ -2779,12 +2826,12 @@ async fn stages_move_only_with_an_approved_release(db: PgPool) {
         (
             "soon",
             json!({ "stage": "beta" }),
-            "approve a release first",
+            "publishes a release first",
         ),
         (
             "soon",
             json!({ "stage": "released" }),
-            "approve a release first",
+            "publishes a release first",
         ),
         ("nothing", json!({ "stage": "beta" }), "no such app"),
     ] {
@@ -2829,15 +2876,7 @@ async fn makers_changes_are_approved_or_rejected_by_reviewers(db: PgPool) {
     let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
     let (_, support) = staff(&app, "Sue Support", "support").await;
     let (maker_id, _, first) = release_waiting(&app).await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        first.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    accept_and_publish(&app, &first).await;
     let change = |kind: &str| {
         let db = app.db.clone();
         let kind = kind.to_string();
@@ -5078,7 +5117,6 @@ async fn an_apps_record_holds_its_money_reports_decisions_and_release_history(db
     let (donor, _) = app.user("Dana Donor", "US").await;
     let (_, rita) = app.user("Rita Reporter", "US").await;
     let (_, maker, approved) = release_waiting(&app).await;
-    let rejected = submit_and_fetch(&app, &maker, "1.1.0").await;
     let res = app
         .send(
             req(
@@ -5089,6 +5127,10 @@ async fn an_apps_record_holds_its_money_reports_decisions_and_release_history(db
         )
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    approve_release(&app, lax(), approved.parse().unwrap())
+        .await
+        .unwrap();
+    let rejected = submit_and_fetch(&app, &maker, "1.1.0").await;
     let res = app
         .send(
             req(
@@ -5227,7 +5269,8 @@ async fn an_apps_record_holds_its_money_reports_decisions_and_release_history(db
         .map(|a| a["action"].as_str().unwrap())
         .collect();
     for action in [
-        "release.approve",
+        "release.ready",
+        "release.publish",
         "release.reject",
         "release.rescan_cleared",
         "app.delist",
@@ -5996,7 +6039,7 @@ async fn conditions_needing_a_person_are_alerted_daily_while_they_last(db: PgPoo
     let (admin_id, admin) = make_admin(&app, "Ada Admin").await;
     let (_, player) = app.user("Pat Player", "US").await;
     let (maker_id, maker) = maker_with_app(&app, "released").await;
-    // A report past its deadline, an open abuse signal, a release waiting two days, a scanner
+    // A report past its deadline, an open abuse signal, a release on hold two days, a scanner
     // that failed, and a removal order due within the hour.
     sqlx::query("update apps set status = 'listed'")
         .execute(&app.db)
@@ -6022,6 +6065,14 @@ async fn conditions_needing_a_person_are_alerted_daily_while_they_last(db: PgPoo
         .await
         .unwrap();
     let failed = submit_and_fetch(&app, &maker, "1.1.0").await;
+    flag_release(&app, &waiting).await;
+    sqlx::query(
+        "update release_holds set opened_at = now() - interval '2 days' where release_id = $1::uuid",
+    )
+    .bind(&waiting)
+    .execute(&app.db)
+    .await
+    .unwrap();
     sqlx::query(
         "update release_files set scan_detail = 'the scanner couldn''t finish: timed out' where release_id = $1::uuid",
     )
@@ -6057,7 +6108,7 @@ async fn conditions_needing_a_person_are_alerted_daily_while_they_last(db: PgPoo
         titles,
         [
             "1 possible abuse pattern to look at",
-            "1 release waiting over a day for review",
+            "1 release on hold over a day, waiting for staff",
             "1 report past its deadline",
             "2 known-vulnerable dependencies",
             "Removal order LR-1: act within the hour",

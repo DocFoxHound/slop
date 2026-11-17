@@ -13,7 +13,7 @@ publish: what SLAPorSLOP asks of your project, how to set it up, and what happen
 **Want your agent to do all of it, store page included?** Connect it to SLAPorSLOP: give your AI
 tool this site's `/mcp` address and approve it in your browser (Account → AI agents shows the
 steps for each tool; see [Working with your AI agent](#working-with-your-ai-agent)). Then it
-creates the store page, submits releases and follows the review itself. Without a connection it
+creates the store page, submits releases and follows their checks itself (you press Publish). Without a connection it
 can prepare the repository, check it, and hand you a link that fills in the store page.
 
 It's written so that a person or an AI agent can follow it from start to finish. Agents: the
@@ -21,8 +21,8 @@ It's written so that a person or an AI agent can follow it from start to finish.
 [What SLAPorSLOP asks of your project](#what-slaporslop-asks-of-your-project) says what's required and what's
 optional.
 
-> Each app's first release is reviewed by a person. Things marked *(coming)* below are planned
-> but not built yet.
+> Every release is checked by SLAPorSLOP; then you publish it yourself. Things marked *(coming)*
+> below are planned but not built yet.
 
 ## Why publish on SLAPorSLOP
 
@@ -37,8 +37,8 @@ optional.
 - **Or nothing to install.** A game that runs on your own website can be on SLAPorSLOP too: players
   press Play and it opens in their browser. See [Browser games](#browser-games).
 - **Trust.** Every app links its source code. Every build is tied to the exact commit it came from
-  and checked before it's offered to players. A browser game's address is checked, and played by
-  a person, before Play opens it.
+  and checked before it's offered to players. A browser game's address is checked before Play
+  opens it.
 - **Player counts.** Add a few lines of code ([Slop Pulse](#slop-pulse-player-counts)) and your
   store page shows how many people are playing now and the peak this month.
 - **History.** Your Manage page shows, for each day, how many accounts played your app, how many
@@ -108,13 +108,13 @@ from) and 4, and an https address instead of 2, 5 and 6: see [Browser games](#br
 
 | Stage | What it means | Time limit |
 |---|---|---|
-| **Coming soon** | A store page with no build (or approved play address) yet. Players can mark it Interested. | 12 months, then it must reach Beta |
+| **Coming soon** | A store page with no build (or published play address) yet. Players can mark it Interested. | 12 months, then it must reach Beta |
 | **Beta** | Playable builds, still changing. Players can rate it (marked "Rated in Beta") and donate. | 12 months, then it must be released |
 | **Released** | Finished (and still updated) | none |
 
 **Moving on** is up to you: the stage bar at the top of your app's Manage, Edit store page and
 Releases tabs has **Move to Beta** and **Release it** (straight from Coming soon to Released is fine). It
-needs an approved release (for a browser game, an approved play address), since that's what
+needs a published release (for a browser game, a published play address), since that's what
 players get; it happens at once, and everyone who marked the app Interested is told. They also
 get your news posts under their bell, unless they switch that off for your app. Stages only move
 forward: to go back, contact SLAPorSLOP.
@@ -325,8 +325,8 @@ jobs:
 Every Slop Build also checks your Windows build with **Microsoft Defender** (today's definitions,
 on GitHub's Windows runner), looks for secrets committed to your source with
 [gitleaks](https://github.com/gitleaks/gitleaks), and lists dependencies with known
-vulnerabilities with [OSV-Scanner](https://github.com/google/osv-scanner). Only you and SLAPorSLOP's
-reviewers see the source checks; they never stop a release.
+vulnerabilities with [OSV-Scanner](https://github.com/google/osv-scanner). Only you and SLAPorSLOP
+staff see the source checks; they never stop a release.
 
 **Project types.** The **Add to my repository** button picks one by looking at your repository.
 
@@ -466,34 +466,68 @@ steps: see [Browser games](#browser-games)):
 5. **Scan:** SLAPorSLOP scans every file with ClamAV, YARA (YARA-Forge's rules) and capa, unpacking
    archives first. Nothing is ever run. Windows builds also need a clean check from
    **Microsoft Defender** (Slop Build or [Slop Check](#slop-check)). If something is found, the
-   release waits for a person: scanners make mistakes, and a reviewer can clear a false positive
-   (the reason is shown to you). A scan says what was found, not that a program is safe. Each file
+   release goes **on hold** (see [On hold](#on-hold) below): scanners make mistakes, and SLAPorSLOP
+   staff can clear a false positive. A scan says what was found, never that a program is harmless. Each file
    also has a **Look up on VirusTotal** link for its hash, an optional second opinion: it's not
    required, and uploading a file there shares it with VirusTotal's subscribers, so don't for a
    private app.
 6. **Source check:** SLAPorSLOP reads your repository at the release's commit once (on GitHub, GitLab
    or Codeberg; a private repository outside GitHub needs a read-only token saved on the app) and
-   notes three things for you and the reviewer: whether your licence file
+   notes three things for you and SLAPorSLOP staff: whether your licence file
    matches the store page's licence; anything that looks like selling in the app (payment
    libraries, in-app purchase APIs, checkout links, loot boxes, premium currencies), which SLAPorSLOP
    doesn't allow; code that loads code from outside SLAPorSLOP, updates itself, or uses an unsafe data
-   format (see [Online play and mods](#online-play-and-mods)); and the packages in your lockfiles. Notes don't stop a release by themselves, but
-   an update with a new one waits for a person. After that, SLAPorSLOP checks those packages against
+   format (see [Online play and mods](#online-play-and-mods)); and the packages in your lockfiles. Notes don't stop a release: one
+   the last published release didn't have is shown to you before you publish, and logged. After that, SLAPorSLOP checks those packages against
    [OSV](https://osv.dev) every day and tells you when a new security advisory affects your live
    release.
-7. **Review by a person:** a person at SLAPorSLOP reviews your app's first release, usually within a
-   day or two. Approval signs it; a rejection comes with a reason, and **To fix** on the Releases
-   page (or `get_fixes` for your AI agent) says what to change. Either way you get a notification
-   (under the bell, and by email).
-8. **In the store:** SLAPorSLOP staff put the app in the store.
+7. **Checks:** the checks end in one of three ways, and you get a notification each time (under
+   the bell, and by email):
+   - **Passed, not published:** every check passed. Nothing reaches players yet.
+   - **On hold:** something needs a look first (below).
+   - **Failed:** the reason is on the release, and **To fix** on the Releases page (or `get_fixes`
+     for your AI agent) says what to change. Fix it and send a new version, or press **Ask
+     SLAPorSLOP staff** if you think the checks got it wrong.
+8. **Publish:** you press **Publish** on the release, on the Releases page. Only then does
+   SLAPorSLOP sign it, and players get it. The Publish panel shows, as information, anything the
+   source check found that your last published release didn't have, and, for a browser game, when
+   the play address is a new site. Publish waits while your app's new store pictures are being
+   reviewed, and until the source check has a result. Publishing is for you, signed in on the
+   website: an AI agent can't publish, so a stolen agent token or a compromised repository can't
+   put a build in front of players. Publishing a release also withdraws older releases that were
+   never published, and ends a hold at an older release (see [Managing your app](#5-managing-your-app)).
+9. **In the store:** the first time, put the app in the store yourself with **Put it in the
+   store** on its Manage page (or its publishing progress). Later releases go out when you
+   publish them.
 
-**Updates.** With **Approve updates automatically** on (the default), every later release that
-passes every check is approved and signed by SLAPorSLOP straight away, with no wait for a person.
-Combined with **Pick up new GitHub releases** (or Slop Build), publishing an update is just
-publishing a release on GitHub. Players' apps show a notice and update when the player chooses.
-A person looks again if a release fails a check, or if one of your releases was withdrawn (by
-SLAPorSLOP or by you) or rejected since the last one a person approved. SLAPorSLOP can withdraw a release that turns out to be
-harmful; it then stops launching for everyone.
+#### On hold
+
+A release goes on hold when:
+
+- **A scanner flagged a file.** The Releases page says what was found (the scanner, the signature
+  or rule, and the file), in plain words. SLAPorSLOP staff look at it. You can press **Scan again**
+  to run SLAPorSLOP's scanner again with today's signatures: up to 3 times per release, 6 hours
+  apart (30 minutes when the scanner couldn't finish). SLAPorSLOP keeps no copy of your files, so
+  it downloads the same file from your release page again and checks its SHA-256 first; a changed
+  file is a new version, so send it as one.
+- **Microsoft Defender flagged a Windows file.** SLAPorSLOP can't run Defender again on the same
+  file. Submit it to Microsoft as a false positive and build again, or tell SLAPorSLOP staff why
+  it's a false positive.
+- **Microsoft Defender's check is missing.** Run [Slop Check](#slop-check) in your repository; the
+  release goes on by itself as soon as the result arrives.
+- **It lowers the age rating** (or drops a content label) compared with your last published
+  release. A SLAPorSLOP staff member checks a lowered rating before you can publish.
+
+On every hold you can **Write to SLAPorSLOP staff**: say why a finding is a false positive, or ask
+something. Their replies show in the same conversation on the release, and you're notified. When
+staff accept it, the release is **Passed, not published** and you can publish it. If the build
+needs fixing, send a new version: once a newer release passes or is published, the held one is
+withdrawn by itself.
+
+**Updates.** Every release goes through the same checks, and you publish each one. Combined with
+**Pick up new GitHub releases** (or Slop Build), an update is a release on GitHub and one press of
+**Publish**. Players' apps show a notice and update when the player chooses. SLAPorSLOP can
+withdraw a release that turns out to be harmful; it then stops launching for everyone.
 
 **Where things stand:** **Publish** lists each of your apps with the step it's waiting on or
 stuck at. **Releases & progress** has the full checklist and every release's history.
@@ -502,21 +536,23 @@ stuck at. **Releases & progress** has the full checklist and every release's his
 
 Each app has a **Manage** page (Publish → **Manage**):
 
-- **Not reviewed yet.** Releases SLAPorSLOP is still checking or that wait for review. SLAPorSLOP tells you
-  about every release it receives; if you didn't send one, or sent it by mistake, **Withdraw** it
-  there. It never reaches players, and your next release is reviewed by a person. If you didn't
-  send it, also secure your accounts and repository.
-- **What players get.** By default players get the newest approved release. You can instead hold
-  them at any approved release, to roll back a bad update or to wait before sending a new one out,
-  and switch back later. New releases are still checked and approved while you hold; they just
-  don't go out until you switch. A browser game has no hold: Manage shows **Where Play goes**,
-  and Play always opens the newest approved address.
+- **Put it in the store.** A draft app goes in the store when you press **Put it in the store**
+  (a Coming soon page needs no release; Beta and Released need a published one, and new pictures
+  must be reviewed first). An app taken out of the store goes back through SLAPorSLOP staff (an
+  appeal), and a private app goes public once staff have checked its repository.
+- **Not published yet.** Releases SLAPorSLOP is still checking, on hold, or waiting for you to
+  publish. SLAPorSLOP tells you about every release it receives; if you didn't send one, or sent it
+  by mistake, **Withdraw** it there. It never reaches players. If you didn't send it, also secure
+  your accounts and repository.
+- **What players get.** By default players get the newest published release. You can instead hold
+  them at any published release, to roll back a bad update, and switch back later; it happens at
+  once. Publishing a newer release ends the hold. A browser game has no hold: Manage shows
+  **Where Play goes**, and Play always opens the newest published address.
 - **Repository.** Before anyone has your app you can change it freely. Once players have it, a
-  move to another repository is always checked by a person, and the first release from the new
-  repository is reviewed by a person too. Players who installed from the old repository reinstall
-  before their SLAPorSLOP app takes updates from the new one.
-- **Updates.** The same **Pick up new GitHub releases** and **Approve updates automatically**
-  settings as on Releases & progress.
+  move to another repository is checked by SLAPorSLOP staff; the first release from the new
+  repository goes through the same checks, and you publish it. Players who installed from the old
+  repository reinstall before their SLAPorSLOP app takes updates from the new one.
+- **Updates.** The same **Pick up new GitHub releases** setting as on Releases & progress.
 - **News.** Post short news on your app's page (a headline and up to 2,000 characters). People
   who marked the app Interested are told under their bell, unless they switched news off for it.
   One new post per app per day; you can edit or remove a post. News must follow the Content Policy
@@ -525,8 +561,8 @@ Each app has a **Manage** page (Publish → **Manage**):
   one that's still waiting.
 - **Results on GitHub.** If your app is public, its repository is on GitHub and SLAPorSLOP's
   GitHub App is installed on it, you can have SLAPorSLOP put each release's result on its commit
-  on GitHub, as a status named SLAPorSLOP: being checked, waiting for review, passed, not
-  approved, couldn't be checked, or withdrawn. A pass means the release passed SLAPorSLOP's
+  on GitHub, as a status named SLAPorSLOP: being checked, on hold, passed, passed and published,
+  not approved, couldn't be checked, or withdrawn. A pass means the release passed SLAPorSLOP's
   checks; scanning can't catch everything. Anyone who can see the commit on GitHub sees it, also
   when a release isn't approved; it never says why. It's off until you switch it on, covers only
   releases you send after that, and nothing new is posted while the app isn't in the store.
@@ -535,10 +571,9 @@ Each app has a **Manage** page (Publish → **Manage**):
   corrected if SLAPorSLOP later withdraws that release. Changing the app's repository address
   switches it off. If you don't see the panel, this SLAPorSLOP doesn't offer it yet.
 
-Changes that would have players download something different are checked before they happen.
-Switching to another approved release follows the same rule as updates: it goes through straight
-away when automatic approval applies (the release already passed every check), otherwise a person
-looks. Everything else, like the store page, platforms and settings, changes straight away (but
+Switching players to another published release happens at once (it already passed its checks).
+A repository move waits for SLAPorSLOP staff. Everything else, like the store page, platforms and
+settings, changes straight away (but
 once an app has releases, it can't switch between a download and a browser game).
 
 ## Browser games
@@ -572,12 +607,11 @@ site into a desktop window players download.
   browser games: your page loads its code from your site, as any web page does. Every other rule
   does. The game on your site must match its store page and age rating, sell nothing, and carry
   no malware, scams or phishing.
-- **What a reviewer checks.** A person plays every new address (see
-  [What happens to a play address](#what-happens-to-a-play-address)). They reject a page that
-  asks for the password of another service (SLAPorSLOP, Google, Discord…) or for payment
-  details, or that's only a page to download a program rather than a game that plays in the
-  browser. A sign-in of your game's own is fine: say on the store page that the game needs an
-  account.
+- **What isn't allowed.** A page that asks for the password of another service (SLAPorSLOP,
+  Google, Discord…) or for payment details, or that's only a page to download a program rather
+  than a game that plays in the browser. SLAPorSLOP staff act on reports, and can withdraw the
+  address or take the game out of the store. A sign-in of your game's own is fine: say on the
+  store page that the game needs an account.
 - **Say where else it connects.** A site is on the web anyway, so networking code in its source
   is only a note; if the game talks to servers besides its own site (multiplayer, leaderboards,
   online services), tick **Online** on the store page and name them. The fix for that is a
@@ -602,8 +636,8 @@ business (the browser's storage, or your server).
   `{"version": "1.0.0", "play_address": "https://…"}` and no `files`.
 
 SLAPorSLOP keeps the address in a standard form (for example, with a `/` after the site's name).
-The usual limits apply: a version can't be used twice, and up to three releases can wait for
-review at once.
+The usual limits apply: a version can't be used twice, and up to three releases can be being
+checked or on hold at once.
 
 ### What happens to a play address
 
@@ -625,33 +659,31 @@ The **Publishing progress** checklist has these steps for a browser game:
 4. **Source check:** your repository at the release's commit, as for every release: the licence,
    anything that looks like selling, and pay-to-win design. Saves, Slop Pulse and sandbox mode
    don't apply.
-5. **Review by a person:** every new address is looked at by a person, who opens it in a private
-   window and plays it. It should be the game in your repository and on your store page, with a
-   fitting age rating. A page that asks for another service's password or for payment details,
-   that's only a page to download a program, or that sells anything is rejected (see
-   [What a reviewer checks](#browser-games)).
-6. **In the store:** SLAPorSLOP staff put the app in the store, as for every app. A Beta or
-   released browser game needs an approved address first, and so do **Move to Beta** and
-   **Release it**; a Coming soon page can be listed without one.
+5. **Checks:** passed, on hold (a lowered age rating waits for SLAPorSLOP staff, as it does for
+   downloads), or failed with the reason.
+6. **Publish:** you press **Publish** on the release. The Publish panel says when the address is a
+   new site, not the one Play opens now. It should be the game in your repository and on your
+   store page, with a fitting age rating (see [What isn't allowed](#browser-games)).
+7. **In the store:** the first time, press **Put it in the store** on the Manage page, as for
+   every app. A Beta or released browser game needs a published address first, and so do **Move
+   to Beta** and **Release it**; a Coming soon page can be listed without one.
 
 One more step is shown as skipped: **What SLAPorSLOP can't check.** SLAPorSLOP checks the address,
 not what your site serves, and it can't check that your site runs the code in your repository.
-That's why a person plays it, and why players are never told a browser game is scanned, signed or
-built from source.
+That's why players are never told a browser game is scanned, signed or built from source.
 
-Once a person approves it, the Releases page says **Approved: Play opens this address.**
+Once you publish it, the Releases page says **Published: Play opens this address.**
 
 **Changing your game:** the site is yours, so change what it serves whenever you like;
 SLAPorSLOP doesn't load it again. Give a new release when the address changes, or to give players
-a new version, new notes or a new rating. A release with exactly the address Play opens now can
-be approved automatically (with **Approve updates automatically** on, when it passes every
-check); a new address always waits for a person, and Play keeps opening the old one until it's
-approved. "Exactly" means as SLAPorSLOP keeps it: adding or dropping `www.`, or changing the path,
-the query or the `#` part, makes a new address.
+a new version, new notes or a new rating. Play keeps opening the old address until you publish
+the new release. A new address is shown as a new site when you publish: "new" means as
+SLAPorSLOP keeps it, so adding or dropping `www.`, or changing the path, the query or the `#`
+part, makes a new address.
 
-**Withdrawn addresses:** you can withdraw a release before it's reviewed. If SLAPorSLOP withdraws
-an approved address (say, because a bad-link list has named it since), Play stops opening it,
-and opens no older address instead, until a person approves a new one. SLAPorSLOP can't take your
+**Withdrawn addresses:** you can withdraw a release before it's published. If SLAPorSLOP withdraws
+a published address (say, because a bad-link list has named it since), Play stops opening it,
+and opens no older address instead, until you publish a new one. SLAPorSLOP can't take your
 site down: anyone who saved the address can still visit it. Every hour, SLAPorSLOP looks for each
 browser game's addresses on the bad-link lists and tells its staff about any it finds.
 
@@ -698,8 +730,8 @@ who did).
 SLAPorSLOP checks your app's code, but it can't check the servers your app talks to, and those can
 change at any time. A game that runs whatever a server sends would let anyone who runs (or
 breaks into) a server take over players' computers. So these are rules, and SLAPorSLOP's source check
-looks for code that breaks them. What it finds goes to a reviewer as a note: a note isn't a
-rejection, but a real break is.
+looks for code that breaks them. What it finds is shown to you as a note, and logged: a note
+isn't a rejection, but a real break is a Content Policy break that SLAPorSLOP staff act on.
 
 These rules are for games and apps players download. The Content Policy's rule on code from
 outside SLAPorSLOP doesn't cover [browser games](#browser-games), whose pages load code from their
@@ -726,7 +758,7 @@ needs, and the game asks the SLAPorSLOP app for them (see [Getting a server's mo
 
 Players add mods to your game in the SLAPorSLOP app, from your game's page in their library, or when
 your game asks for them. Mods **may contain code** your game loads: scripts, Godot `.pck` packs,
-.NET assemblies, Unreal `.pak` files. Every mod on SLAPorSLOP is published, scanned and reviewed like
+.NET assemblies, Unreal `.pak` files. Every mod on SLAPorSLOP is published, scanned and checked like
 an app, so this is the one place your game may load code that didn't come in its own release.
 Your game gets mods one of two ways; pick one under **Mods** on Edit store page.
 
@@ -828,14 +860,13 @@ func request_mods(names: Array, server: String) -> void:
 Anyone can publish a mod for any app on SLAPorSLOP: on the app's page, under **Community**, choose
 **Publish a mod**. A mod lives in your own repository, and each release is **one `.zip` of the
 mod's files for every platform**, with no program to start (platform `any` when submitting by
-hand). SLAPorSLOP checks and reviews it like an app, and lists it in the Community area of the app's
-page. Players add it to the installed game in the SLAPorSLOP app, which hands it to the game when it
+hand). SLAPorSLOP checks it like an app; you publish each release, and put the mod in the store
+(the Community area of the app's page) from its Manage page. Players add it to the installed game in the SLAPorSLOP app, which hands it to the game when it
 starts (see [Loading mods in your game](#loading-mods-in-your-game)). Say in your mod's
 description which version of the game it's for.
 
-A mod **may contain code**. Then the source check marks it **mod with code** and a reviewer
-reads all of it. A mod with networking code is marked **goes online**: that can still be
-approved, but players see it, and sandbox mode is suggested for the game it's added to. Say in
+A mod **may contain code**. Then the source check marks it **mod with code**, and players see
+that. A mod with networking code is marked **goes online**: that's allowed, but players see it, and sandbox mode is suggested for the game it's added to. Say in
 your description what the code does and what it connects to. A mod may only add to its game:
 no program to start, no code from a server, no updating itself, no loading other mods. Browser
 games can't have mods yet.
@@ -846,7 +877,7 @@ A community build (a modded version, port, fix or translation) is built from **y
 of an app on SLAPorSLOP: on the app's page, under **Community**, choose **Register a branch from your
 fork**. It's held to the same rules as a new app. The form asks what creating an app asks: its
 licence, platforms, age rating and content labels, what it connects to online, and whether it
-works in sandbox mode. Every release is scanned, its source checked and a person reviews it.
+works in sandbox mode. Every release is scanned and its source checked, and you publish it.
 It starts from the original's answers. It **can't be rated below the original** and keeps the
 original's content labels; add to them if your build adds stronger content.
 
@@ -893,13 +924,13 @@ browser games or dedicated servers (see [Dedicated servers](#dedicated-servers))
 ### What SLAPorSLOP does
 
 - The **source check** reads your code at each release's commit and notes the patterns above
-  (code loading, self-updaters, unsafe data formats). A reviewer looks at each. An update with a
-  new note waits for a person.
+  (code loading, self-updaters, unsafe data formats). Each is shown to you before you publish, and
+  logged; `get_fixes` lists them.
 - Anyone can report an app that **runs code from outside SLAPorSLOP**; reports are reviewed within
   24 hours. That reason isn't offered, or taken, for browser games or dedicated servers, which the
   rule doesn't cover.
 - The source check also notes **networking code**. If your code goes online but your store
-  page doesn't say so, that's a note, and an update waits for a person.
+  page doesn't say so, that's a note for you to fix on the store page.
 - Store pages of apps that go online tell players that SLAPorSLOP can't check the servers, and
   suggest running the app in **sandbox mode** in the SLAPorSLOP app; see
   [Saves and sandbox mode](#saves-and-sandbox-mode).
@@ -914,8 +945,9 @@ Add it to your game: on the game's **Edit store page**, under **Dedicated server
 choose **Add a dedicated server** and give its repository (an AI agent uses
 `add_dedicated_server`). It lives in **its own repository**, never the game's: split a repository
 that holds both first. It's an app of its own: a download for Windows and/or Linux, with its own
-releases, built and checked like any other app (Slop Build works as usual) and reviewed, then
-listed by a reviewer once a release is approved. A game can have several (a world server and a
+releases, built and checked like any other app (Slop Build works as usual) and published by you.
+Put it in the store from its Manage page once a release is published (a private game's servers
+go public with the game). A game can have several (a world server and a
 lobby server, say), each from its own repository.
 
 It has **no store page of its own**. It's shown on the game's page, in a **Dedicated server**
@@ -935,8 +967,9 @@ under the game's Online answers instead. A server-like program with no game on S
 tool: publish it as an ordinary app.
 
 It has to really be a dedicated server: a server or headless program people run so others can
-play your game. A reviewer checks. Anything else added as a server (a playable game, a launcher, a
-tool) is reviewed as an ordinary download, rules 1 and 2 included, and turned down as misleading.
+play your game. Anything else added as a server (a playable game, a launcher, a tool) is held to
+the rules for an ordinary download, rules 1 and 2 included, and SLAPorSLOP staff take it out of the
+store as misleading.
 Servers published on their own before servers could be added to games keep the tag
 **Dedicated Server** and stay in the Servers category until you add them to your game; nothing
 else changes for them.
@@ -945,8 +978,8 @@ What's different for a server:
 
 - It may download and run **mods, maps and plugins from other places**, such as a mod site or
   its own plugin list. The Content Policy's rule on code from outside SLAPorSLOP doesn't cover
-  dedicated servers, so rules 1 and 2 above aren't asked of it, and reviewers don't reject a
-  server for loading code that way.
+  dedicated servers, so rules 1 and 2 above aren't asked of it, and SLAPorSLOP staff don't act
+  on a server for loading code that way.
 - SLAPorSLOP checks only what's in the release, and says so. When the source check finds code
   loading, the server's store page says **Loads code from outside SLAPorSLOP**: "Dedicated
   servers may load mods, maps and plugins from other places." Its fix is a suggestion, not a
@@ -954,8 +987,7 @@ What's different for a server:
 - Everything else applies: it's built from its source and checked like every other release,
   and every other Content Policy rule covers it. Rules 3 to 8 protect whoever runs the server and
   everyone who connects to it: follow them. For a server, an unsafe data format (rule 3) is a
-  suggestion in your fix list: a reviewer asks you to replace it, but doesn't reject the server
-  for that alone.
+  suggestion in your fix list: replace it, but it doesn't stop the server on its own.
 
 ## Saves and sandbox mode
 
@@ -1027,7 +1059,7 @@ to a cache folder; and it can't log the player off or switch desktops. If your a
 on its store page.
 
 **What SLAPorSLOP checks.** Every release's source check says where it saves, on your Releases page
-and to the reviewer:
+and to SLAPorSLOP staff:
 
 | The check shows | Means |
 |---|---|
@@ -1037,7 +1069,7 @@ and to the reviewer:
 
 Saving outside the folder is a note asking you to move them, not a rejection. But while your
 newest release does, players aren't told your app works in sandbox mode, even if you ticked it,
-and the reviewer asks you to fix it or untick it.
+and your fix list asks you to fix it or untick it.
 
 ## SLAPorSLOP in your code
 
@@ -1689,7 +1721,7 @@ one. If a token ever ends up in a chat, remove it at once and make a new one.
 
 The agent works in your session and your repository; SLAPorSLOP runs no AI for it. It can't pay,
 accept agreements or offers, change where money goes, or change your account: those stay with
-you. Releases it submits are checked and reviewed like any other. Remove a token any time
+you. Releases it submits are checked like any other, and only you can publish them. Remove a token any time
 (Account → AI agents, or sign it out like a device).
 
 **Fixes:** every problem SLAPorSLOP's checks find comes with exact instructions, on your Releases page
@@ -1699,8 +1731,8 @@ you. Releases it submits are checked and reviewed like any other. Remove a token
 submitting anything (`check_source`). It reads the repository at that commit and lists what a
 release there would be sent back for: the licence, purchases, code loaded from outside
 SLAPorSLOP, going online without the store page saying so, saves outside `SLOP_SAVE_DIR`. Nothing
-is saved. A release still gets the rest: Slop Build's own checks, the scan of the files, and a
-person's review where one is due.
+is saved. A release still gets the rest: Slop Build's own checks, the scan of the files, and
+Defender's check for Windows builds.
 
 ## Keeping Windows from blocking your app
 
@@ -1714,8 +1746,8 @@ SLAPorSLOP does, and the one optional step that helps most.
   unpacks your files itself, like Steam, so that mark isn't added.
 - **Defender checks your build before players get it.** Slop Build (or Slop Check) scans your
   Windows files with Microsoft Defender and today's definitions. If Defender flags them, the
-  release waits for a person instead of reaching players and being quarantined there.
-- **SLAPorSLOP's own scans** (ClamAV, YARA, capa) on every file, and a person on the first release.
+  release goes on hold instead of reaching players and being quarantined there.
+- **SLAPorSLOP's own scans** (ClamAV, YARA, capa) on every file.
 
 **What helps most: sign your Windows program.** Defender and Windows' Smart App Control trust
 signed programs far more than unsigned ones. Open-source projects can sign for free, see
@@ -1728,8 +1760,8 @@ ones made with Python, AutoHotkey, or packers like UPX):
    choosing **Software developer** and **Incorrectly detected as malware**. Microsoft usually
    answers within a few days and updates its definitions for everyone. Only you can do this:
    Microsoft has no way for a store to submit for you.
-2. Build again (or re-run Slop Check) once they've answered. You can also ask SLAPorSLOP's reviewer to
-   clear it as a false positive in the meantime.
+2. Build again (or re-run Slop Check) once they've answered. You can also **Write to SLAPorSLOP
+   staff** on the held release, asking them to clear it as a false positive in the meantime.
 3. Don't pack your program with UPX or similar tools; that's the most common reason for false
    detections.
 
@@ -1832,8 +1864,9 @@ jobs:
 
 SLAPorSLOP only accepts the check from your app's own repository. If you published before adding it,
 run it by hand from the repository's **Actions** tab (**Run workflow**, with the release's tag).
-Repositories that aren't on GitHub can't run it yet: a reviewer checks those Windows builds by
-hand, so expect a longer wait.
+Repositories that aren't on GitHub can't run it yet: their Windows builds go on hold waiting for
+Defender's check. **Write to SLAPorSLOP staff** on the release and they look at it by hand, so
+expect a longer wait.
 
 ## Slop Pulse (player counts)
 
@@ -2102,7 +2135,7 @@ answer is JSON with a one-line `summary`, and nothing is saved:
   the builds (`.github/workflows/slop.yml`, or the newest GitHub release's files against the
   platforms). Each item in `findings` has a `severity` (`must`, `should`, `recommended`), the
   `problem`, and an `instruction` to follow; `passed` and `not_checked` say what was and wasn't
-  covered (the source check and a person's review still run on the first release). Fix `must`
+  covered (the source check still runs on every release). Fix `must`
   first, commit and push, then check again; a report is kept for 5 minutes per commit.
 - `GET /v1/check/store-address?slug=my-game`: whether the store address is valid and free, and a
   free one if it isn't. Use the same address as `app` in `slop.yml`. Addresses aren't held until
@@ -2116,7 +2149,7 @@ steps 0, 1, 3, 7, 9 and 10 apply, and the repository check's findings about buil
 of steps 2, 4, 5, 6 and 8: put the game on an https site built from the repository (GitHub Pages
 is free), create the store page with `kind` `game` and `platforms` `["browser"]`, and give its
 address with `submit_play_address` (or, in a [handoff link](#hand-the-person-one-link),
-`play_address`). Every new address waits for a person, who plays it.
+`play_address`). Its checks take seconds; then the owner publishes it.
 
 0. **Get connected first** if you don't have SLAPorSLOP's tools (`maker_guide`, `create_store_page`…).
    Ask the owner to add SLAPorSLOP to your tool at this site's `/mcp` address (e.g.
@@ -2174,9 +2207,11 @@ address with `submit_play_address` (or, in a [handoff link](#hand-the-person-one
    under **Releases & progress → Submit a release**).
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
 9. **(token)** Follow the first release (`list_releases`, `get_fixes`; on the website **Publish**
-   or **Releases & progress**) until it's approved and the app is in the store, and fix what
-   SLAPorSLOP's checks find. A person reviews the first release; later ones are picked up and approved
-   automatically if they pass every check.
+   or **Releases & progress**) until it has passed its checks (status `ready`), and fix what
+   SLAPorSLOP's checks find. If it's on hold, `release_hold` says why in plain words and what can be
+   done (`rescan_release`, or `write_to_staff_about_release` with what the owner agrees to say).
+   Then tell the owner to press **Publish** on the Releases page and, the first time, **Put it in
+   the store** on its Manage page: an agent can't do either. Later releases go the same way.
 10. Optional but recommended, ideally before step 8: add `.slop/media.json` with a square icon
    (512×512 PNG, `"icon": "icon.png"`), a 920×430 thumbnail and some screenshots (see
    [Pictures and videos](#pictures-and-videos)), push it, and run `check_pictures` (or have the
@@ -2194,7 +2229,8 @@ Facts an agent may need:
   `/v1/check/repository?url=…` and `/v1/check/store-address?slug=…` (JSON, a `summary` first,
   nothing saved).
 - Pictures live in the repository under `.slop/`, listed in `.slop/media.json`; SLAPorSLOP reads them
-  at one commit (`check_pictures`, and at each release) and a person reviews each new set. The
+  at one commit (`check_pictures`, and at each release) and a person reviews each new set
+  (publishing waits for that). The
   icon: `"icon": "icon.png"`, square PNG/JPEG/WebP, 256×256 to 1024×1024 (512×512 is best), up to
   4 MB. The thumbnail: 920×430 is best (at least 460×215). Screenshots: at least 320×180. Up to 20
   gallery items, 8 MB each.
@@ -2208,7 +2244,7 @@ Facts an agent may need:
 - Files by platform: `windows` → `archive`, a `.zip`; `linux` → `archive`, a `.tar.gz` (or
   `.tgz`); `linux-deb` → `installer`, a `.deb`; `linux-rpm` → `installer`, an `.rpm`. Archives
   need the program path; packages don't.
-- A release can't reuse a version. Up to three releases can wait for review at once.
+- A release can't reuse a version. Up to three releases can be being checked or on hold at once.
 - Tags become versions with a leading `v` removed when a digit follows (`v1.2.0` → `1.2.0`).
 - The program path inside an archive must be relative, use `/`, and not contain `..`. Archives
   may not contain symbolic links.

@@ -370,40 +370,42 @@ async fn outside_code_isnt_a_reason_to_report_a_server_or_a_browser_game(db: PgP
 }
 
 /// The maker chooses the Dedicated Server tag, and the rule on code from outside SLAPorSLOP
-/// doesn't cover servers, so an app that has become one since its last approved release waits for
-/// a person, who checks it really is a server. Each release's source check records whether it was
-/// one; once a person approved it as one, updates go through on their own as before.
+/// doesn't cover servers, so an app that has become one since its last published release is
+/// pointed out to its maker before they publish it (and logged); it's not a reason to wait. Each
+/// release's source check records whether it was one.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn an_app_that_becomes_a_dedicated_server_waits_for_a_person(db: PgPool) {
+async fn an_app_that_becomes_a_dedicated_server_is_pointed_out_before_publishing(db: PgPool) {
     let app = test_app(db).await;
     let (_, maker) = maker_with_app(&app, "beta").await;
-    let approve = |id: &str| {
-        admin::approve(
-            &app.db,
-            Some(&app.signing_key),
-            lax(),
-            id.parse().unwrap(),
-            "rev",
-        )
-    };
+    let approve = |id: &str| approve_release(&app, lax(), id.parse().unwrap());
     let first = submit_and_fetch(&app, &maker, "1.0.0").await;
     approve(&first).await.unwrap();
     let update = submit_and_fetch(&app, &maker, "1.1.0").await;
-    assert_eq!(release_status(&app, &update).await.0, "approved");
+    assert_eq!(release_status(&app, &update).await.0, "ready");
+    approve(&update).await.unwrap();
 
     tag_app(&app, "game", &["dedicated-server"]).await;
     let server = submit_and_fetch(&app, &maker, "1.2.0").await;
     assert_eq!(
         release_status(&app, &server).await,
-        (
-            "awaiting_review".into(),
-            Some(
-                "Waiting for a person: it's now in the Servers category, so a person checks it really is a dedicated server"
-                    .into()
-            ),
-            None
-        )
+        ("ready".into(), None, Some("slop".into()))
     );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        mine[0]["new_concerns"], "it's now in the Servers category",
+        "{mine}"
+    );
+    let logged: Value = sqlx::query_scalar(
+        "select detail -> 'concerns' from audit_log where action = 'release.source_concerns'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(logged, "it's now in the Servers category");
     let recorded: Vec<(String, Value)> = sqlx::query_as(
         "select version, repo_scan -> 'dedicated_server' from releases order by version",
     )
@@ -421,7 +423,13 @@ async fn an_app_that_becomes_a_dedicated_server_waits_for_a_person(db: PgPool) {
 
     approve(&server).await.unwrap();
     let next = submit_and_fetch(&app, &maker, "1.3.0").await;
-    assert_eq!(release_status(&app, &next).await.0, "approved");
+    assert_eq!(release_status(&app, &next).await.0, "ready");
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(mine[0].get("new_concerns").is_none(), "{mine}");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -582,12 +590,8 @@ async fn a_games_maker_adds_dedicated_servers_shown_on_its_page(db: PgPool) {
         .parse()
         .unwrap();
     assert!(releases::fetch_next(&app.state).await.unwrap());
-    admin::approve(&app.db, Some(&app.signing_key), lax(), release, "rev")
-        .await
-        .unwrap();
-    admin::list_app(&app.db, "castle-server", "rev")
-        .await
-        .unwrap();
+    approve_release(&app, lax(), release).await.unwrap();
+    maker_lists(&app, "castle-server").await.unwrap();
     let signed: slop_manifest::Signed = serde_json::from_value(
         body_json(
             app.send(req(Method::GET, "/v1/apps/castle-server/manifest").header("x-country", "US"))

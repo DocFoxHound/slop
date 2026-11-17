@@ -17,7 +17,8 @@
 //!   keeps working until its own expiry or until it's removed.
 //! - **Only maker work:** a token may call the routes in `ALLOWED` and nothing else: never
 //!   money, sign-ins, tokens, chat, People or account settings. Releases still go through SLAPorSLOP's
-//!   scans and a person's review.
+//!   checks, and only the maker, signed in themselves, publishes one or puts an app in the store
+//!   the first time (publish.rs): an agent can never put a build in front of players.
 //! - **Making one** needs only a signed-in session, not a recent sign-in: what a token can do is
 //!   limited enough that the owner chose not to ask "confirm it's you" for it. A `publish` token
 //!   needs the Publisher Agreement accepted (`terms_required` until it is), since the agent
@@ -139,6 +140,18 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("POST", "/apps/{slug}/releases/from-github", true, Slug::Own),
     ("PATCH", "/apps/{slug}/releases/*", true, Slug::Own),
     ("POST", "/apps/{slug}/releases/*/withdraw", true, Slug::Own),
+    // A release on hold (or a failed one): what holds it, the conversation with SLAPorSLOP staff,
+    // writing to them and running SLAPorSLOP's scanner again (holds.rs). Publishing a release and
+    // putting an app in the store the first time are for the maker, signed in themselves: never
+    // here (publish.rs).
+    ("GET", "/apps/{slug}/releases/*/hold", false, Slug::Own),
+    (
+        "POST",
+        "/apps/{slug}/releases/*/hold/messages",
+        true,
+        Slug::Own,
+    ),
+    ("POST", "/apps/{slug}/releases/*/rescan", true, Slug::Own),
     ("POST", "/apps/{slug}/repo-check", true, Slug::Own),
     ("POST", "/apps/{slug}/stage", true, Slug::Own),
     ("PUT", "/apps/{slug}/commit-status", true, Slug::Own),
@@ -946,7 +959,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "whats_new",
-        description: "The notifications of the person you work for, newest first: releases approved or rejected, reviews, offered fixes, job requests and messages. One call to see what needs attention; check it now and then rather than polling every tool. Reading them here doesn't mark them read. `your_token` says when your own token expires: within 7 days, tell your person to make a replacement on Account → AI agents.",
+        description: "The notifications of the person you work for, newest first: releases that passed SLAPorSLOP's checks, went on hold or out, and staff answers about them, reviews, offered fixes, job requests and messages. One call to see what needs attention; check it now and then rather than polling every tool. Reading them here doesn't mark them read. `your_token` says when your own token expires: within 7 days, tell your person to make a replacement on Account → AI agents.",
         method: Method::GET,
         path: "/v1/me/notifications",
         properties: || {
@@ -975,7 +988,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "app_overview",
-        description: "An app's management page: the release players get now (`serving`) and whether it's held there (`held`), the approved releases they could get (`approved`), releases waiting for review (`waiting`), changes asked for (`changes`), a freeze if SLAPorSLOP can't read the repository, and whether the app can move to its next stage. The store page's own text is get_store_page.",
+        description: "An app's management page: the release players get now (`serving`) and whether it's held there (`held`), the published releases they could get (`approved`), releases not published yet (`waiting`: being checked, on hold, or ready for your maker to publish), changes asked for (`changes`), a freeze if SLAPorSLOP can't read the repository, and whether the app can move to its next stage. The store page's own text is get_store_page.",
         method: Method::GET,
         path: "/v1/apps/{slug}/manage",
         properties: slug_only,
@@ -991,7 +1004,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_releases",
-        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and SLAPorSLOP's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds. A browser game's release has no files: `play_address`, and `address_checks` (https, public_host and public_host_skipped, bad_links, status, final_address, redirects, hops, content_type, ok, problem); its `progress.stage` is checking_address while SLAPorSLOP checks it, which takes seconds. Each release is long: to follow the one you just submitted, ask for `limit` 1.",
+        description: "An app's releases, newest first, each with its status and the reason: fetching (being checked), awaiting_review (on hold: release_hold says what holds it and what can be done), ready (passed every check and waits for your maker to publish it), approved (published: players get it), rejected, failed, revoked or withdrawn. Publishing is for your maker: tell them to press Publish on the Releases page; you can't publish. Each release has its files and SLAPorSLOP's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds. A browser game's release has no files: `play_address`, and `address_checks` (https, public_host and public_host_skipped, bad_links, status, final_address, redirects, hops, content_type, ok, problem); its `progress.stage` is checking_address while SLAPorSLOP checks it, which takes seconds. Each release is long: to follow the one you just submitted, ask for `limit` 1.",
         method: Method::GET,
         path: "/v1/apps/{slug}/releases",
         properties: || {
@@ -1012,7 +1025,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "check_source",
-        description: "A dry run of SLAPorSLOP's source check, before submitting a release: reads the app's repository at a commit that's been pushed and returns the fixes a release there would get, in get_fixes' form (licence problems, purchases, code loaded from outside SLAPorSLOP, going online without the store page saying so, saves outside SLOP_SAVE_DIR, Slop Pulse). Nothing is saved, submitted or sent for review. `status` is must_fix, should_fix, looks_good, or not_checked (`detail` says why the source couldn't be read, e.g. the commit isn't pushed). It can take a minute on a large repository. It doesn't run what only a release gets: Slop Build's own checks (secrets, packages with known vulnerabilities), the scan of the files, a person's review.",
+        description: "A dry run of SLAPorSLOP's source check, before submitting a release: reads the app's repository at a commit that's been pushed and returns the fixes a release there would get, in get_fixes' form (licence problems, purchases, code loaded from outside SLAPorSLOP, going online without the store page saying so, saves outside SLOP_SAVE_DIR, Slop Pulse). Nothing is saved or submitted. `status` is must_fix, should_fix, looks_good, or not_checked (`detail` says why the source couldn't be read, e.g. the commit isn't pushed). It can take a minute on a large repository. It doesn't run what only a release gets: Slop Build's own checks (secrets, packages with known vulnerabilities), the scan of the files.",
         method: Method::GET,
         path: "/v1/apps/{slug}/source-check",
         properties: || {
@@ -1025,22 +1038,22 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "hold_at_release",
-        description: "Chooses which approved release players get. A rollback, when the newest release turned out broken: give the earlier release's ID from app_overview's `approved`, and players are moved back to it and held there while you fix things. Give `release_id` null to stop holding, so players follow the newest approved release again. It's applied at once when the release would be approved without a person (app_overview's `auto_approval_ready`); otherwise it waits for a person at SLAPorSLOP, and `status_reason` says why. A new request replaces one still waiting. Only when your maker asks: it changes what every player gets. Not for browser games, which always open their newest approved address.",
+        description: "Chooses which published release players get. A rollback, when the newest release turned out broken: give the earlier release's ID from app_overview's `approved`, and players are moved back to it and held there while you fix things. Give `release_id` null to stop holding, so players follow the newest published release again. It's applied at once: every release offered passed SLAPorSLOP's checks and was published by your maker. Publishing a newer release ends the hold. Only when your maker asks: it changes what every player gets. Not for browser games, which always open their newest published address.",
         method: Method::POST,
         path: "/v1/apps/{slug}/changes",
         properties: || {
             json!({
                 "slug": s("The app's store address"),
                 "kind": { "type": "string", "enum": ["release"], "description": "Always release" },
-                "release_id": { "type": ["string", "null"], "description": "The approved release to hold players at, from app_overview's `approved`; null to follow the newest approved release again" },
-                "note": s("Why, for SLAPorSLOP's reviewer: up to 500 characters"),
+                "release_id": { "type": ["string", "null"], "description": "The published release to hold players at, from app_overview's `approved`; null to follow the newest published release again" },
+                "note": s("Why, kept with the change: up to 500 characters"),
             })
         },
         required: &["slug", "kind", "release_id"],
     },
     Tool {
         name: "cancel_pending_change",
-        description: "Cancels a change that's still waiting for a person (status pending in app_overview's `changes`): a hold_at_release that wasn't applied at once, or a move to another repository your maker asked for on the website.",
+        description: "Cancels a move to another repository that's still waiting for SLAPorSLOP staff (status pending in app_overview's `changes`), which your maker asked for on the website. Only when your maker asks.",
         method: Method::POST,
         path: "/v1/apps/{slug}/changes/{id}/cancel",
         properties: || {
@@ -1053,7 +1066,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "release_settings",
-        description: "How the app's releases reach SLAPorSLOP and players: whether SLAPorSLOP watches the repository for new GitHub releases (`watch_releases`, with the last tag seen and any problem), whether an approved release goes to players by itself (`auto_update`), and whether the next release would be approved without a person (`auto_approval_ready`; `auto_approval_note` says why not). Switching these is for your maker, on the app's Manage page.",
+        description: "How the app's releases reach SLAPorSLOP: whether SLAPorSLOP watches the repository for new GitHub releases (`watch_releases`, with the last tag seen and any problem) and SLAPorSLOP's GitHub App on it (`github_app`). A release picked up this way goes through the same checks as any other, then waits for your maker to publish it: nothing reaches players by itself. Switching watching is for your maker, on the app's Manage page.",
         method: Method::GET,
         path: "/v1/apps/{slug}/update-settings",
         properties: slug_only,
@@ -1227,7 +1240,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_bounties",
-        description: "Open fix bounties across the store: what players will pay for, biggest first (app_bounties lists one app's). A bounty is paid to whoever delivers it in an approved release of the app or of a community build of it.",
+        description: "Open fix bounties across the store: what players will pay for, biggest first (app_bounties lists one app's). A bounty is paid to whoever delivers it in a published release of the app or of a community build of it.",
         method: Method::GET,
         path: "/v1/bounties",
         properties: || json!({ "slug": s("Optional: an app's store address, for its bounties only") }),
@@ -1251,7 +1264,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "claim_bounty",
-        description: "Says your maker's newest approved release delivers a bounty. Only when it truly does what the bounty asks: the app's maker or the backers check it before anyone is charged. Your maker needs a donation account (their Stripe account) to be paid.",
+        description: "Says your maker's newest published release delivers a bounty. Only when it truly does what the bounty asks: the app's maker or the backers check it before anyone is charged. Your maker needs a donation account (their Stripe account) to be paid.",
         method: Method::POST,
         path: "/v1/bounties/{id}/claims",
         properties: || {
@@ -1329,7 +1342,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "submit_release",
-        description: "Submits a release of a Windows or Linux app whose files are attached to a release on the app's repository. SLAPorSLOP downloads, hashes and scans them, then a person reviews it. Check its progress with list_releases. A browser game uses submit_play_address instead.",
+        description: "Submits a release of a Windows or Linux app whose files are attached to a release on the app's repository. SLAPorSLOP downloads, hashes and scans them, then it's ready for your maker to publish (or on hold: release_hold says why). Check its progress with list_releases. A browser game uses submit_play_address instead.",
         method: Method::POST,
         path: "/v1/apps/{slug}/releases",
         properties: release_fields,
@@ -1337,7 +1350,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "submit_play_address",
-        description: "Submits a browser game's release: the https address it plays at on your own website (its store page's platforms are [\"browser\"]). SLAPorSLOP checks the address (https, a public site, the bad-link lists, and that the page loads as a web page), in seconds, then a person opens it and plays it: every new address waits for a person, and only the same address as the one Play opens now can be approved automatically. SLAPorSLOP checks the address, not what the site serves: never say it's scanned. Check it with list_releases.",
+        description: "Submits a browser game's release: the https address it plays at on your own website (its store page's platforms are [\"browser\"]). SLAPorSLOP checks the address (https, a public site, the bad-link lists, and that the page loads as a web page), in seconds, then it's ready for your maker to publish. SLAPorSLOP checks the address, not what the site serves: never say it's scanned. Check it with list_releases.",
         method: Method::POST,
         path: "/v1/apps/{slug}/releases",
         properties: play_address_fields,
@@ -1374,7 +1387,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "withdraw_release",
-        description: "Withdraws a release that hasn't been reviewed yet (fetching or awaiting_review), so it never reaches players: one your maker didn't publish, or one sent by mistake. Only when your maker asks. The app's next release is then reviewed by a person.",
+        description: "Withdraws a release that hasn't been published yet (fetching, awaiting_review or ready), so it never reaches players: one your maker didn't send, one sent by mistake, or one on hold that a new version fixes. Only when your maker asks.",
         method: Method::POST,
         path: "/v1/apps/{slug}/releases/{id}/withdraw",
         properties: || {
@@ -1386,8 +1399,48 @@ pub(crate) const TOOLS: &[Tool] = &[
         required: &["slug", "id"],
     },
     Tool {
+        name: "release_hold",
+        description: "What's holding a release (status awaiting_review), or why one failed or was turned down: each problem in plain words (`problems`: `what`, `explained`, and `you_can`), what can be done (`you_can`: rescan, write_to_staff, run_slop_check, new_release, withdraw), the conversation with SLAPorSLOP staff (`messages`, `from` you, staff or slaporslop; `unanswered` when staff haven't answered yet), and how many scan re-runs are left (`rescans_left`, `next_rescan_at`, `rescan_requested`, `rescan_running`). `kinds`: scan (SLAPorSLOP's scanner flagged a file), defender (Microsoft Defender flagged the Windows build), defender_missing (the Windows build needs Defender's check: on GitHub, run Slop Check and it goes on by itself once the result arrives; Slop Check can't run for a repository outside GitHub, so there SLAPorSLOP staff check the build by hand), rating_lowered (it lowers the age rating players are shown, so a SLAPorSLOP staff member checks it first), question (your maker asked staff about a failed or turned-down release). Pass the problems on to your maker as they are.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/releases/{id}/hold",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "id": s("The release's ID, from list_releases"),
+            })
+        },
+        required: &["slug", "id"],
+    },
+    Tool {
+        name: "write_to_staff_about_release",
+        description: "Tells SLAPorSLOP staff why a held release is fine (a false positive), or asks about one that failed or that staff turned down (it opens a question for staff). Plain text, up to 2,000 characters, at most 3 links, 5 a day per release. Only what your maker agrees to say; staff see an agent wrote it. On a release waiting for Microsoft Defender's check, writing makes it something staff look at. Staff answer in release_hold's `messages`, and whats_new says when they have.",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/releases/{id}/hold/messages",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "id": s("The release's ID, from list_releases"),
+                "body": s("Plain text, up to 2,000 characters, at most 3 links"),
+            })
+        },
+        required: &["slug", "id", "body"],
+    },
+    Tool {
+        name: "rescan_release",
+        description: "Runs SLAPorSLOP's scanner again on a release held by it (release_hold's `kinds` has scan), with today's signatures. SLAPorSLOP downloads the same files from your release page and checks they haven't changed (their SHA-256); a public repository costs no GitHub API request. Up to 3 times per release, 6 hours after the last scan (30 minutes when the scanner couldn't finish), 10 a day for the account. It can't re-run Microsoft Defender, and a lowered age rating still waits for staff. If the build needs fixing, submit a new version; once that passes, the held one is withdrawn. Returns release_hold's answer; follow it there.",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/releases/{id}/rescan",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "id": s("The release's ID, from list_releases"),
+            })
+        },
+        required: &["slug", "id"],
+    },
+    Tool {
         name: "move_to_stage",
-        description: "Moves the app on to its next stage: `beta` (playable, still changing; players can rate it and donate) or `released` (finished). Straight from coming_soon to released is fine. Only forward, and only once a release (a browser game: its play address) has been approved; it happens at once and everyone who marked the app Interested is told. Only when your maker asks: it's their decision.",
+        description: "Moves the app on to its next stage: `beta` (playable, still changing; players can rate it and donate) or `released` (finished). Straight from coming_soon to released is fine. Only forward, and only once a release (a browser game: its play address) has been published; it happens at once and everyone who marked the app Interested is told. Only when your maker asks: it's their decision.",
         method: Method::POST,
         path: "/v1/apps/{slug}/stage",
         properties: || {
@@ -1400,7 +1453,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "set_commit_status",
-        description: "Switches SLAPorSLOP's result on GitHub on or off for one of your maker's apps. With it on, each release sent from then on gets a commit status named SLAPorSLOP on its commit: being checked, waiting for review, passed, not approved, couldn't be checked, or withdrawn. Anyone who can see the commit on GitHub sees it, also when a release isn't approved; it never says why. Only when your maker asks: tell them that first. Only for apps whose app_overview has `commit_status`. If its `permission` is false, your maker must accept the App's Commit statuses permission on GitHub (`github_url`, then Configure, then Review request); afterwards call this again with on true, which checks again. Statuses already on GitHub stay when it's switched off, except that a passed one is corrected if SLAPorSLOP later withdraws that release.",
+        description: "Switches SLAPorSLOP's result on GitHub on or off for one of your maker's apps. With it on, each release sent from then on gets a commit status named SLAPorSLOP on its commit: being checked, on hold, passed the checks, published, not approved, couldn't be checked, or withdrawn. Anyone who can see the commit on GitHub sees it, also when a release is on hold or isn't approved; it never says why. Only when your maker asks: tell them that first. Only for apps whose app_overview has `commit_status`. If its `permission` is false, your maker must accept the App's Commit statuses permission on GitHub (`github_url`, then Configure, then Review request); afterwards call this again with on true, which checks again. Statuses already on GitHub stay when it's switched off, except that a passed one is corrected if SLAPorSLOP later withdraws that release.",
         method: Method::PUT,
         path: "/v1/apps/{slug}/commit-status",
         properties: || {
@@ -1437,7 +1490,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "register_community_build",
-        description: "Registers a community build or a mod of another app (its original), from your own fork or repository. It starts as a draft; submit a release for it like any app, and it's checked and reviewed the same way. Mods (kind addon) are one .zip for every platform (platform any) with nothing to start. Read the guide sections \"Publishing a community build\" or \"Publishing a mod\" first.",
+        description: "Registers a community build or a mod of another app (its original), from your own fork or repository. It starts as a draft; submit a release for it like any app: it's checked the same way, and your maker publishes it. Mods (kind addon) are one .zip for every platform (platform any) with nothing to start. Read the guide sections \"Publishing a community build\" or \"Publishing a mod\" first.",
         method: Method::POST,
         path: "/v1/apps/{original}/branches",
         properties: || {
@@ -1472,7 +1525,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "add_dedicated_server",
-        description: "Adds a dedicated server to one of your games: a program players run on their own computer or a host so others can play. It's shown on the game's store page, not listed on its own, and lives in its own repository (never the game's). It starts as a draft: submit a release for it like any app, and it's checked and reviewed the same way. Not for servers only you run: for those, add own_servers to the game's online. A game can have several. Read the guide section \"Dedicated servers\" first.",
+        description: "Adds a dedicated server to one of your games: a program players run on their own computer or a host so others can play. It's shown on the game's store page, not listed on its own, and lives in its own repository (never the game's). It starts as a draft: submit a release for it like any app: it's checked the same way, and your maker publishes it. Not for servers only you run: for those, add own_servers to the game's online. A game can have several. Read the guide section \"Dedicated servers\" first.",
         method: Method::POST,
         path: "/v1/apps/{game}/servers",
         properties: || {
@@ -1821,7 +1874,7 @@ pub(crate) const TOOLS: &[Tool] = &[
 /// The makers' and creatives' MCP server.
 const SERVER: crate::agent::Server = crate::agent::Server {
     name: "slop-maker",
-    instructions: "SLAPorSLOP, the store for open-source AI-made apps and games, for the maker you work for. Call maker_guide first. Do the writing and fixing yourself in the repository; SLAPorSLOP checks, a person reviews. Never claim an app is \"safe\": say what SLAPorSLOP checked.",
+    instructions: "SLAPorSLOP, the store for open-source AI-made apps and games, for the maker you work for. Call maker_guide first. Do the writing and fixing yourself in the repository; SLAPorSLOP checks each release, and your maker publishes it and puts the app in the store, signed in themselves: you can't. Never claim an app is \"safe\": say what SLAPorSLOP checked.",
     tools: TOOLS,
     // Not here though they only add: a quote and a change to a job's terms (send_quote,
     // propose_change, request_change) commit the person once the other side accepts, so the AI
@@ -1831,6 +1884,8 @@ const SERVER: crate::agent::Server = crate::agent::Server {
         "submit_release",
         "submit_play_address",
         "submit_github_release",
+        "rescan_release",
+        "write_to_staff_about_release",
         "check_repository",
         "check_pictures",
         "check_my_portfolio",
@@ -1875,7 +1930,8 @@ I'd like its store address to be {address}.
 4. Add the pictures (an icon, a thumbnail, screenshots), push, and have SLAPorSLOP read them.
 5. Run check_source on what's pushed and fix what it lists, so the first release doesn't come back for it.
 6. Set up releases with Slop Build, or submit the builds I already have. A game that plays on my own website is a browser game: give its address instead.
-7. Follow the first release until SLAPorSLOP's checks are done, and fix whatever get_fixes lists.
+7. Follow the first release until SLAPorSLOP's checks are done, and fix whatever get_fixes lists. If it's on hold, read release_hold and tell me what it says.
+8. Once it's ready, tell me to press Publish on the Releases page, then put the app in the store from its Manage page: both are mine to do, signed in.
 
 Ask me before anything that's mine to decide: the name, the age rating, the stage. Finish with whats_left, and tell me in plain words which steps are mine, with their links.",
     },
@@ -1892,13 +1948,13 @@ Ask me before anything that's mine to decide: the name, the age rating, the stag
 The app's store address is {app}.
 
 1. If I didn't say which app, find it with my_apps (ask me when there's more than one).
-2. Call list_releases with limit 1 for where the release stands, then get_fixes for every problem and how to fix it.
+2. Call list_releases with limit 1 for where the release stands, then get_fixes for every problem and how to fix it. If it's on hold, release_hold says what holds it and what can be done.
 3. Fix the `must` problems in the repository, then the `should` ones. Tell me about any that needs my decision.
 4. Commit and push, then run check_source on the new commit to see the source problems are gone.
 5. Release again with a new version, with notes for players on what changed.
-6. Follow the new release with list_releases (limit 1) every few minutes until its checks are done.
+6. Follow the new release with list_releases (limit 1) every few minutes until its checks are done. Once it's ready, I publish it.
 
-Tell me what you changed and what's still waiting, for a person at SLAPorSLOP or for me.",
+Tell me what you changed and what's still waiting, for SLAPorSLOP staff or for me (pressing Publish is mine).",
     },
     Prompt {
         name: "whats_left",
@@ -2070,6 +2126,49 @@ mod tests {
         ] {
             assert_eq!(route(&m, p), None, "{m} {p}");
         }
+    }
+
+    /// A held release: any token reads what holds it, a publish token writes to staff and has the
+    /// scanner run again. Publishing and the first listing are the maker's, signed in: no token
+    /// reaches them, and there's no tool for them.
+    #[test]
+    fn agents_read_and_answer_holds_but_never_publish_or_list() {
+        assert_eq!(
+            route(&Method::GET, "/v1/apps/pong/releases/r1/hold"),
+            Some((false, Slug::Own, Some("pong")))
+        );
+        for p in [
+            "/v1/apps/pong/releases/r1/hold/messages",
+            "/v1/apps/pong/releases/r1/rescan",
+        ] {
+            assert_eq!(
+                route(&Method::POST, p),
+                Some((true, Slug::Own, Some("pong"))),
+                "{p}"
+            );
+        }
+        for (m, p) in [
+            (Method::POST, "/v1/apps/pong/releases/r1/publish"),
+            (Method::POST, "/v1/apps/pong/list"),
+            (Method::POST, "/v1/apps/pong/releases/r1/hold"),
+            (Method::GET, "/v1/apps/pong/releases//hold"),
+            (Method::POST, "/v1/admin/releases/r1/hold/messages"),
+        ] {
+            assert_eq!(route(&m, p), None, "{m} {p}");
+        }
+        for name in [
+            "release_hold",
+            "write_to_staff_about_release",
+            "rescan_release",
+        ] {
+            assert!(TOOLS.iter().any(|t| t.name == name), "{name}");
+        }
+        assert!(
+            !TOOLS
+                .iter()
+                .any(|t| t.path.ends_with("/publish") || t.path.ends_with("/list")),
+            "no tool publishes or lists"
+        );
     }
 
     #[test]

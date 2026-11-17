@@ -503,7 +503,7 @@ struct RepositoryReport {
 /// The parts of SLAPorSLOP's requirements this report never covers.
 const NEVER_CHECKED: &[&str] = &[
     "The source check (closed-source libraries, purchases, code loading, where saves go), the build's maker signature and the malware scan run on each release, after the store page is created.",
-    "The rules (no sexual content, gambling or pay-to-win, an honest age rating) are for the owner to confirm; a person reviews the first release.",
+    "The rules (no sexual content, gambling or pay-to-win, an honest age rating) are for the owner to confirm before they publish; SLAPorSLOP's automatic checks can't judge them.",
 ];
 
 async fn repository(State(state): State<AppState>, Query(q): Query<UrlQuery>) -> Response {
@@ -619,7 +619,7 @@ async fn repository_report(state: &AppState, repo: &str, commit: &str) -> Reposi
         (
             "looks_good",
             format!(
-                "{at} passed what this checks (licence, pictures and builds).{recommended_too} SLAPorSLOP's source check and a person's review still run on the first release."
+                "{at} passed what this checks (licence, pictures and builds).{recommended_too} SLAPorSLOP's source check and the scan of its files still run on every release."
             ),
         )
     };

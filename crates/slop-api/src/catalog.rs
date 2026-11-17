@@ -356,19 +356,19 @@ const BARELY_SEEN_LIBRARIES: i64 = 25;
 pub(crate) const PLAYERS_THIS_WEEK: &str = "(select coalesce(max(p.players), 0) from pulse_counts p
      where p.app_id = a.id and p.bucket > now() - interval '7 days')";
 
-/// The newest reviewed of browser game `a`'s approved addresses, withdrawn since or not.
+/// The newest published of browser game `a`'s addresses, withdrawn since or not.
 macro_rules! newest_address_release {
     () => {
         "(select p.id from releases p
           where p.app_id = a.id and p.play_address is not null and p.status in ('approved', 'revoked')
-          order by p.reviewed_at desc nulls last, p.created_at desc limit 1)"
+          order by p.published_at desc nulls last, p.created_at desc limit 1)"
     };
 }
 
 /// The release whose address Play opens for browser game `a` (`apps`), or null: its newest
-/// reviewed release with an address that was approved. If that one has been withdrawn since,
-/// none: a withdrawn address stops Play until a person approves a new one, never falling back to
-/// an older address (often the same site). Holds don't apply (manage.rs), and pending, rejected
+/// published release with an address. If that one has been withdrawn since, none: a withdrawn
+/// address stops Play until its maker publishes a new one, never falling back to an older
+/// address (often the same site). Holds don't apply (manage.rs), and pending, rejected
 /// and older addresses are never it. The one definition of where Play goes.
 pub(crate) const PLAY_RELEASE: &str = concat!(
     "(select q.id from releases q where q.status = 'approved' and q.id = ",
@@ -867,8 +867,8 @@ struct AppDetail {
     /// alone: it plays on its maker's website, and each release is a play address.
     platforms: Vec<String>,
     /// A browser game's address Play opens (`PLAY_ADDRESS`), for a viewer who may play it: in
-    /// Beta or Released (Coming soon: only its maker). Null otherwise, and before a person
-    /// approves one. Pending and older addresses are never here.
+    /// Beta or Released (Coming soon: only its maker). Null otherwise, and before its maker
+    /// publishes one. Unpublished and older addresses are never here.
     play_address: Option<String>,
     maker: Maker,
     #[serde(with = "time::serde::rfc3339")]
@@ -1187,7 +1187,7 @@ pub(crate) async fn sandbox_info(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Resul
         "with newest as (
              select r.repo_scan from releases r join apps a on a.id = r.app_id
              where r.app_id = $1 and r.status = 'approved' and r.signed_manifest is not null
-             order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc
+             order by coalesce(r.id = a.pinned_release_id, false) desc, r.published_at desc
              limit 1)
          select a.sandbox_ready and not b.browser as sandbox_ready,
                 a.sandbox_ready and not b.browser
@@ -1554,6 +1554,17 @@ pub const CONTENT_LABELS: [&str; 6] = [
     "strong_language",
     "gambling_themes",
 ];
+
+/// A content label as players read it (the website's names, web/src/format.ts), in lower case
+/// for the middle of a sentence: "strong language".
+pub(crate) fn content_label_words(label: &str) -> &str {
+    match label {
+        "suggestive" => "suggestive themes",
+        "strong_language" => "strong language",
+        "gambling_themes" => "gambling themes",
+        other => other,
+    }
+}
 
 pub(crate) fn validate_content_labels(labels: &[String]) -> ApiResult<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
@@ -2134,33 +2145,48 @@ async fn update_app(
         qb.push(", license_spdx = ")
             .push_bind(validate_license(license)?);
     }
-    // Lowering the rating below what the last approved release says goes through a release,
-    // which a person reviews (AGE-7); raising it is immediate.
+    // Lowering the rating below what the last published release says goes through a release,
+    // which SLAPorSLOP staff check before its maker can publish it (AGE-7); raising it is
+    // immediate. Below what SLAPorSLOP staff set it to, it can't go at all.
     if changes.min_age.is_some() || changes.content_labels.is_some() {
-        let released: Option<(i16, Vec<String>)> = sqlx::query_as(
-            "select min_age, content_labels from releases
-             where app_id = $1 and status = 'approved' and min_age is not null
-             order by reviewed_at desc limit 1",
-        )
-        .bind(app_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if let Some((age, labels)) = released {
+        let (floor_age, floor_labels): (Option<i16>, Vec<String>) =
+            sqlx::query_as("select min_age_floor, content_labels_floor from apps where id = $1")
+                .bind(app_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        let lower_than = |age: i16, labels: &[String]| {
             let lower_age = changes.min_age.is_some_and(|a| a < age);
             let dropped = changes
                 .content_labels
                 .as_ref()
                 .is_some_and(|new| labels.iter().any(|l| !new.contains(l)));
-            if lower_age || dropped {
-                return Err(ApiError::invalid(
-                    if lower_age {
-                        "min_age"
-                    } else {
-                        "content_labels"
-                    },
-                    "your latest release has this rating: to lower it, submit a release with the new rating, and a person reviews it",
-                ));
-            }
+            (lower_age || dropped).then_some(if lower_age {
+                "min_age"
+            } else {
+                "content_labels"
+            })
+        };
+        if let Some(field) = lower_than(floor_age.unwrap_or(0), &floor_labels) {
+            return Err(ApiError::invalid(
+                field,
+                "SLAPorSLOP staff set this rating for the store page, so it can't go lower",
+            ));
+        }
+        let released: Option<(i16, Vec<String>)> = sqlx::query_as(
+            "select min_age, content_labels from releases
+             where app_id = $1 and status = 'approved' and min_age is not null
+             order by published_at desc limit 1",
+        )
+        .bind(app_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some((age, labels)) = released
+            && let Some(field) = lower_than(age, &labels)
+        {
+            return Err(ApiError::invalid(
+                field,
+                "your latest release has this rating: to lower it, submit a release with the new rating; SLAPorSLOP staff check a lowered rating before you can publish it",
+            ));
         }
     }
     // A branch is rated at least as the original, with its content labels (DESIGN §9).

@@ -51,6 +51,11 @@ pub enum Action {
     WorkRequest,
     /// Putting a name forward for an open request.
     WorkResponse,
+    /// Running SLAPorSLOP's scanner again on a held release (holds.rs): each one downloads its
+    /// files again.
+    Rescan,
+    /// Writing to SLAPorSLOP staff about a held or failed release (holds.rs).
+    HoldMessage,
 }
 
 impl Action {
@@ -88,6 +93,8 @@ impl Action {
             Self::News => (10, HOUR),
             Self::WorkRequest => (10, DAY),
             Self::WorkResponse => (30, DAY),
+            Self::Rescan => (10, DAY),
+            Self::HoldMessage => (20, DAY),
         };
         (n, Duration::from_secs(secs))
     }
@@ -119,6 +126,8 @@ impl Action {
             Self::News => "news posts",
             Self::WorkRequest => "new requests",
             Self::WorkResponse => "names put forward",
+            Self::Rescan => "scan re-runs",
+            Self::HoldMessage => "messages to SLAPorSLOP staff about releases",
         }
     }
 }

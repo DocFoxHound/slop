@@ -28,7 +28,7 @@ test.beforeAll(async () => {
   }
   await released(SERVER, "designer");
   const status = (await call("designer", "GET", `/v1/apps/${SERVER}`)).status;
-  if (status !== undefined && status !== "listed") await list(SERVER);
+  if (status !== undefined && status !== "listed") await list(SERVER, "designer");
 });
 
 test.afterAll(async () => {

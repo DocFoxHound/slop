@@ -128,11 +128,19 @@ export async function newApp(app: NewApp, who: Who = MAKER) {
   });
 }
 
-/** Submits a Windows release from the fake GitHub and waits until it's waiting for review. */
-export async function newRelease(slug: string, version: string, who: Who = MAKER): Promise<string> {
+/** Submits a Windows release from the fake GitHub and waits until it passed its checks (ready for
+ *  its maker to publish), or `until` (awaiting_review: on hold). */
+export async function newRelease(
+  slug: string,
+  version: string,
+  who: Who = MAKER,
+  extra: { rating?: { min_age: number; content_labels: string[] } } = {},
+  until: "ready" | "awaiting_review" = "ready",
+): Promise<string> {
   const r = await ok(who, "POST", `/v1/apps/${slug}/releases`, {
     version,
     commit_sha: "b".repeat(40),
+    ...extra,
     files: [
       {
         platform: "windows",
@@ -151,14 +159,14 @@ export async function newRelease(slug: string, version: string, who: Who = MAKER
       },
       { timeout: 20_000 },
     )
-    .toBe("awaiting_review");
+    .toBe(until);
   return id;
 }
 
 /** A page on the fake GitHub a browser game's play address can lead to (e2e_server/main.rs). */
 export const fakePlay = (slug: string) => `${server.fake}bo/${slug}/play/`;
 
-/** Submits a browser game's play address and waits until it's waiting for review. */
+/** Submits a browser game's play address and waits until it passed its checks (ready to publish). */
 export async function newPlayAddress(slug: string, version: string, address: string, who: Who = MAKER): Promise<string> {
   const r = await ok(who, "POST", `/v1/apps/${slug}/releases`, { version, commit_sha: "b".repeat(40), play_address: address });
   const id: string = r.id;
@@ -170,19 +178,31 @@ export async function newPlayAddress(slug: string, version: string, address: str
       },
       { timeout: 20_000 },
     )
-    .toBe("awaiting_review");
+    .toBe("ready");
   return id;
 }
 
-/** Approves a release as staff (Ada), as the review queue would. */
-export const approveRelease = (id: string) => ok("admin", "POST", `/v1/admin/releases/${id}/approve`);
+/** Its maker publishes a release that passed its checks, as the Publish button does. */
+export const publishRelease = (slug: string, id: string, who: Who = MAKER) =>
+  ok(who, "POST", `/v1/apps/${slug}/releases/${id}/publish`);
 
-/** An app in the store with an approved release. */
+/**
+ * A release on hold for SLAPorSLOP staff, made without a scanner (the test server runs none): a
+ * published 1.0.0 at age 12, then `version` rated for 7+, which lowers the rating, so staff check
+ * it first (a rating hold). Returns the held release's ID.
+ */
+export async function ratingHold(slug: string, version: string, who: Who = MAKER): Promise<string> {
+  const releases = (await ok(who, "GET", `/v1/apps/${slug}/releases`)) as Array<{ status: string }>;
+  if (!releases.some((r) => r.status === "approved")) await publishRelease(slug, await newRelease(slug, "1.0.0", who), who);
+  return newRelease(slug, version, who, { rating: { min_age: 7, content_labels: [] } }, "awaiting_review");
+}
+
+/** An app in the store with a published release, put there by its maker. */
 export async function listedApp(app: NewApp, who: Who = MAKER) {
   await newApp(app, who);
   const release = await newRelease(app.slug, "1.0.0", who);
-  await approveRelease(release);
-  await ok("admin", "POST", `/v1/admin/apps/${app.slug}/list`);
+  await publishRelease(app.slug, release, who);
+  await ok(who, "POST", `/v1/apps/${app.slug}/list`);
   return release;
 }
 

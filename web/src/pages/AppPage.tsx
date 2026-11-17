@@ -227,10 +227,16 @@ function AppView({ app }: { app: AppDetail }) {
       {app.is_mine && app.status && app.status !== "listed" && (
         <div className="notice">
           <StatusBadge app={app} /> Only you can see this page.{" "}
-          {app.status === "draft" &&
-            (inBrowser
-              ? "It goes in the store once it's published and a person has approved its play address."
-              : "It goes in the store once it's published and passes every scan.")}{" "}
+          {app.status === "draft" && (
+            <>
+              {app.stage === "coming_soon"
+                ? "Put it in the store from"
+                : inBrowser
+                  ? "Once you've published its play address, put it in the store from"
+                  : "Once you've published a release that passed the checks, put it in the store from"}{" "}
+              <Link to={`/publish/${app.slug}/manage`}>Manage</Link>.
+            </>
+          )}{" "}
           <Link to={`/publish/${app.slug}`}>Edit draft</Link>
         </div>
       )}
@@ -555,7 +561,7 @@ function CommunityBuilds({ app }: { app: AppDetail }) {
       <h3>Community</h3>
       <h4>Mods</h4>
       {mods.length === 0 ? (
-        <p className="muted small">None yet. Mods are checked and reviewed like apps; only approved ones are listed.</p>
+        <p className="muted small">None yet. Mods are checked like apps; only published ones are listed.</p>
       ) : (
         <ul className="plain">
           {mods.map((b) => (
@@ -702,7 +708,7 @@ function SharePanel({ slug }: { slug: string }) {
         </div>
       )}
       <p className="faint small">
-        They see it once a release is approved, and download it straight from your release page through short-lived links.
+        They see it once a release is published, and download it straight from your release page through short-lived links.
         Never with official teams.
       </p>
       {error && (

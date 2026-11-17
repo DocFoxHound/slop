@@ -3,14 +3,14 @@
 // fixing it), where it is in the store, its money and any donation pause, reports, decisions,
 // releases and everything staff did to it.
 
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
 import { api, type AdminAppRecord, type AppStage } from "../../api";
 import { ErrorState, ExternalLink, Loading } from "../../components/ui";
 import { formatDate, money, playsInBrowser, STAGE_LABEL } from "../../format";
 import { useLoad } from "../../hooks";
-import { playReleaseId, withdrawWords } from "./appFacts";
+import { playReleaseId, staffListWhy, withdrawWords } from "./appFacts";
 import { HoldCard, HoldForm } from "./DonationHolds";
 import { ActionMessages, DelistButton, ReasonButton, useAction } from "./shared";
 
@@ -20,6 +20,7 @@ export function AppRecord({ slug }: { slug: string }) {
   const record = useLoad(() => api.admin.appRecord(slug), [slug]);
   const holds = useLoad(() => api.admin.donationHolds("all"), [slug]);
   const rules = useLoad(() => api.admin.queue().then((q) => q.rules), []);
+  const listWhyId = useId();
   const reload = () => {
     record.reload();
     holds.reload();
@@ -95,6 +96,16 @@ export function AppRecord({ slug }: { slug: string }) {
               disabled={action.busy !== undefined}
               onSubmit={(rule, reason) => void action.run("delist", () => api.admin.delist(app.slug, rule, reason))}
             />
+          ) : staffListWhy(app) ? (
+            // Staff put an app in only after an appeal, or going public (Review queue → Apps to list).
+            <span className="row-actions">
+              <button className="btn small" disabled aria-describedby={listWhyId}>
+                Put in the store
+              </button>
+              <span id={listWhyId} className="muted small">
+                {staffListWhy(app)}
+              </span>
+            </span>
           ) : (
             <button
               className="btn small"
@@ -146,7 +157,7 @@ export function AppRecord({ slug }: { slug: string }) {
           {browser ? "Play keeps opening its address" : "installed copies keep working"}. The daily repository check never lifts a
           staff freeze.
           {browser &&
-            " Withdrawing the address Play opens stops Play for everyone until a person approves a new one (anyone who saved it can still visit the site); withdrawing an older one changes nothing for players."}
+            " Withdrawing the address Play opens stops Play for everyone until its maker publishes a new one (anyone who saved it can still visit the site); withdrawing an older one changes nothing for players."}
         </p>
         <ActionMessages {...action} />
       </section>
@@ -237,7 +248,8 @@ export function AppRecord({ slug }: { slug: string }) {
                 {browser && <th>Play address</th>}
                 <th>Status</th>
                 <th>Submitted</th>
-                <th>Reviewed</th>
+                <th>Checks passed</th>
+                <th>Published</th>
               </tr>
             </thead>
             <tbody>
@@ -258,6 +270,7 @@ export function AppRecord({ slug }: { slug: string }) {
                   <td>{r.status}</td>
                   <td>{formatDate(r.created_at)}</td>
                   <td>{r.reviewed_at ? formatDate(r.reviewed_at) : "—"}</td>
+                  <td>{r.published_at ? formatDate(r.published_at) : "—"}</td>
                 </tr>
               ))}
             </tbody>

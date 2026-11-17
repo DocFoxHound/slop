@@ -35,7 +35,7 @@ test("the Apps tab: one line per app with what needs attention, filters, and the
   await expect(row(listed.title).getByText(listed.slug, { exact: true })).toBeVisible();
   await expect(row(listed.title).getByText("Released", { exact: true })).toBeVisible();
   await expect(row(listed.title).getByText("Players get 1.0.0")).toBeVisible();
-  await expect(row(`Waiting Release ${t}`).getByText("A release waiting for review")).toBeVisible();
+  await expect(row(`Waiting Release ${t}`).getByText("A release not published yet")).toBeVisible();
   await expect(row(frozen.title).getByText("Frozen: Waiting for the maker to answer.")).toBeVisible();
   await expect(row(`No Release ${t}`).getByText("No release yet")).toBeVisible();
 
@@ -86,19 +86,25 @@ test("the Apps tab: one line per app with what needs attention, filters, and the
   await expect(put).toHaveAccessibleDescription(/the maker hasn't submitted a release\. Set the stage to Coming soon/);
   await page.keyboard.press("Escape");
   await menuButton(`Waiting Release ${t}`).click();
-  await expect(menu(`Waiting Release ${t}`).getByText(/approve its release under Review queue → New releases first/)).toBeVisible();
+  await expect(
+    menu(`Waiting Release ${t}`).getByText(/no release is published \(one is being checked, on hold, or waiting for its maker to publish it\)/),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
 
-  // A stage that needs an approved release is refused for a draft without one, on its line.
+  // A stage that needs a published release is refused for a draft without one, on its line.
   await choose(`No Release ${t}`, "Beta", "menuitemradio");
-  await expect(row(`No Release ${t}`).getByRole("alert")).toHaveText("approve a release first: Beta and Released apps need an approved release");
-  // A coming-soon page can be listed without one.
+  await expect(row(`No Release ${t}`).getByRole("alert")).toHaveText(
+    "its maker publishes a release first: Beta and Released apps need a published release",
+  );
+  // A coming-soon page needs no release; a draft goes in the store by its maker, not staff.
   await choose(`No Release ${t}`, "Coming soon", "menuitemradio");
   await expect(row(`No Release ${t}`).getByText("Coming soon", { exact: true })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
   await menuButton(`No Release ${t}`).click();
   await expect(menu(`No Release ${t}`).getByRole("menuitemradio", { name: "Coming soon" })).toHaveAttribute("aria-checked", "true");
-  await expect(menu(`No Release ${t}`).getByRole("menuitem", { name: "Put in the store" })).not.toHaveAttribute("aria-disabled");
+  const comingSoon = menu(`No Release ${t}`).getByRole("menuitem", { name: "Put in the store" });
+  await expect(comingSoon).toHaveAttribute("aria-disabled", "true");
+  await expect(comingSoon).toHaveAccessibleDescription("Its maker puts a draft in the store, from its Manage page.");
   await page.keyboard.press("Escape");
 
   // The listed app: a new stage, then out of the store, asked "Are you sure?" with a rule and the facts.
@@ -119,9 +125,13 @@ test("the Apps tab: one line per app with what needs attention, filters, and the
   await out.click();
   await expect(row(listed.title).getByText("DELISTED", { exact: true })).toBeVisible();
   await expect(out).toHaveCount(0);
-  // Back in, then its release withdrawn.
-  await choose(listed.title, "Put in the store");
-  await expect(row(listed.title).getByText("LISTED", { exact: true })).toBeVisible();
+  // Back in only once an appeal is upheld (then from Review queue → Apps to list): the menu says so.
+  await menuButton(listed.title).click();
+  const back = menu(listed.title).getByRole("menuitem", { name: "Put in the store" });
+  await expect(back).toHaveAttribute("aria-disabled", "true");
+  await expect(back).toHaveAccessibleDescription(/It goes back in the store once an appeal is upheld/);
+  await page.keyboard.press("Escape");
+  // Its release withdrawn.
   await choose(listed.title, "Withdraw 1.0.0…");
   await expect(row(listed.title).getByText(/Are you sure\? Withdraw 1\.0\.0 of/)).toBeVisible();
   await expect(row(listed.title).getByRole("button", { name: "Withdraw 1.0.0" })).toBeDisabled();
@@ -143,13 +153,12 @@ test("the Apps tab: one line per app with what needs attention, filters, and the
   await expect(maker.getByRole("heading", { name: `Taken out of the store: App: ${listed.title}` })).toBeVisible();
   await expect(maker.getByText("The trailer is from another game.")).toBeVisible();
 
-  // Out of the store again, and the freeze lifted.
-  await ok("admin", "POST", `/v1/admin/apps/${listed.slug}/delist`, { rule: "misleading", reason: "Taken out after the admin browser test." });
+  // The freeze lifted (the listed app is out of the store already).
   await ok("admin", "POST", `/v1/admin/apps/${frozen.slug}/unfreeze`, { note: "Taken off after the admin browser test." });
   await seeDecisions(MAKER);
 });
 
-test("an app's record: fixing the store page, stage, out and back in, withdrawing, and its history", async ({ browser }) => {
+test("an app's record: fixing the store page, stage, out of the store (back only after an appeal), withdrawing, and its history", async ({ browser }) => {
   const t = tag();
   const app = { slug: `adm-rec-${t}`, title: `Moss Garden ${t}` };
   await listedApp(app);
@@ -182,7 +191,7 @@ test("an app's record: fixing the store page, stage, out and back in, withdrawin
   await maker.goto("/notifications");
   await expect(maker.getByText(`SLAPorSLOP changed Moss Garden Deluxe ${t}'s store page`)).toBeVisible();
 
-  // The stage, out of the store and back, and a release withdrawn.
+  // The stage, out of the store (back in only after an appeal), and a release withdrawn.
   const store = admin.locator("section").filter({ has: admin.getByRole("heading", { name: "In the store" }) });
   await store.getByRole("combobox", { name: "Stage" }).selectOption("Beta");
   await expect(store.getByRole("combobox", { name: "Stage" })).toHaveValue("beta");
@@ -191,8 +200,10 @@ test("an app's record: fixing the store page, stage, out and back in, withdrawin
   await store.getByRole("textbox", { name: /The facts/ }).fill("The page promised online play.");
   await store.getByRole("button", { name: "Take out of the store" }).click();
   await expect(admin.getByText("DELISTED", { exact: true })).toBeVisible();
-  await store.getByRole("button", { name: "Put in the store" }).click();
-  await expect(admin.getByText("LISTED", { exact: true })).toBeVisible();
+  // Back in only once an appeal is upheld: said by the button, which can't be pressed.
+  const back = store.getByRole("button", { name: "Put in the store" });
+  await expect(back).toBeDisabled();
+  await expect(back).toHaveAccessibleDescription(/It goes back in the store once an appeal is upheld/);
   await store.getByRole("button", { name: "Withdraw 1.0.0" }).click();
   await store.getByRole("textbox", { name: "Withdraw 1.0.0: reason" }).fill("Crashes on start for everyone.");
   await store.getByRole("button", { name: "Withdraw 1.0.0" }).click();
@@ -203,11 +214,11 @@ test("an app's record: fixing the store page, stage, out and back in, withdrawin
   const decisions = admin.locator("section").filter({ has: admin.getByRole("heading", { name: /^Decisions \(1\)/ }) });
   await expect(decisions.getByText(/delist_app under misleading by Ada Admin/)).toBeVisible();
   const history = admin.locator("section").filter({ has: admin.getByRole("heading", { name: "History" }) });
-  for (const action of ["app.listing_edited", "app.stage", "app.delist", "app.list", "release.revoke"]) {
+  for (const action of ["app.listing_edited", "app.stage", "app.delist", "release.revoke"]) {
     await expect(history.getByText(action, { exact: true }).first()).toBeVisible();
   }
 
-  await ok("admin", "POST", `/v1/admin/apps/${app.slug}/delist`, { rule: "misleading", reason: "Taken out after the admin browser test." });
+  // It's out of the store already.
   await seeDecisions(MAKER);
 });
 

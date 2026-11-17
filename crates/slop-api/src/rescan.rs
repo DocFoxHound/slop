@@ -45,9 +45,11 @@ struct Due {
     file_name: String,
     sha256: Option<String>,
     scan_report: Option<Value>,
-    cleared_reason: Option<String>,
+    /// Staff cleared the first scan's findings as false positives (`cleared_at`).
+    cleared: bool,
     rescan_report: Option<Value>,
-    rescan_cleared_reason: Option<String>,
+    /// Staff kept the release after an earlier re-scan flagged it (`rescan_cleared_at`).
+    rescan_cleared: bool,
 }
 
 /// The findings' names in a scan report.
@@ -75,18 +77,19 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
     // The release players get, per app (releases::SERVING's order), whose files are due.
     let due: Vec<Due> = sqlx::query_as(
         "with serving as (
-             select distinct on (r.app_id) r.id, r.app_id, r.reviewed_at
+             select distinct on (r.app_id) r.id, r.app_id, r.published_at
              from releases r join apps a on a.id = r.app_id
              where r.status = 'approved' and r.signed_manifest is not null
-             order by r.app_id, coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc
+             order by r.app_id, coalesce(r.id = a.pinned_release_id, false) desc, r.published_at desc
          )
-         select s.app_id, s.id as release_id, f.platform, f.url, f.file_name, f.sha256, f.scan_report, f.cleared_reason,
-                f.rescan_report, f.rescan_cleared_reason
+         select s.app_id, s.id as release_id, f.platform, f.url, f.file_name, f.sha256, f.scan_report,
+                f.cleared_at is not null as cleared, f.rescan_report,
+                f.rescan_cleared_at is not null as rescan_cleared
          from serving s join release_files f on f.release_id = s.id
          left join rescan_requests q on q.app_id = s.app_id
          where q.app_id is not null
-            or coalesce(f.rescanned_at, s.reviewed_at, now() - interval '30 days') < now() - interval '7 days'
-         order by q.requested_at nulls last, coalesce(f.rescanned_at, s.reviewed_at) nulls first
+            or coalesce(f.rescanned_at, s.published_at, now() - interval '30 days') < now() - interval '7 days'
+         order by q.requested_at nulls last, coalesce(f.rescanned_at, s.published_at) nulls first
          limit $1",
     )
     .bind(PER_ROUND)
@@ -210,13 +213,13 @@ async fn rescan_file(state: &AppState, f: &Due) -> (String, Option<Value>, bool,
     // What reviewers already judged false positives: the first scan's findings when it was
     // cleared, and an earlier re-scan's when that was kept.
     let mut before = BTreeSet::new();
-    if f.cleared_reason.is_some() {
+    if f.cleared {
         before.extend(finding_names(f.scan_report.as_ref()));
     }
-    if f.rescan_cleared_reason.is_some() {
+    if f.rescan_cleared {
         before.extend(finding_names(f.rescan_report.as_ref()));
     }
-    let cleared = f.cleared_reason.is_some() || f.rescan_cleared_reason.is_some();
+    let cleared = f.cleared || f.rescan_cleared;
     let flag = is_new_finding(cleared, &before, &now);
     (
         verdict.result.as_str().to_string(),

@@ -50,7 +50,7 @@ export function flagFact(app: AdminApp, flag: AdminAppFlag, now: number = Date.n
     case "release_waiting":
       return {
         tone: "warn",
-        text: `${app.pending_releases === 1 ? "A release" : `${app.pending_releases} releases`} waiting for review`,
+        text: `${app.pending_releases === 1 ? "A release" : `${app.pending_releases} releases`} not published yet`,
       };
     case "past_deadline": {
       const days = app.stage_deadline ? -daysUntil(app.stage_deadline, now) : 0;
@@ -82,24 +82,49 @@ export function flagFact(app: AdminApp, flag: AdminAppFlag, now: number = Date.n
   }
 }
 
-/** A browser game's address was withdrawn, and nothing newer approved: Play opens nothing. */
+/** A browser game's address was withdrawn, and nothing newer published: Play opens nothing. */
 const addressWithdrawn = (app: AdminApp) =>
   !app.serving_version && (app.releases.length > 0 || app.newest_release?.status === "revoked");
 
 /** Why it can't go in the store yet, or null when it can (or already is). A browser game needs the
- *  address Play opens (admin.rs `not_listable`), not just an approved release. */
+ *  address Play opens (admin.rs `not_listable`), not just a published release. Makers put drafts in
+ *  the store themselves; staff list apps back after an appeal, and private apps going public. */
 export function cantListReason(app: AdminApp): string | null {
-  if (app.status === "listed" || app.stage === "coming_soon") return null;
+  if (app.status === "listed") return null;
+  const why = [staffListWhy(app), notReadyReason(app)].filter(Boolean).join(" ");
+  return why || null;
+}
+
+/**
+ * Why staff don't put this app in the store themselves (admin.rs `STAFF_LISTS`): its maker puts a
+ * draft in; a private one goes public, and a delisted one goes back after an appeal, from Review
+ * queue → Apps to list. Null when staff could. Exported for tests.
+ */
+export function staffListWhy(app: { status: string; visibility: string }): string | null {
+  if (app.status === "draft") {
+    return app.visibility === "private"
+      ? "A private app goes public once its owner asks: it's then under Review queue → Apps to list."
+      : "Its maker puts a draft in the store, from its Manage page.";
+  }
+  if (app.status === "delisted") return "It goes back in the store once an appeal is upheld: it's then under Review queue → Apps to list.";
+  return null;
+}
+
+/** What it still needs before it can go in the store at all, if anything. */
+function notReadyReason(app: AdminApp): string | null {
+  if (app.stage === "coming_soon") return null;
   if (playsInBrowser(app)) {
     if (app.serving_version) return null;
-    if (app.pending_releases > 0) return "Can't list yet: approve its play address under Review queue → New releases first.";
+    if (app.pending_releases > 0) {
+      return "Can't list yet: its play address isn't published (it's being checked, on hold, or waiting for its maker to publish it).";
+    }
     return addressWithdrawn(app)
       ? "Can't list yet: its play address was withdrawn, so Play opens nothing. The maker sends a new one on Releases & progress."
       : "Can't list yet: the maker hasn't given a play address. Set the stage to Coming soon to list the page without one.";
   }
   if (app.releases.length > 0) return null;
   return app.pending_releases > 0
-    ? "Can't list yet: approve its release under Review queue → New releases first."
+    ? "Can't list yet: no release is published (one is being checked, on hold, or waiting for its maker to publish it)."
     : "Can't list yet: the maker hasn't submitted a release. Set the stage to Coming soon to list the page without one.";
 }
 
@@ -124,7 +149,7 @@ export function quietLine(app: AdminApp, now: number = Date.now()): string {
  * What withdrawing `version` does, for the "Are you sure?" and its reason's placeholder. A
  * download stops launching for everyone, and the reason is on the public revocation list. A
  * browser game's release is a play address: withdrawing the one Play opens (`playsNow`) stops Play
- * for everyone until a person approves a new one, though anyone who saved the address can still
+ * for everyone until its maker publishes a new one, though anyone who saved the address can still
  * visit the site; an older one changes nothing for players. Its reason goes to the maker.
  */
 export function withdrawWords(
@@ -141,7 +166,7 @@ export function withdrawWords(
   }
   return playsNow
     ? {
-        what: `Withdraw ${version} of “${title}”: Play stops opening its address for everyone, and opens nothing until a person approves a new one. Anyone who saved the address can still visit the site.`,
+        what: `Withdraw ${version} of “${title}”: Play stops opening its address for everyone, and opens nothing until its maker publishes a new one. Anyone who saved the address can still visit the site.`,
         placeholder: "Reason, shown to the maker (Play stops opening it)",
       }
     : {
@@ -152,16 +177,24 @@ export function withdrawWords(
 
 /**
  * The release whose address Play opens, among an app record's releases (catalog.rs
- * `PLAY_RELEASE`): the newest reviewed release with an address that was approved, if it still is.
- * Null after it was withdrawn: Play never falls back to an older address.
+ * `PLAY_RELEASE`): the newest published release with an address, if it hasn't been withdrawn.
+ * Null after it was withdrawn: Play never falls back to an older address. Ordered as the server
+ * orders it: by when it was published (`published_at`; none last), then when it was sent. When its
+ * checks passed doesn't count: a release is published by its maker, maybe much later.
  */
 export function playReleaseId(
-  releases: Array<{ id: string; status: string; created_at: string; reviewed_at: string | null; play_address?: string | null }>,
+  releases: Array<{
+    id: string;
+    status: string;
+    created_at: string;
+    published_at: string | null;
+    play_address?: string | null;
+  }>,
 ): string | null {
-  const when = (t: string | null) => (t ? Date.parse(t) : -Infinity);
+  const when = (t: string | null | undefined) => (t ? Date.parse(t) : -Infinity);
   const newest = releases
     .filter((r) => r.play_address && (r.status === "approved" || r.status === "revoked"))
-    .sort((a, b) => when(b.reviewed_at) - when(a.reviewed_at) || when(b.created_at) - when(a.created_at))[0];
+    .sort((a, b) => when(b.published_at) - when(a.published_at) || when(b.created_at) - when(a.created_at))[0];
   return newest?.status === "approved" ? newest.id : null;
 }
 

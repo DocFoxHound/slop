@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Makers manage their apps (decided 2026-10-19).
 //!
-//! A change that would have players download something different is checked before it happens:
-//!
-//! - **Which release players get.** Makers can hold the app at any approved release (to roll
+//! - **Which release players get.** Makers can hold the app at any published release (to roll
 //!   back a bad update, or to wait before sending a new one out) or go back to following the
-//!   newest. This follows the same rule as new releases (updates.rs): approved automatically once
-//!   a person has approved one of the app's releases, otherwise a person looks. Every release
-//!   offered has already passed its checks. A browser game isn't held: Play always opens its
-//!   newest approved address (`catalog::PLAY_ADDRESS`).
+//!   newest. It's applied at once: every release offered passed its checks and was published by
+//!   its maker. Publishing a newer release ends a hold (publish.rs). A browser game isn't held:
+//!   Play always opens its newest published address (`catalog::PLAY_ADDRESS`).
 //! - **The repository.** Moving an app that players have to another repository always waits for
-//!   a person, and the next release after a move is reviewed by a person too. Players' apps
-//!   still refuse an update from a different repository until the player agrees (slop-client).
+//!   SLAPorSLOP staff (a move isn't a release). The first release from the new repository goes
+//!   through the same checks as any other, and its maker publishes it. Players' apps still refuse
+//!   an update from a different repository until the player agrees (slop-client).
 //!
 //! Everything else (the store page, platforms, update settings) the maker changes directly,
 //! including moving the app on to its next stage (Coming soon → Beta → Released): only forward,
-//! and only once a release has been approved, since that build is what Beta and Released offer.
+//! and only once a release has been published, since that build is what Beta and Released offer.
+//! The maker also puts a draft in the store the first time (`list_app`), signed in themselves.
 
 use axum::{
     Json, Router,
@@ -45,6 +44,65 @@ pub fn routes() -> Router<AppState> {
         .route("/apps/{slug}/changes/{id}/cancel", post(cancel_change))
         .route("/apps/{slug}/repo-check", post(repo_check))
         .route("/apps/{slug}/stage", post(move_stage))
+        .route("/apps/{slug}/list", post(list_app))
+}
+
+/// The maker puts their app in the store the first time (decided 2026-11): a person signed in on
+/// SLAPorSLOP, never an AI agent's token or session (it's not in `maker_agents::ALLOWED` either),
+/// as with Publish. Only a draft: an app taken out of the store goes back through SLAPorSLOP
+/// staff (an appeal), and a private app goes public once staff have checked its repository. It
+/// runs the same checks as staff listing (`admin::not_listable`).
+async fn list_app(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+) -> ApiResult<StatusCode> {
+    let (app_id, _) = updates::owned(&state, &slug, &user).await?;
+    if user.agent.is_some() {
+        return Err(ApiError::Refused(
+            "Putting an app in the store is for its maker, signed in on SLAPorSLOP: an AI agent can't. Tell your maker to put it in the store from its Manage page.",
+        ));
+    }
+    list_draft(&state.db, app_id, &slug, user.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Puts draft app `app_id` (`slug`) in the store for its maker `by`, after the checks every
+/// listing makes (`admin::not_listable`), said for the maker. The route checks who's asking.
+pub async fn list_draft(db: &sqlx::PgPool, app_id: Uuid, slug: &str, by: Uuid) -> ApiResult<()> {
+    let mut tx = db.begin().await?;
+    let (stage, status): (AppStage, String) =
+        sqlx::query_as("select stage, status::text from apps where id = $1 for update")
+            .bind(app_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    match status.as_str() {
+        "draft" => {}
+        "listed" => return Err(ApiError::Conflict("It's already in the store.".into())),
+        _ => {
+            return Err(ApiError::Conflict(
+                "SLAPorSLOP staff took it out of the store: the decision, and how to appeal it, are on your account's Moderation page.".into(),
+            ));
+        }
+    }
+    if let Some(why) = admin::not_listable(&mut tx, app_id, stage)
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        return Err(ApiError::Conflict(why.for_first_listing()));
+    }
+    admin::put_in_store(&mut tx, app_id).await?;
+    admin::audit(
+        &mut tx,
+        &by.to_string(),
+        "app.list",
+        slug,
+        json!({ "from": "draft", "by": "maker" }),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Where a stage sits in Coming soon → Beta → Released.
@@ -87,9 +145,9 @@ async fn move_stage(
     if !admin::has_playable_release(&mut tx, app_id).await? {
         return Err(ApiError::Conflict(
             if crate::catalog::plays_in_browser(&mut *tx, app_id).await? {
-                "Beta and Released need an approved play address first: give it on the Releases page"
+                "Beta and Released need a published play address first: give it on the Releases page, then publish it"
             } else {
-                "Beta and Released need an approved release first: submit one on the Releases page"
+                "Beta and Released need a published release first: submit one on the Releases page, then publish it"
             }
             .into(),
         ));
@@ -144,7 +202,7 @@ pub(crate) fn same_repo(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
-/// Whether players may have the app (it has had an approved release), so moving it is checked.
+/// Whether players may have the app (it has had a published release), so moving it is checked.
 pub(crate) async fn repo_locked(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(
         "select exists (select 1 from releases where app_id = $1 and status in ('approved', 'revoked'))",
@@ -170,7 +228,7 @@ pub(crate) struct ChangeInfo {
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     pub reviewed_at: Option<OffsetDateTime>,
-    /// Approved by SLAPorSLOP without a person.
+    /// Applied by SLAPorSLOP straight away, without staff.
     pub automatic: bool,
 }
 
@@ -197,23 +255,28 @@ async fn load_change(conn: &mut PgConnection, id: Uuid) -> sqlx::Result<ChangeIn
 pub(crate) struct ApprovedRelease {
     pub id: Uuid,
     pub version: String,
+    /// When its checks passed.
     #[serde(with = "time::serde::rfc3339::option")]
     pub reviewed_at: Option<OffsetDateTime>,
+    /// When its maker published it.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub published_at: Option<OffsetDateTime>,
+    /// Passed SLAPorSLOP's automatic checks (rather than cleared by staff).
     pub automatic: bool,
     /// A browser game's release: the address it plays at.
     pub play_address: Option<String>,
 }
 
 const APPROVED_COLUMNS: &str =
-    "r.id, r.version, r.reviewed_at, coalesce(r.reviewed_by = 'slop', false) as automatic,
+    "r.id, r.version, r.reviewed_at, r.published_at, coalesce(r.reviewed_by = 'slop', false) as automatic,
      r.play_address";
 
-/// A release not reviewed yet, which its maker may withdraw (releases.rs).
+/// A release not published yet, which its maker may withdraw (releases.rs).
 #[derive(Serialize, sqlx::FromRow)]
 struct WaitingRelease {
     id: Uuid,
     version: String,
-    /// fetching or awaiting_review.
+    /// fetching (being checked), awaiting_review (on hold) or ready (for its maker to publish).
     status: String,
     /// maker, slop_build or github_release.
     source: String,
@@ -242,12 +305,12 @@ pub(crate) async fn serving(
         .await
 }
 
-/// The newest approved release, which players get when the app isn't held at one.
+/// The newest published release, which players get when the app isn't held at one.
 async fn newest(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<Option<Uuid>> {
     sqlx::query_scalar(
         "select id from releases
          where app_id = $1 and status = 'approved' and signed_manifest is not null
-         order by reviewed_at desc limit 1",
+         order by published_at desc limit 1",
     )
     .bind(app_id)
     .fetch_optional(conn)
@@ -263,16 +326,14 @@ struct Overview {
     serving: Option<ApprovedRelease>,
     /// Whether the maker holds the app at `serving` instead of following the newest.
     held: bool,
-    /// Approved releases players could be given, newest first.
+    /// Published releases players could be given, newest first.
     approved: Vec<ApprovedRelease>,
-    /// Releases not reviewed yet, newest first: the maker can withdraw one they didn't send.
+    /// Releases not published yet (being checked, on hold, or ready to publish), newest first:
+    /// the maker can withdraw one they didn't send.
     waiting: Vec<WaitingRelease>,
     repo_url: String,
-    /// Players have the app, so moving it to another repository is reviewed by a person.
+    /// Players have the app, so moving it to another repository is checked by SLAPorSLOP staff.
     repo_locked: bool,
-    /// Whether a change of release would be approved without a person, and if not, why.
-    auto_approval_ready: bool,
-    auto_approval_note: Option<String>,
     /// Open requests first, then the latest decisions.
     changes: Vec<ChangeInfo>,
     /// SLAPorSLOP can't read the repository (frozen.rs): no new releases until it can.
@@ -282,7 +343,7 @@ struct Overview {
     /// Community builds of games whose original counts players with Slop Pulse need a Pulse
     /// handshake before they're listed (DESIGN §9): none, waiting, or received.
     pulse_required: Option<bool>,
-    /// A release has been approved, so the maker can move the app on to Beta or Released.
+    /// A release has been published, so the maker can move the app on to Beta or Released.
     can_advance: bool,
     /// SLAPorSLOP's result on the app's GitHub commits (commit_status.rs): absent unless it can be
     /// offered for this app.
@@ -296,7 +357,6 @@ async fn overview(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Overview>> {
     let (app_id, repo_url) = updates::owned(&state, &slug, &user).await?;
-    let approval = updates::auto_approval(&state.db, app_id).await?;
     let mut conn = state.db.acquire().await?;
     let serving = serving(&mut conn, app_id).await?;
     let pinned: Option<Uuid> =
@@ -308,14 +368,14 @@ async fn overview(
         "select {APPROVED_COLUMNS} from releases r
          where r.app_id = $1 and r.status = 'approved'
            and (r.signed_manifest is not null or r.play_address is not null)
-         order by r.reviewed_at desc limit 50"
+         order by r.published_at desc limit 50"
     )))
     .bind(app_id)
     .fetch_all(&mut *conn)
     .await?;
     let waiting = sqlx::query_as(
         "select id, version, status::text as status, source, created_at from releases
-         where app_id = $1 and status in ('fetching', 'awaiting_review') order by created_at desc",
+         where app_id = $1 and status in ('fetching', 'awaiting_review', 'ready') order by created_at desc",
     )
     .bind(app_id)
     .fetch_all(&mut *conn)
@@ -353,8 +413,6 @@ async fn overview(
         waiting,
         repo_locked: repo_locked(&mut conn, app_id).await?,
         repo_url,
-        auto_approval_ready: approval.is_ok(),
-        auto_approval_note: approval.err(),
         changes,
     }))
 }
@@ -362,7 +420,7 @@ async fn overview(
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ChangeRequest {
-    /// Hold players at `release_id`, or follow the newest approved release when it's null.
+    /// Hold players at `release_id`, or follow the newest published release when it's null.
     Release {
         release_id: Option<Uuid>,
         #[serde(default)]
@@ -379,7 +437,7 @@ enum ChangeRequest {
 enum Decision {
     /// Applied now; the reason says why no one needed to look.
     Apply(&'static str),
-    /// Waits for a person, for this reason.
+    /// Waits for SLAPorSLOP staff, for this reason.
     Wait(String),
 }
 
@@ -390,7 +448,6 @@ async fn request_change(
     Json(req): Json<ChangeRequest>,
 ) -> ApiResult<(StatusCode, Json<ChangeInfo>)> {
     let (app_id, current_repo) = updates::owned(&state, &slug, &user).await?;
-    let approval = updates::auto_approval(&state.db, app_id).await?;
     let clean_note = |note: Option<String>| -> ApiResult<Option<String>> {
         let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
         if note.as_ref().is_some_and(|n| n.chars().count() > MAX_NOTE) {
@@ -415,7 +472,7 @@ async fn request_change(
             // looking again (the address may have lapsed or changed hands).
             if crate::catalog::plays_in_browser(&mut *tx, app_id).await? {
                 return Err(ApiError::Conflict(
-                    "a browser game always opens its newest approved address, so it can't be held \
+                    "a browser game always opens its newest published address, so it can't be held \
                      at another: submit the address you want on the Releases page"
                         .into(),
                 ));
@@ -433,7 +490,7 @@ async fn request_change(
                 if !ok {
                     return Err(ApiError::invalid(
                         "release_id",
-                        "choose one of this app's approved releases",
+                        "choose one of this app's published releases",
                     ));
                 }
             }
@@ -446,17 +503,14 @@ async fn request_change(
                 if pinned == release_id {
                     return Err(ApiError::Conflict(match release_id {
                         Some(_) => "players already get that release".into(),
-                        None => "players already get the newest approved release".into(),
+                        None => "players already get the newest published release".into(),
                     }));
                 }
                 Decision::Apply("Players already get this release, so there was nothing to check.")
             } else {
-                match &approval {
-                    Ok(()) => Decision::Apply(
-                        "Approved automatically: the release already passed every check.",
-                    ),
-                    Err(why) => Decision::Wait(format!("Waiting for a person: {why}.")),
-                }
+                Decision::Apply(
+                    "Applied straight away: the release passed its checks and you published it.",
+                )
             };
             ("release", release_id, None, note, decision)
         }
@@ -471,7 +525,7 @@ async fn request_change(
             crate::repo_owner::check(&state, user.id, &repo_url, Some(app_id)).await?;
             let decision = if repo_locked(&mut tx, app_id).await? {
                 Decision::Wait(
-                    "Waiting for a person: moving an app players already have is always checked."
+                    "Waiting for SLAPorSLOP staff: moving an app players already have is always checked."
                         .into(),
                 )
             } else {
@@ -587,12 +641,25 @@ async fn apply(tx: &mut PgConnection, id: Uuid, reviewer: &str) -> anyhow::Resul
                 .bind(release_id)
                 .execute(&mut *tx)
                 .await?;
+            // Players get the release held at now: the store page shows its rating where that's
+            // higher (or has more content labels), never a lower one (AGE-7: lowering goes
+            // through a release staff check).
+            sqlx::query(
+                "update apps a set min_age = greatest(a.min_age, r.min_age),
+                        content_labels = a.content_labels
+                            || array(select l from unnest(r.content_labels) l where l <> all (a.content_labels))
+                 from releases r where r.id = $2 and a.id = $1 and r.min_age is not null",
+            )
+            .bind(app_id)
+            .bind(release_id)
+            .execute(&mut *tx)
+            .await?;
             json!({ "change": id, "hold_at": version })
         }
         _ => {
             let repo_url = repo_url.unwrap_or_default();
-            // A new repository starts afresh: nothing seen there yet, and its first release
-            // waits for a person (updates::auto_approval).
+            // A new repository starts afresh: nothing seen there yet. Its first release goes
+            // through the same checks as any other, and its maker publishes it.
             sqlx::query(
                 "update apps set repo_url = $2, repo_changed_at = now(), watch_last_tag = null,
                         watch_problem = null, watch_checked_at = null, updated_at = now()

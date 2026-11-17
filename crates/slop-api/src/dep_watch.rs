@@ -243,12 +243,12 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
              from releases r join apps a on a.id = r.app_id
              where r.status = 'approved' and (r.signed_manifest is not null or r.play_address is not null)
                and (not ('browser' = any(a.platforms)) or r.id is not distinct from {play})
-             order by r.app_id, coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc
+             order by r.app_id, coalesce(r.id = a.pinned_release_id, false) desc, r.published_at desc
          )
          select r.id as release_id, a.id as app_id, a.maker_id, a.slug, a.title, r.version,
                 r.id in (select id from serving) as live, r.source_checks
          from releases r join apps a on a.id = r.app_id
-         where (r.id in (select id from serving) or r.status = 'awaiting_review')
+         where (r.id in (select id from serving) or r.status in ('awaiting_review', 'ready'))
            and exists (select 1 from release_packages p where p.release_id = r.id)
            and coalesce(r.deps_checked_at, '-infinity') < now() - interval '24 hours'
          order by r.deps_checked_at nulls first

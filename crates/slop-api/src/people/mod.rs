@@ -1339,11 +1339,11 @@ pub async fn since_new_work(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Opt
     let jobs: Vec<(Option<String>, Option<OffsetDateTime>, Option<String>)> =
         sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "select case when coalesce((j.offer->>'credit')::boolean, true) and {VISIBLE_SQL} then c.name end,
-                (select min(r.reviewed_at) from releases r
-                  where r.app_id = j.app_id and r.status = 'approved' and r.reviewed_at >= j.credited_at),
+                (select min(r.published_at) from releases r
+                  where r.app_id = j.app_id and r.status = 'approved' and r.published_at >= j.credited_at),
                 (select r.version from releases r
-                  where r.app_id = j.app_id and r.status = 'approved' and r.reviewed_at >= j.credited_at
-                  order by r.reviewed_at limit 1)
+                  where r.app_id = j.app_id and r.status = 'approved' and r.published_at >= j.credited_at
+                  order by r.published_at limit 1)
          from jobs j join creatives c on c.user_id = j.creative_id
          where j.app_id = $1 and j.credited_at is not null
          order by j.credited_at desc"

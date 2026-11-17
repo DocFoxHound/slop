@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { GithubRelease } from "../api";
-import { autoApprovalStatus, fitsPlatform, nextVersion, pickRows, statusText } from "./Releases";
+import { fitsPlatform, newerOut, nextVersion, pickRows, publishNotes, publishWait, statusText } from "./Releases";
 
 const release = (names: string[]): GithubRelease => ({
   tag: "v0.1.0",
@@ -64,35 +64,91 @@ describe("a browser game's releases", () => {
   });
 
   it("words a play address's status without signing, scanning or files", () => {
-    const statuses = ["fetching", "awaiting_review", "approved", "rejected", "failed", "revoked", "withdrawn"] as const;
+    const statuses = ["fetching", "awaiting_review", "ready", "approved", "rejected", "failed", "revoked", "withdrawn"] as const;
     for (const s of statuses) {
       const t = statusText(s, true);
       expect(`${t.label} ${t.help}`).not.toMatch(/sign|scan|files|install/i);
     }
     expect(statusText("fetching", true).label).toBe("CHECKING THE ADDRESS");
-    expect(statusText("approved", true).help).toBe("Approved: Play opens this address.");
+    expect(statusText("approved", true).help).toBe("Published: Play opens this address.");
+    expect(statusText("ready", true)).toMatchObject({
+      label: "PASSED, NOT PUBLISHED",
+      help: "It passed the checks. Play opens this address once you publish it.",
+    });
     expect(statusText("revoked", true).help).toContain("Play no longer opens it");
     // Downloads keep theirs.
     expect(statusText("fetching", false).label).toBe("CHECKING FILES");
-    expect(statusText("approved", false).help).toContain("Signed by SLAPorSLOP");
+    expect(statusText("approved", false).help).toContain("Signed by SLAPorSLOP when you published it");
   });
 
-  it("Coming soon, an approved address opens once the game is in Beta", () => {
-    expect(statusText("approved", true, true)).toMatchObject({
-      label: "APPROVED",
-      help: "Approved: Play opens this address once the game is in Beta.",
+  it("names the new statuses: on hold, and passed but not published", () => {
+    expect(statusText("awaiting_review", false)).toMatchObject({ label: "ON HOLD", badge: "warn" });
+    expect(statusText("ready", false)).toMatchObject({
+      label: "PASSED, NOT PUBLISHED",
+      help: "It passed every check. Players get it once you publish it.",
     });
+    expect(statusText("approved", false).label).toBe("PUBLISHED");
+    expect(statusText("withdrawn", false).label).toBe("WITHDRAWN BEFORE PUBLISHING");
+    // Nothing says a person reviews it, or that it's approved automatically.
+    for (const s of ["fetching", "awaiting_review", "ready", "approved", "rejected", "failed", "revoked", "withdrawn"] as const) {
+      for (const browser of [false, true]) {
+        const t = statusText(s, browser);
+        expect(`${t.label} ${t.help}`).not.toMatch(/a person|automatically|in review/i);
+      }
+    }
+  });
+
+  it("Coming soon, a published address opens once the game is in Beta", () => {
+    expect(statusText("approved", true, true)).toMatchObject({
+      label: "PUBLISHED",
+      help: "Published: Play opens this address once the game is in Beta.",
+    });
+    expect(statusText("ready", true, true).help).toBe(
+      "It passed the checks. Once you publish it, Play opens this address when the game is in Beta.",
+    );
     expect(statusText("approved", false, true).help).toContain("Signed by SLAPorSLOP");
   });
+});
 
-  it("never promises a new address is approved automatically", () => {
-    const ready = { auto_approval_ready: true, auto_approval_note: null };
-    expect(autoApprovalStatus(ready, true)).toBe(
-      "Your next release will be approved automatically if it keeps the address Play opens now and passes every check; a new address always waits for a person.",
+describe("publishing a release that passed", () => {
+  const checked = { status: "checked" as const };
+  it("waits for new pictures, and for the source check to have a result, with the reason", () => {
+    expect(publishWait({ repo_scan: checked }, false)).toBeUndefined();
+    // "Couldn't read it" is a result too: it doesn't wait.
+    expect(publishWait({ repo_scan: { status: "not_checked", detail: "the host didn't answer" } }, false)).toBeUndefined();
+    expect(publishWait({ repo_scan: checked }, true)).toBe(
+      "Its new pictures are waiting for review. You can publish once they're reviewed.",
     );
-    expect(autoApprovalStatus(ready, false)).toBe("Your next release will be approved automatically if it passes every check.");
-    expect(autoApprovalStatus({ auto_approval_ready: false, auto_approval_note: "automatic updates are off" }, true)).toBe(
-      "Your next release waits for a person: automatic updates are off.",
+    expect(publishWait({ repo_scan: null }, false)).toBe(
+      "SLAPorSLOP hasn't read this release's source yet. It tries again every hour, and you can publish once it has a result.",
     );
+    expect(publishWait({ repo_scan: { status: "failed", detail: "timeout" } }, false)).toContain("hasn't read this release's source");
+  });
+
+  it("offers no Publish for a release older than one already out (Publish refuses it)", () => {
+    const at = (h: number) => `2026-11-07T${String(h).padStart(2, "0")}:00:00Z`;
+    const ready = { id: "a", version: "1.0", status: "ready" as const, created_at: at(10) };
+    expect(newerOut(ready, [ready])).toBeUndefined();
+    // An older published release, or a newer one not out yet, doesn't stop it.
+    expect(newerOut(ready, [{ id: "b", version: "0.9", status: "approved", created_at: at(9) }, ready])).toBeUndefined();
+    expect(newerOut(ready, [{ id: "c", version: "1.1", status: "awaiting_review", created_at: at(11) }, ready])).toBeUndefined();
+    // A newer one published (or withdrawn by SLAPorSLOP since) does.
+    expect(newerOut(ready, [{ id: "d", version: "1.1", status: "approved", created_at: at(11) }, ready])?.version).toBe("1.1");
+    expect(newerOut(ready, [{ id: "e", version: "1.2", status: "revoked", created_at: at(12) }, ready])?.version).toBe("1.2");
+  });
+
+  it("lists what to know first as information: the hold it ends, a new site, what the source check found", () => {
+    const r = { version: "1.4", new_concerns: undefined, new_play_address: undefined, play_address: null };
+    expect(publishNotes(r, {})).toEqual([]);
+    expect(publishNotes(r, { heldAt: "1.2" })).toEqual(["Players are held at 1.2. Publishing 1.4 ends the hold."]);
+    expect(
+      publishNotes({ ...r, new_concerns: "the source check found code loading that 1.3 didn't have" }, {}),
+    ).toEqual(["The source check found code loading that 1.3 didn't have. See the source check on this release."]);
+    expect(
+      publishNotes({ ...r, new_play_address: true, play_address: "https://new.example.net/" }, { playsNow: "https://old.example.com/" }),
+    ).toEqual(["A new site: Play will open https://new.example.net/ instead of https://old.example.com/."]);
+    expect(publishNotes({ ...r, new_play_address: true, play_address: "https://new.example.net/" }, { playsNow: null })).toEqual([
+      "A new address: Play will open https://new.example.net/.",
+    ]);
   });
 });

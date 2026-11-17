@@ -4,7 +4,7 @@
 // shares it with friends, a profile link and a team, and triages the bug reports players send.
 // Pat and Cleo play it while it's shared with them; at the end it's shared with nobody again.
 import { expect, ids, server, signIn, test } from "./fixtures";
-import { answer, apiError, approve, call, fakeRepo, readNotices, submitRelease, uniq } from "./publishing-helpers";
+import { answer, apiError, call, fakeRepo, publish, readNotices, submitRelease, uniq } from "./publishing-helpers";
 
 test.describe.configure({ mode: "serial" });
 
@@ -91,7 +91,7 @@ test("asking to make it public, and keeping it private after all", async ({ page
   await expect(page.getByRole("heading", { name: "Ratings" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "History", exact: true })).toHaveCount(0);
   await section.getByRole("button", { name: "Ask to make it public" }).click();
-  await expect(section.getByText(/^Waiting for a reviewer\./)).toBeVisible();
+  await expect(section.getByText(/^Waiting for SLAPorSLOP staff\./)).toBeVisible();
   await section.getByRole("button", { name: "Keep it private" }).click();
   await expect(section.getByRole("button", { name: "Ask to make it public" })).toBeVisible();
 });
@@ -119,7 +119,7 @@ test("nobody has it yet, so the repository moves straight away; then it can't go
 });
 
 test("sharing: with a friend, a profile link and an invite-only team, not an open one", async ({ page }) => {
-  await approve(await submitRelease("maker2", slug, fake, "1.0.0"));
+  await publish("maker2", slug, await submitRelease("maker2", slug, fake, "1.0.0"));
   await signIn(page, "maker2");
   await page.goto(`/app/${slug}`);
   const panel = page.locator(".share-panel");

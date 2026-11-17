@@ -267,7 +267,7 @@ test("a change elsewhere on Manage brings each side panel back once", async ({ p
   let changes = [change];
   // The Updates panel's answer changes with it, so the redrawn panel can be told from the old one.
   const settings = await call<Record<string, unknown>>("maker", "GET", `/v1/apps/${slug}/update-settings`);
-  let autoUpdate = false;
+  let watched = false;
   await page.unroute(`**/v1/apps/${slug}/manage`);
   await page.route(`**/v1/apps/${slug}/manage`, (route: Route) =>
     route.request().method() !== "GET"
@@ -277,15 +277,15 @@ test("a change elsewhere on Manage brings each side panel back once", async ({ p
   await page.route(`**/v1/apps/${slug}/update-settings`, (route: Route) =>
     route.request().method() !== "GET"
       ? route.fallback()
-      : route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...settings, auto_update: autoUpdate }) }),
+      : route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...settings, watch_releases: watched }) }),
   );
   await page.route(`**/v1/apps/${slug}/changes/${change.id}/cancel`, (route: Route) => {
     changes = [{ ...change, status: "cancelled" }];
-    autoUpdate = true;
+    watched = true;
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(changes[0]) });
   });
   await page.goto(manage);
-  const auto = page.getByRole("checkbox", { name: /Approve updates automatically/ });
+  const auto = page.getByRole("checkbox", { name: /Pick up new GitHub releases/ });
   await expect(auto).not.toBeChecked();
   await expect(page.getByRole("heading", { name: "Results on GitHub" })).toBeVisible();
 

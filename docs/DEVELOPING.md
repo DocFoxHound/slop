@@ -16,7 +16,7 @@ don't copy it into real code.
 | Desktop sign-in through the system browser (RFC 8252), rotating refresh tokens | Done |
 | Catalog: categories, tags, listing, search, store pages, makers' drafts | Done |
 | Per-country age policy (UK under-18 view), stage deadlines, dead projects | Done |
-| Releases: submit, fetch-and-hash, staff review, Ed25519-signed manifests | Done (phase 1: review is by a person) |
+| Releases: submit, fetch-and-hash, checks, holds for staff, maker Publish, Ed25519-signed manifests | Done (2026-11: the maker publishes; staff look only at holds) |
 | Revocation (kill switch), audit log, library | Done |
 | Admin panel (review queue, listing, moderation, audit log) and makers' publishing progress | Done |
 | Slop Pulse (optional): launch tokens, heartbeats, playing now, monthly peaks, playtime; "Share my playtime" | Done |

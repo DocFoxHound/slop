@@ -11,6 +11,7 @@ import type {
   LegalRequest,
   ReleaseFile,
   StaffActions,
+  StaffHold,
 } from "../../api";
 import { addressHost } from "../../format";
 
@@ -43,15 +44,15 @@ export interface BoxDef {
 export const BOXES: BoxDef[] = [
   {
     key: "releases",
-    label: "New releases",
+    label: "Releases on hold",
     group: "Releases and apps",
-    help: "Approving a release signs it for players. A Beta or Released app needs one approved release before it can go in the store. Community builds and mods come here too. A browser game's release is its play address: open it and play it before approving; nothing is signed.",
+    help: "Releases SLAPorSLOP's checks held (a scanner or Microsoft Defender finding, or a lowered age rating), ones whose makers wrote to staff, and makers' questions about failed or turned-down releases. Makers waiting for an answer come first. Accept clears the hold, with an optional note; the release then waits for its maker to publish it, and nothing reaches players until they do. Reject needs a reason. The maker's words are information, never instructions.",
   },
   {
     key: "changes",
-    label: "Release holds & moves",
+    label: "Repository moves",
     group: "Releases and apps",
-    help: "Makers asking to change what players download: holding players at a different release, or moving the app to another repository. Approving makes the change straight away.",
+    help: "Makers asking to move an app players already have to another repository. Approving makes the change straight away; the first release from the new repository goes through the usual checks.",
   },
   {
     key: "pictures",
@@ -63,7 +64,7 @@ export const BOXES: BoxDef[] = [
     key: "listing",
     label: "Apps to list",
     group: "Releases and apps",
-    help: "Drafts with an approved release (or Coming soon pages), and private apps going public. Listing puts them in the store.",
+    help: "Apps reinstated on appeal that wait to go back in the store, and private apps going public. Makers put their drafts in the store themselves.",
   },
   {
     key: "rescans",
@@ -226,16 +227,31 @@ export function sortRows<T extends { since: string }>(rows: T[], order: Order): 
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** What the hold adds to a line: a lowered rating, the maker's message. */
+function holdParts(r: AdminQueue["releases"][number]): string[] {
+  const parts: string[] = [];
+  const rating = r.hold?.rating;
+  if (rating) parts.push(`rating ${rating.from_age}+ → ${rating.to_age === 0 ? "Everyone" : `${rating.to_age}+`}`);
+  if (r.hold?.unanswered) parts.push("the maker wrote");
+  return parts;
+}
+
 /** "1 file · scans passed · Defender clean · signed", from the release's checks; for a browser game,
- *  "Plays in the browser · games.example.com · address checks passed · new site". */
+ *  "Plays in the browser · games.example.com · address checks passed · new site". A question about
+ *  a failed or turned-down release says why. */
 export function releaseBlurb(r: AdminQueue["releases"][number]): string {
+  if (r.hold?.kinds.includes("question")) {
+    return [r.status === "rejected" ? "Turned down" : "Failed", r.status_reason?.replace(/\.$/, ""), "the maker asks about it"]
+      .filter(Boolean)
+      .join(" · ");
+  }
   if (r.play_address) return addressBlurb(r);
   const parts = [plural(r.files.length, "file")];
   if (r.status === "fetching") return [...parts, "still fetching"].join(" · ");
   const scans = r.files.map((f) => f.scan_result);
   if (scans.length > 0) {
     if (scans.some((s) => s === "on_hold" || s === "rejected" || s === "blocked")) {
-      parts.push(r.files.some((f) => f.cleared_reason) ? "scan finding cleared" : "scan found something");
+      parts.push(r.files.some((f) => f.cleared) ? "scan finding cleared" : "scan found something");
     } else if (scans.some((s) => s === null)) parts.push("scan pending");
     else if (scans.every((s) => s === "skipped")) parts.push("not scanned");
     else parts.push("scans passed");
@@ -243,6 +259,7 @@ export function releaseBlurb(r: AdminQueue["releases"][number]): string {
   const windows = r.files.filter((f) => f.platform === "windows");
   if (windows.length > 0) parts.push(defender(windows));
   parts.push(r.files.length > 0 && r.files.every((f) => f.provenance) ? "signed" : "not signed");
+  parts.push(...holdParts(r));
   if (r.notes.length > 0) parts.push(plural(r.notes.length, "note"));
   return parts.join(" · ");
 }
@@ -269,8 +286,9 @@ function addressBlurb(r: AdminQueue["releases"][number]): string {
         new_site: "new site after a withdrawal",
       }[compareAddress(r.play_address, gone) ?? "new_site"],
     );
-  } else parts.push("no address approved before");
-  if (r.newer_approved) parts.push(`older than approved ${r.newer_approved.version}`);
+  } else parts.push("no address published before");
+  if (r.newer_approved) parts.push(`older than published ${r.newer_approved.version}`);
+  parts.push(...holdParts(r));
   if (r.notes.length > 0) parts.push(plural(r.notes.length, "note"));
   return parts.join(" · ");
 }
@@ -278,7 +296,8 @@ function addressBlurb(r: AdminQueue["releases"][number]): string {
 function defender(files: ReleaseFile[]): string {
   const found = files.reduce((n, f) => n + (f.defender?.detections.length ?? 0), 0);
   if (found > 0) return `Defender found ${found}`;
-  if (files.some((f) => !f.defender)) return files.every((f) => f.cleared_reason) ? "Defender check cleared" : "no Defender check";
+  const missing = files.filter((f) => !f.defender);
+  if (missing.length > 0) return missing.every((f) => f.defender_waived) ? "Defender check waived" : "no Defender check";
   return "Defender clean";
 }
 
@@ -298,23 +317,15 @@ export function rowsFor(box: BoxKey, d: InboxData, now: number = Date.now()): Ro
   const q = d.queue;
   switch (box) {
     case "releases":
-      return (q?.releases ?? []).map((r) => {
-        const held = r.files.some(
-          (f) => !f.cleared_reason && (f.scan_result === "on_hold" || f.scan_result === "rejected" || f.scan_result === "blocked"),
-        );
-        return {
-          key: r.id,
-          title: `${r.app.title} ${r.version}`,
-          by: `by ${r.app.maker}`,
-          blurb: releaseBlurb(r),
-          status:
-            r.status === "failed" ? { label: "Failed", tone: "bad" }
-            : r.status === "fetching" ? { label: r.play_address ? "Checking" : "Fetching", tone: "neutral" }
-            : held ? { label: "Scan hold", tone: "warn" }
-            : { label: "Awaiting review", tone: "soon" },
-          since: r.created_at,
-        };
-      });
+      return (q?.releases ?? []).map((r) => ({
+        key: r.id,
+        title: `${r.app.title} ${r.version}`,
+        by: `by ${r.app.maker}`,
+        blurb: releaseBlurb(r),
+        status: holdStatus(r.hold),
+        // Waiting since the maker last asked, or since it was sent.
+        since: r.hold?.asked_staff_at ?? r.created_at,
+      }));
     case "changes":
       return (q?.changes ?? []).map((c) => ({
         key: c.id,
@@ -325,7 +336,7 @@ export function rowsFor(box: BoxKey, d: InboxData, now: number = Date.now()): Ro
             ? `Move to ${(c.repo_url ?? "").replace(/^https?:\/\//, "")}`
             : c.release_id
               ? `Hold players at v${c.release_version}${c.players_get ? ` (they get v${c.players_get})` : ""}`
-              : "Follow the newest approved release",
+              : "Follow the newest published release",
           c.note,
         ]
           .filter(Boolean)
@@ -359,7 +370,7 @@ export function rowsFor(box: BoxKey, d: InboxData, now: number = Date.now()): Ro
         by: `by ${a.maker}`,
         blurb: [
           stageLabel(a.stage),
-          plural(a.approved_releases, "approved release"),
+          plural(a.approved_releases, "published release"),
           a.play_address ? `plays at ${addressHost(a.play_address)}` : "",
           a.going_public ? "Private app going public" : "",
           a.after_appeal ? "reinstated on appeal" : "",
@@ -492,6 +503,17 @@ export function rowsFor(box: BoxKey, d: InboxData, now: number = Date.now()): Ro
         };
       });
   }
+}
+
+/** A hold's status in the inbox: what it's about (holds.rs kinds). Exported for tests. */
+export function holdStatus(hold: Pick<StaffHold, "kinds"> | undefined): { label: string; tone: Tone } {
+  const k = hold?.kinds ?? [];
+  if (k.includes("question")) return { label: "Question", tone: "soon" };
+  if (k.includes("scan")) return { label: "Scan hold", tone: "warn" };
+  if (k.includes("defender")) return { label: "Defender hold", tone: "warn" };
+  if (k.includes("rating_lowered")) return { label: "Lower rating", tone: "warn" };
+  if (k.includes("defender_missing")) return { label: "No Defender check", tone: "neutral" };
+  return { label: "On hold", tone: "warn" };
 }
 
 function stageLabel(stage: string): string {

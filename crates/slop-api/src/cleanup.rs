@@ -57,6 +57,10 @@ pub async fn run_once(db: &PgPool) -> anyhow::Result<Deleted> {
     crate::passkeys::cleanup(db).await?;
     crate::agent_oauth::cleanup(db).await?;
     crate::admin_messages::cleanup(db).await?;
+    // Re-runs of the scanner are counted for a day's cap (holds.rs): older ones aren't needed.
+    sqlx::query("delete from release_rescan_runs where started_at < now() - interval '2 days'")
+        .execute(db)
+        .await?;
     Ok(deleted)
 }
 

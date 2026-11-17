@@ -85,8 +85,30 @@ async fn address_release(app: &TestApp, version: &str, status: &str, address: &s
     id
 }
 
-async fn approve(app: &TestApp, id: &str) -> admin::Approval {
-    admin::approve(&app.db, None, lax(), id.parse().unwrap(), "rev")
+/// Release `id` put on hold for SLAPorSLOP staff (a play address is held only for a lowered age
+/// rating, and its maker wrote to staff): what staff's queue and review feed show of it.
+async fn as_held(app: &TestApp, id: &str) {
+    sqlx::query("update releases set status = 'awaiting_review' where id = $1::uuid")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    // In the staff queue: its maker wrote to staff about it (holds.rs).
+    sqlx::query(
+        "insert into release_holds (release_id, app_id, kinds, needs_staff, maker_asked_at)
+         select id, app_id, array['rating_lowered'], true, now() from releases where id = $1::uuid
+         on conflict (release_id) do update set status = 'open', closed_at = null, closed_by = null,
+             needs_staff = true, maker_asked_at = now()",
+    )
+    .bind(id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+/// Publishes a play address that passed its checks, as its maker pressing Publish.
+async fn approve(app: &TestApp, id: &str) {
+    approve_release(app, lax(), id.parse().unwrap())
         .await
         .unwrap()
 }
@@ -858,7 +880,7 @@ async fn a_browser_game_on_github_may_leave_the_commit_out(db: PgPool) {
             .fetch_one(&app.db)
             .await
             .unwrap();
-    assert_eq!((status.as_str(), verified), ("awaiting_review", true));
+    assert_eq!((status.as_str(), verified), ("ready", true));
 }
 
 /// On a server set up like production, a play address is https on a public site: plain http,
@@ -992,11 +1014,8 @@ async fn the_fetcher_checks_that_a_play_page_loads(db: PgPool) {
     let page = play_page(&app, "play");
     let ok = submit_play_and_check(&app, &maker, "1.0.0", &page).await;
     let (status, reason, checks) = checks_of(ok.clone()).await;
-    assert_eq!(status, "awaiting_review");
-    assert!(
-        reason.unwrap().contains("first release"),
-        "auto-approval ran"
-    );
+    assert_eq!(status, "ready");
+    assert!(reason.is_none(), "{reason:?}");
     assert_eq!(checks["ok"], true);
     assert!(checks["problem"].is_null());
     assert_eq!(checks["status"], 200);
@@ -1021,7 +1040,7 @@ async fn the_fetcher_checks_that_a_play_page_loads(db: PgPool) {
     assert!(checks["checked_at"].is_string());
     let mine = releases_for(&app, Some(&maker)).await;
     assert_eq!(mine[0]["address_checks"], checks);
-    assert_eq!(mine[0]["progress"]["stage"], "waiting_for_review");
+    assert_eq!(mine[0]["progress"]["stage"], "ready");
     assert!(
         mine[0]["progress"]["summary"]
             .as_str()
@@ -1031,7 +1050,7 @@ async fn the_fetcher_checks_that_a_play_page_loads(db: PgPool) {
 
     let moved = submit_play_and_check(&app, &maker, "1.0.1", &play_page(&app, "play-moved")).await;
     let (status, _, checks) = checks_of(moved.clone()).await;
-    assert_eq!(status, "awaiting_review");
+    assert_eq!(status, "ready");
     assert_eq!(checks["redirects"], 1);
     assert_eq!(checks["final_address"], page);
     assert_eq!(
@@ -1072,7 +1091,7 @@ async fn the_fetcher_checks_that_a_play_page_loads(db: PgPool) {
             notice(
                 &app,
                 maker_id,
-                &format!("Game {version} couldn't be checked")
+                &format!("Game {version} didn't pass SLAPorSLOP's checks")
             )
             .await,
             why
@@ -1182,7 +1201,7 @@ async fn play_addresses_go_first_but_never_twice_while_files_wait(db: PgPool) {
         statuses().await,
         [
             "game 1.0.0 fetching",
-            "orbit 1.0.0 awaiting_review",
+            "orbit 1.0.0 ready",
             "orbit 1.0.1 fetching"
         ]
     );
@@ -1190,13 +1209,13 @@ async fn play_addresses_go_first_but_never_twice_while_files_wait(db: PgPool) {
     assert_eq!(
         statuses().await,
         [
-            "game 1.0.0 awaiting_review",
-            "orbit 1.0.0 awaiting_review",
+            "game 1.0.0 ready",
+            "orbit 1.0.0 ready",
             "orbit 1.0.1 fetching"
         ]
     );
     assert!(releases::fetch_next(&app.state).await.unwrap());
-    assert_eq!(statuses().await[2], "orbit 1.0.1 awaiting_review");
+    assert_eq!(statuses().await[2], "orbit 1.0.1 ready");
     assert!(!releases::fetch_next(&app.state).await.unwrap());
 }
 
@@ -1234,8 +1253,9 @@ async fn a_play_address_check_has_one_deadline(db: PgPool) {
     assert!((1..5).contains(&redirects), "{checks}");
 }
 
-/// A play address check that died with the server is taken again after a few minutes, not the
-/// 40 a file release's fetch is given (its scans take that long).
+/// A play address check that died with the server is taken again after 15 minutes (each step
+/// after the check renews it), not the 40 a file release's fetch is given (its scans take that
+/// long).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn an_address_check_that_died_is_taken_again_within_minutes(db: PgPool) {
     let app = test_app(db).await;
@@ -1260,7 +1280,7 @@ async fn an_address_check_that_died_is_taken_again_within_minutes(db: PgPool) {
         !releases::fetch_next(&app.state).await.unwrap(),
         "both still being checked"
     );
-    sqlx::query("update releases set fetch_started_at = now() - interval '4 minutes'")
+    sqlx::query("update releases set fetch_started_at = now() - interval '16 minutes'")
         .execute(&app.db)
         .await
         .unwrap();
@@ -1275,7 +1295,7 @@ async fn an_address_check_that_died_is_taken_again_within_minutes(db: PgPool) {
         statuses,
         [
             ("castle".to_string(), "fetching".to_string()),
-            ("game".to_string(), "awaiting_review".to_string())
+            ("game".to_string(), "ready".to_string())
         ]
     );
     assert!(
@@ -1308,9 +1328,7 @@ async fn a_play_address_is_approved_with_nothing_signed(db: PgPool) {
     let id = body_json(res).await["id"].as_str().unwrap().to_string();
     let release_id: Uuid = id.parse().unwrap();
     assert!(
-        admin::approve(&app.db, None, lax(), release_id, "rev")
-            .await
-            .is_err(),
+        approve_release(&app, lax(), release_id).await.is_err(),
         "not checked yet"
     );
     assert!(releases::fetch_next(&app.state).await.unwrap());
@@ -1330,7 +1348,8 @@ async fn a_play_address_is_approved_with_nothing_signed(db: PgPool) {
     };
     assert_eq!(manifest().await, StatusCode::CONFLICT);
 
-    // Not when its checks didn't pass, or once a list names it.
+    // Not when its checks didn't pass, or once a list names it: Publish runs them again, and
+    // the release fails.
     sqlx::query(
         "update releases set address_checks = jsonb_set(address_checks, '{ok}', 'false') where id = $1",
     )
@@ -1338,13 +1357,19 @@ async fn a_play_address_is_approved_with_nothing_signed(db: PgPool) {
     .execute(&app.db)
     .await
     .unwrap();
-    let err = admin::approve(&app.db, None, lax(), release_id, "rev")
-        .await
-        .unwrap_err();
+    let err = approve_release(&app, lax(), release_id).await.unwrap_err();
     assert!(
         format!("{err:#}").contains("didn't pass its checks"),
         "{err:#}"
     );
+    let ready_again = || async {
+        sqlx::query("update releases set status = 'ready', status_reason = null where id = $1")
+            .bind(release_id)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    };
+    ready_again().await;
     sqlx::query(
         "update releases set address_checks = jsonb_set(address_checks, '{ok}', 'true') where id = $1",
     )
@@ -1358,17 +1383,16 @@ async fn a_play_address_is_approved_with_nothing_signed(db: PgPool) {
         .execute(&app.db)
         .await
         .unwrap();
-    let err = admin::approve(&app.db, None, lax(), release_id, "rev")
-        .await
-        .unwrap_err();
+    let err = approve_release(&app, lax(), release_id).await.unwrap_err();
     assert!(format!("{err:#}").contains("known-bad links"), "{err:#}");
     sqlx::query("delete from bad_links")
         .execute(&app.db)
         .await
         .unwrap();
+    ready_again().await;
 
     // No signing key needed.
-    assert_eq!(approve(&app, &id).await, admin::Approval::PlayAddress);
+    approve(&app, &id).await;
     let (status, signed, by): (String, bool, Option<String>) = sqlx::query_as(
         "select status::text, signed_manifest is not null, reviewed_by from releases where id = $1",
     )
@@ -1378,7 +1402,7 @@ async fn a_play_address_is_approved_with_nothing_signed(db: PgPool) {
     .unwrap();
     assert_eq!(
         (status.as_str(), signed, by.as_deref()),
-        ("approved", false, Some("rev"))
+        ("approved", false, Some("slop"))
     );
     let (min_age, labels): (i16, Vec<String>) =
         sqlx::query_as("select min_age, content_labels from apps where slug = 'game'")
@@ -1391,24 +1415,29 @@ async fn a_play_address_is_approved_with_nothing_signed(db: PgPool) {
             .fetch_one(&app.db)
             .await
             .unwrap();
-    assert_eq!(audit.0, "release.approve");
+    assert_eq!(audit.0, "release.publish");
     assert_eq!(audit.1["play_address"], address);
     assert!(audit.1.get("key_id").is_none());
+    // Not in the store yet: publishing alone doesn't reach players, and the maker is told so.
     assert_eq!(
-        notice(&app, maker_id, "Game 1.0.0 is approved").await,
-        "A reviewer approved its play address. Play opens it now."
+        notice(&app, maker_id, "Game 1.0.0 is out").await,
+        "You published it. Put Game in the store from its Manage page so players can find it."
     );
     let mine = releases_for(&app, Some(&maker)).await;
     assert_eq!(mine[0]["progress"]["stage"], "approved");
     assert_eq!(
         mine[0]["progress"]["summary"],
-        "Approved by a person at SLAPorSLOP: Play opens this address."
+        "Published: players can play it once you put the game in the store."
     );
 
     // Still nothing to install, and never a server error.
     assert_eq!(manifest().await, StatusCode::CONFLICT);
     assert_eq!(page_for(&app, Some(&maker)).await["play_address"], address);
-    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    maker_lists(&app, "game").await.unwrap();
+    assert_eq!(
+        releases_for(&app, Some(&maker)).await[0]["progress"]["summary"],
+        "Published: Play opens this address."
+    );
     assert_eq!(page_for(&app, None).await["play_address"], address);
     let updates = body_json(
         app.send(req(Method::GET, "/v1/library/updates?apps=game").header("x-country", "US"))
@@ -1458,10 +1487,14 @@ async fn approving_checks_every_address_on_the_way_against_the_lists_again(db: P
             .unwrap();
         }
     };
+    // Each refusal fails the release; it's put back to try the next.
     let refused = || async {
-        let err = admin::approve(&app.db, None, lax(), release_id, "rev")
+        let err = approve_release(&app, lax(), release_id).await.unwrap_err();
+        sqlx::query("update releases set status = 'ready', status_reason = null where id = $1")
+            .bind(release_id)
+            .execute(&app.db)
             .await
-            .unwrap_err();
+            .unwrap();
         format!("{err:#}")
     };
     // Listed by its exact address, not its site (which the address and the page share).
@@ -1472,7 +1505,7 @@ async fn approving_checks_every_address_on_the_way_against_the_lists_again(db: P
     listed(format!("{site}/octo/game/play-moved"), "PhishTank").await;
     assert_eq!(
         refused().await,
-        format!("{hop} is on PhishTank, a list of known-bad links, since it was checked")
+        format!("It can't be published: {hop} is on PhishTank, a list of known-bad links.")
     );
     // Where it ended up, alone (as if it had led elsewhere).
     sqlx::query(
@@ -1486,15 +1519,15 @@ async fn approving_checks_every_address_on_the_way_against_the_lists_again(db: P
     listed("landing.example/x".into(), "OpenPhish").await;
     assert_eq!(
         refused().await,
-        "https://landing.example/x is on OpenPhish, a list of known-bad links, since it was checked"
+        "It can't be published: https://landing.example/x is on OpenPhish, a list of known-bad links."
     );
-    assert_eq!(release_status(&app, &id).await.0, "awaiting_review");
+    assert_eq!(release_status(&app, &id).await.0, "ready");
 
     sqlx::query("delete from bad_links")
         .execute(&app.db)
         .await
         .unwrap();
-    assert_eq!(approve(&app, &id).await, admin::Approval::PlayAddress);
+    approve(&app, &id).await;
 }
 
 /// A browser game moves to Beta once a person approved its address. Until then, and while it's
@@ -1504,7 +1537,7 @@ async fn a_browser_game_moves_on_once_its_address_is_approved(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, maker) = maker_with_browser_app(&app, "coming_soon").await;
     let (_, stranger) = app.user("Stranger", "US").await;
-    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    maker_lists(&app, "game").await.unwrap();
     let address = play_page(&app, "play");
     let id = submit_play_and_check(&app, &maker, "0.1.0", &address).await;
     let overview = || async {
@@ -1539,13 +1572,13 @@ async fn a_browser_game_moves_on_once_its_address_is_approved(db: PgPool) {
     approve(&app, &id).await;
     // Coming soon: only its maker plays it yet, and the maker is told Play waits for Beta.
     assert_eq!(
-        notice(&app, maker_id, "Game 0.1.0 is approved").await,
-        "A reviewer approved its play address. Play opens it once the game is in Beta."
+        notice(&app, maker_id, "Game 0.1.0 is out").await,
+        "You published it. Play opens this address once the game is in Beta."
     );
     let mine = releases_for(&app, Some(&maker)).await;
     assert_eq!(
         mine[0]["progress"]["summary"],
-        "Approved by a person at SLAPorSLOP: Play opens this address once the game is in Beta."
+        "Published: Play opens this address once the game is in Beta."
     );
     assert_eq!(mine[0]["plays_now"], true);
     assert!(page_for(&app, None).await["play_address"].is_null());
@@ -1586,9 +1619,9 @@ async fn a_browser_game_with_its_address_withdrawn_cant_be_listed_or_moved_on(db
         .await
         .unwrap();
 
-    let err = admin::list_app(&app.db, "game", "rev").await.unwrap_err();
+    let err = maker_lists(&app, "game").await.unwrap_err();
     assert!(
-        format!("{err:#}").contains("approve its play address before listing a Beta browser game"),
+        format!("{err:#}").contains("A Beta browser game needs a published play address first"),
         "{err:#}"
     );
     let err = admin::set_stage(
@@ -1600,7 +1633,7 @@ async fn a_browser_game_with_its_address_withdrawn_cant_be_listed_or_moved_on(db
     .await
     .unwrap_err();
     assert!(
-        format!("{err:#}").contains("approve a play address first"),
+        format!("{err:#}").contains("publishes a play address first"),
         "{err:#}"
     );
     let (status, _, message) = refusal(
@@ -1613,7 +1646,7 @@ async fn a_browser_game_with_its_address_withdrawn_cant_be_listed_or_moved_on(db
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(message.contains("approved play address"), "{message}");
+    assert!(message.contains("published play address"), "{message}");
     let overview = body_json(
         app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
             .await,
@@ -1640,7 +1673,7 @@ async fn a_browser_game_with_its_address_withdrawn_cant_be_listed_or_moved_on(db
         .execute(&app.db)
         .await
         .unwrap();
-    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    maker_lists(&app, "game").await.unwrap();
 }
 
 /// Only the address Play opens is shown to anyone but the maker: never an older, waiting or
@@ -1708,70 +1741,91 @@ async fn play_addresses_show_only_where_play_goes(db: PgPool) {
     );
 }
 
-/// Once a person approved an address, a release with the same one goes through on its own; a new
-/// (or earlier) address always waits for a person, and Play keeps opening the approved one.
+/// Every play address passes its checks and waits for its maker to publish it, the same address
+/// or a new one; a new site (or an earlier one, or another fragment) is pointed out to the maker,
+/// and Play keeps opening the published one until they publish it.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn a_new_play_address_always_waits_for_a_person(db: PgPool) {
+async fn a_new_play_address_is_pointed_out_and_published_by_its_maker(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, maker) = maker_with_browser_app(&app, "beta").await;
     let (a, b) = (play_page(&app, "play"), play_page(&app, "play-v2"));
     let first = submit_play_and_check(&app, &maker, "1.0.0", &a).await;
-    assert_eq!(release_status(&app, &first).await.0, "awaiting_review");
+    assert_eq!(release_status(&app, &first).await.0, "ready");
+    assert_eq!(
+        releases_for(&app, Some(&maker)).await[0]["new_play_address"],
+        true,
+        "Play opens nothing yet"
+    );
     approve(&app, &first).await;
+    sqlx::query("update apps set status = 'listed' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
 
     let same = submit_play_and_check(&app, &maker, "1.1.0", &a).await;
     assert_eq!(
         release_status(&app, &same).await,
-        ("approved".into(), None, Some("slop".into()))
+        ("ready".into(), None, Some("slop".into()))
     );
     assert_eq!(
-        notice(&app, maker_id, "Game 1.1.0 is approved").await,
-        "A person approved its play address before, and it passed every check, so it was approved automatically. Play opens it now."
+        releases_for(&app, Some(&maker)).await[0]["new_play_address"],
+        false
+    );
+    approve(&app, &same).await;
+    assert_eq!(
+        notice(&app, maker_id, "Game 1.1.0 is out").await,
+        "You published it. Play opens this address now."
     );
     let mine = releases_for(&app, Some(&maker)).await;
-    assert_eq!(mine[0]["auto_approved"], true);
     assert_eq!(
         mine[0]["progress"]["summary"],
-        "Approved automatically: a person approved this play address before. Play opens this address."
+        "Published: Play opens this address."
     );
     assert_eq!(
         mine[1]["progress"]["summary"],
-        "Approved by a person at SLAPorSLOP; it's no longer the address Play opens."
+        "Published; it's no longer the address Play opens."
     );
 
     let new = submit_play_and_check(&app, &maker, "1.2.0", &b).await;
     assert_eq!(
         release_status(&app, &new).await,
-        (
-            "awaiting_review".into(),
-            Some("Waiting for a person: a new play address is always checked by a person".into()),
-            None
-        )
+        ("ready".into(), None, Some("slop".into()))
+    );
+    assert_eq!(
+        releases_for(&app, Some(&maker)).await[0]["new_play_address"],
+        true
     );
     assert_eq!(page_for(&app, Some(&maker)).await["play_address"], a);
     approve(&app, &new).await;
     assert_eq!(page_for(&app, Some(&maker)).await["play_address"], b);
 
+    // Back to the earlier address, and the same page with another fragment (on a shared host,
+    // the fragment can choose someone else's game): both new.
     let back = submit_play_and_check(&app, &maker, "1.3.0", &a).await;
-    assert_eq!(release_status(&app, &back).await.0, "awaiting_review");
-    assert!(
-        release_status(&app, &back)
-            .await
-            .1
-            .unwrap()
-            .contains("new play address")
-    );
-    // The same page with another fragment is another address too: on a shared host, the
-    // fragment can choose someone else's game.
-    let fragment = submit_play_and_check(&app, &maker, "1.4.0", &format!("{b}#level-2")).await;
+    assert_eq!(release_status(&app, &back).await.0, "ready");
     assert_eq!(
-        release_status(&app, &fragment).await,
-        (
-            "awaiting_review".into(),
-            Some("Waiting for a person: a new play address is always checked by a person".into()),
-            None
-        )
+        releases_for(&app, Some(&maker)).await[0]["new_play_address"],
+        true
     );
+    let fragment = submit_play_and_check(&app, &maker, "1.4.0", &format!("{b}#level-2")).await;
+    assert_eq!(release_status(&app, &fragment).await.0, "ready");
+    assert_eq!(
+        releases_for(&app, Some(&maker)).await[0]["new_play_address"],
+        true
+    );
+    // Strangers never see it.
+    sqlx::query("update apps set status = 'listed' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (_, stranger) = app.user("Stranger", "US").await;
+    for r in releases_for(&app, Some(&stranger))
+        .await
+        .as_array()
+        .unwrap()
+    {
+        assert!(r.get("new_play_address").is_none(), "{r}");
+    }
 }
 
 /// Withdrawing the address Play opens stops Play: it doesn't fall back to an older address,
@@ -1846,8 +1900,8 @@ async fn withdrawing_the_address_play_opens_stops_play(db: PgPool) {
 
     let again = submit_play_and_check(&app, &maker, "1.2.0", &a).await;
     let (status, reason, _) = release_status(&app, &again).await;
-    assert_eq!(status, "awaiting_review");
-    assert!(reason.unwrap().contains("withdrawn"));
+    assert_eq!(status, "ready");
+    assert!(reason.is_none());
     approve(&app, &again).await;
     assert_eq!(page_for(&app, None).await["play_address"], a);
 }
@@ -2036,7 +2090,7 @@ async fn what_only_downloads_have_is_refused_for_browser_games(db: PgPool) {
         message.contains("play address on the Releases page"),
         "{message}"
     );
-    let res = app.send(settings(json!({ "auto_update": true }))).await;
+    let res = app.send(settings(json!({ "watch_releases": false }))).await;
     assert_eq!(res.status(), StatusCode::OK);
     assert!(
         body_json(res).await["watch_note"]
@@ -2101,7 +2155,7 @@ async fn what_only_downloads_have_is_refused_for_browser_games(db: PgPool) {
             .await,
         )
         .await;
-        assert!(message.contains("newest approved address"), "{message}");
+        assert!(message.contains("newest published address"), "{message}");
     }
 
     // Demos.
@@ -2850,9 +2904,9 @@ async fn staff_see_a_browser_games_play_address_to_open_and_play(db: PgPool) {
     let app = test_app(db).await;
     let (_, maker) = maker_with_browser_app(&app, "beta").await;
     let (_, owner) = make_admin(&app, "Olive Owner").await;
-    let err = admin::list_app(&app.db, "game", "rev").await.unwrap_err();
+    let err = maker_lists(&app, "game").await.unwrap_err();
     assert!(
-        format!("{err:#}").contains("approve its play address"),
+        format!("{err:#}").contains("needs a published play address"),
         "{err:#}"
     );
     let (status, _, message) = refusal(
@@ -2865,10 +2919,11 @@ async fn staff_see_a_browser_games_play_address_to_open_and_play(db: PgPool) {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(message.contains("approved play address"), "{message}");
+    assert!(message.contains("published play address"), "{message}");
 
     let first = play_page(&app, "play");
     let id = submit_play_and_check(&app, &maker, "1.0.0", &first).await;
+    as_held(&app, &id).await;
     let res = app
         .send(
             req(Method::POST, "/v1/admin/tokens")
@@ -2892,7 +2947,9 @@ async fn staff_see_a_browser_games_play_address_to_open_and_play(db: PgPool) {
     let item = &all["items"][0];
     assert_eq!(
         item["question"],
-        format!("Approve the play address {first} for Game (1.0.0)?")
+        format!(
+            "Accept the play address {first} for Game (1.0.0)? Its maker wrote to SLAPorSLOP staff."
+        )
     );
     assert_eq!(item["app"]["platforms"], json!(["browser"]));
     let detail = &item["detail"];
@@ -2914,7 +2971,8 @@ async fn staff_see_a_browser_games_play_address_to_open_and_play(db: PgPool) {
     // A new site waits for a person, who sees what Play opens now beside it.
     approve(&app, &id).await;
     let second = play_page(&app, "play-v2");
-    submit_play_and_check(&app, &maker, "1.1.0", &second).await;
+    let next = submit_play_and_check(&app, &maker, "1.1.0", &second).await;
+    as_held(&app, &next).await;
     sqlx::query("insert into bad_links (url, host, source) values ('elsewhere.example/x', 'elsewhere.example', 'URLhaus')")
         .execute(&app.db)
         .await
@@ -2947,7 +3005,19 @@ async fn staff_see_a_browser_games_play_address_to_open_and_play(db: PgPool) {
     assert_eq!(queued["address_checks"]["ok"], true);
     // Beside it, where Play goes now, so the card can say it's a new site.
     assert_eq!(queued["current_play_address"], first);
-    // A draft with an approved address waits to be listed, with where Play will go.
+    // Reinstated on appeal, it waits for staff to list it, with where Play will go (makers list
+    // their own drafts).
+    sqlx::query(
+        "update apps set status = 'delisted', relist_after_appeal = true where slug = 'game'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
+            .await,
+    )
+    .await;
     let ready = queue["ready_to_list"]
         .as_array()
         .unwrap()
@@ -3006,6 +3076,8 @@ async fn reviewers_see_a_withdrawn_address_and_a_newer_approved_one(db: PgPool) 
     .unwrap();
     let older = submit_play_and_check(&app, &maker, "1.1.0", &second).await;
     let newer = submit_play_and_check(&app, &maker, "1.2.0", &first).await;
+    as_held(&app, &older).await;
+    as_held(&app, &newer).await;
     let queued = |version: &'static str| {
         let app = &app;
         let owner = owner.clone();
@@ -3044,23 +3116,15 @@ async fn reviewers_see_a_withdrawn_address_and_a_newer_approved_one(db: PgPool) 
         }
     }
 
-    // The newer one is approved first: approving the older one would move Play back to it.
+    // Publishing the newer one replaces the older one, which never reached players: Play can't
+    // be moved back to an older address that way.
     approve(&app, &newer).await;
-    let (queued_older, detail) = queued("1.1.0").await;
-    let note = format!(
-        "Version 1.2.0 ({first}) is approved and newer: approving this makes Play open this older address"
+    assert_eq!(
+        release_status(&app, &older).await.1.as_deref(),
+        Some("Replaced by 1.2.0 before it was published.")
     );
-    for (what, r) in [("queue", queued_older.unwrap()), ("feed", detail.unwrap())] {
-        assert_eq!(r["current_play_address"], first, "{what}");
-        assert!(r["withdrawn_play_address"].is_null(), "{what}");
-        assert_eq!(
-            r["newer_approved"],
-            json!({ "version": "1.2.0", "play_address": first, "note": note }),
-            "{what}"
-        );
-    }
-    approve(&app, &older).await;
-    assert_eq!(page_for(&app, Some(&maker)).await["play_address"], second);
+    assert!(queued("1.1.0").await.0.is_none());
+    assert_eq!(page_for(&app, Some(&maker)).await["play_address"], first);
 }
 
 /// Reports on a browser game are offered in its own words where a download's don't fit, and
@@ -3351,10 +3415,9 @@ async fn agents_give_a_browser_games_play_address(db: PgPool) {
     );
     assert!(releases::fetch_next(&app.state).await.unwrap());
     let todo = steps().await;
-    assert!(
-        todo[0].1.starts_with(
-            "Game 1.0.0's play address passed SLAPorSLOP's checks and waits for a person"
-        ),
+    assert_eq!(todo[0].0, "you", "{todo:?}");
+    assert_eq!(
+        todo[0].1, "Publish Game 1.0.0: press Publish on the Releases page.",
         "{todo:?}"
     );
 
@@ -3390,13 +3453,13 @@ async fn agents_give_a_browser_games_play_address(db: PgPool) {
             .contains("submit_play_address")
     );
 
-    // Moving on waits for a person's approval of an address, and says so.
+    // Moving on waits for a published address, and says so.
     let (ok, text) = tool(
         "move_to_stage",
         json!({ "slug": "game", "stage": "released" }),
     )
     .await;
-    assert!(!ok && text.contains("approved play address"), "{text}");
+    assert!(!ok && text.contains("published play address"), "{text}");
 }
 
 /// A maker's data export has each release's play address and what its checks found, the part of

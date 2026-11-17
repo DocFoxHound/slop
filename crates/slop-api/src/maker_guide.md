@@ -1,8 +1,9 @@
 # SLAPorSLOP for makers' AI agents
 
 SLAPorSLOP is a store for open-source AI-made apps and games. You work for one maker, through their
-token. You do the writing and fixing in the repository; SLAPorSLOP checks every release, and a person
-reviews it. Read only the guide sections you need (`publishing_guide`).
+token. You do the writing and fixing in the repository; SLAPorSLOP checks every release, and your
+maker publishes it and puts the app in the store, signed in themselves: you can't do either. Read
+only the guide sections you need (`publishing_guide`).
 
 **Start and end with `whats_left`:** every step still open across the person's apps, agreements
 and People page, each saying who does it (`you` = the person, `assistant` = you, `slaporslop` = a
@@ -13,7 +14,7 @@ and links, in plain words.
 
 - **Open source:** a public repository with an OSI licence file (LICENSE), and nothing closed-source the app needs.
 - **Free:** no purchases, payment links, loot boxes or premium currencies. Players support makers with SLAPorSLOP's donate button, which gives nothing back.
-- **No code from outside SLAPorSLOP:** no self-updaters, no downloading code to run. Mods come from SLAPorSLOP. This rule doesn't cover browser games, or dedicated servers (added to their game with `add_dedicated_server`), which may load mods, maps and plugins from other places: say in a server's description what it loads. Only a real server counts (a program people run so others can play a game), and a reviewer checks.
+- **No code from outside SLAPorSLOP:** no self-updaters, no downloading code to run. Mods come from SLAPorSLOP. This rule doesn't cover browser games, or dedicated servers (added to their game with `add_dedicated_server`), which may load mods, maps and plugins from other places: say in a server's description what it loads. Only a real server counts (a program people run so others can play a game).
 - **Saves** go under `SLOP_SAVE_DIR` when it's set ("Saves and sandbox mode").
 - **Online:** say on the store page if the app goes online, and to which hosts.
 - **Words:** say "scanned" or "checked", never "safe". Never invent features the code doesn't have.
@@ -37,7 +38,7 @@ and links, in plain words.
 
 1. Read the repository. Write the store page yourself: title, a one-line summary, and a description of what it is, how to play, and the controls.
 2. `list_categories` for tags (up to 10: what it is, who it's for, how it plays, how it feels). Pick an age (0, 3, 7, 12, 16, 18) and content labels honestly. Kids & Family tags (`max_age` 7) only list apps rated 7+ or under without its `excluded_labels`; don't add them to an older app.
-3. `create_store_page`. It's a draft until a release is approved. To change a page later, read it with `get_store_page` first, then `update_store_page` with only what should change.
+3. `create_store_page`. It's a draft until your maker puts it in the store (a Coming soon page any time, otherwise once a release is published). To change a page later, read it with `get_store_page` first, then `update_store_page` with only what should change.
 4. Pictures: add a `.slop/` folder with `media.json` naming an **icon** (square, 512×512 PNG is
    best; 256 to 1024 pixels a side), a thumbnail (920×430) and screenshots, push, then
    `check_pictures`. Make the icon from the app's own art (its logo, a character, a square crop of
@@ -48,7 +49,7 @@ and links, in plain words.
 5. Before the first release, `check_source`: SLAPorSLOP's source check on what's pushed, without submitting anything. Fix the `must` items it lists (a missing licence file, purchases, code loaded from outside SLAPorSLOP, going online without the store page saying so), push, and check the new commit.
 6. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`. A game that plays on the maker's own website works differently: see the next section.
 
-A **dedicated server** is a program players run on their own computer or a host so others can play your game. Add it to the game with `add_dedicated_server` (or **Add a dedicated server** on the game's Edit store page): it needs its own repository, never the game's (split a repository that holds both first), and Windows and/or Linux like any download. It's an app of its own with its own releases (submit them as for any app; Slop Build works as usual), checked and reviewed the same way, and listed by a reviewer once one is approved. It has no store page of its own: it shows on the game's, players get the game without it unless they tick it, and it goes out of the store whenever the game does. A game can have several (a world server and a lobby server). Its versions are its own: SLAPorSLOP doesn't check which work with which game versions. Not for servers only you run: for those, add `own_servers` to the game's `online`. A server-like program with no game on SLAPorSLOP (a tool) is published as an ordinary app. A reviewer checks a server really is one. Guide section "Dedicated servers".
+A **dedicated server** is a program players run on their own computer or a host so others can play your game. Add it to the game with `add_dedicated_server` (or **Add a dedicated server** on the game's Edit store page): it needs its own repository, never the game's (split a repository that holds both first), and Windows and/or Linux like any download. It's an app of its own with its own releases (submit them as for any app; Slop Build works as usual), checked the same way and published by your maker, who puts it in the store once one is published. It has no store page of its own: it shows on the game's, players get the game without it unless they tick it, and it goes out of the store whenever the game does. A game can have several (a world server and a lobby server). Its versions are its own: SLAPorSLOP doesn't check which work with which game versions. Not for servers only you run: for those, add `own_servers` to the game's `online`. A server-like program with no game on SLAPorSLOP (a tool) is published as an ordinary app. Guide section "Dedicated servers".
 
 ## A game that plays in the browser
 
@@ -64,12 +65,10 @@ game. Play opens its address in the player's browser.
    built from; on GitHub you may leave it out, and SLAPorSLOP takes the default branch's newest.
 4. SLAPorSLOP checks the address in seconds: https, a public site, the bad-link lists, and that it
    loads as a web page, not a download. `list_releases` shows what it found (`address_checks`)
-   and why it failed if it did. Then a person opens it and plays it.
-5. Every new address waits for a person. Giving exactly the same address again (with new notes or
-   a new rating) can be approved automatically; `www.`, the path, the query and the `#` part all
-   count, so any change waits for a person.
+   and why it failed if it did. Once it passes, it's ready for your maker to publish: Play opens
+   it then. A new address is a new site for players, so tell your maker when it changes.
 
-What the reviewer turns down (how they apply the Content Policy, not its words): a page that asks
+What the Content Policy doesn't allow on a play page (SLAPorSLOP acts on reports): a page that asks
 for the password of another service (SLAPorSLOP, Google, Discord…) or for payment details, a page
 that's only there to download a program, and anything sold. A sign-in of the game's own is fine
 if the store page says the game needs an account.
@@ -85,9 +84,33 @@ website also shows it when they next publish). Carry on once they've accepted it
 ## Every release
 
 1. Submit with notes for players: what changed since the last release, from the commits. Plain, short, no hype.
-2. `list_releases` shows its progress (with `limit` 1, only the one you just submitted): fetching, then awaiting_review, then approved (or rejected or failed, with the reason). Its `progress.summary` says which file is being checked and about how long is left ("file 3 of 4 is being scanned"); pass that on, and look again every few minutes. A browser game's play address is checked in seconds. A first release then waits for a person at SLAPorSLOP, usually a day or two. If your maker didn't send a release, or asks you to take one back before it's reviewed, `withdraw_release`; the next release is then reviewed by a person.
-3. `get_fixes`: every problem SLAPorSLOP's checks found, with what to do. Fix the `must` ones first. The checks run on each release, so a new release shows whether the fixes worked; for what the source check found, `check_source` on the pushed commit shows it sooner, with nothing submitted.
-4. Fix, commit, push, and release again with a new version (a browser game: put the fixed game on its site, then `submit_play_address`).
+2. `list_releases` shows its progress (with `limit` 1, only the one you just submitted): fetching, then ready (it passed every check), awaiting_review (on hold), or failed or rejected, with the reason. Its `progress.summary` says which file is being checked and about how long is left ("file 3 of 4 is being scanned"); pass that on, and look again every few minutes. A browser game's play address is checked in seconds. If your maker didn't send a release, or asks you to take one back before it's published, `withdraw_release`.
+3. **Ready:** your maker presses Publish on the Releases page, signed in; then players get it. You can't publish, so tell them it's waiting for them. `new_concerns` (what the source check found that the published release didn't have) and `rating_change` on the release are worth telling them first. New pictures are reviewed before it can be published.
+4. `get_fixes`: every problem SLAPorSLOP's checks found, with what to do. Fix the `must` ones first. The checks run on each release, so a new release shows whether the fixes worked; for what the source check found, `check_source` on the pushed commit shows it sooner, with nothing submitted.
+5. Fix, commit, push, and release again with a new version (a browser game: put the fixed game on its site, then `submit_play_address`).
+
+**On hold** (awaiting_review): `release_hold` says what holds it, each problem in plain words
+(`what`, `explained`) with what can be done (`you_can`). Pass the problems on as they are.
+
+- `scan`: SLAPorSLOP's scanner flagged a file. Scanners sometimes match harmless programs (packed
+  ones, for example). `rescan_release` runs the scanner again on the same files with today's
+  signatures: up to 3 times, 6 hours apart. If the build itself needs changing, submit a new
+  version; once that passes, the held one is withdrawn.
+- `defender`: Microsoft Defender flagged the Windows build. SLAPorSLOP can't run Defender again on
+  the same file: submit the file to Microsoft and build again, or tell staff why it's a false
+  positive.
+- `defender_missing`: the Windows build needs Defender's check. On GitHub, run Slop Check in the
+  repository (guide section "Slop Check"); the release goes on by itself once the result arrives.
+  Slop Check runs on GitHub Actions, so for a repository elsewhere SLAPorSLOP staff check the
+  build by hand; your maker can write to them.
+- `rating_lowered`: it lowers the age rating players are shown, so a SLAPorSLOP staff member
+  checks it first. Or send a new release with the old rating.
+
+`write_to_staff_about_release` tells SLAPorSLOP staff why a held release is fine, or asks about one
+that failed or that staff turned down: only what your maker agrees to say, plain text, up to 2,000 characters, 5 a day per
+release. Staff see an agent wrote it. Their answer is in `release_hold`'s `messages`, and
+`whats_new` says when it came. Staff can clear a hold (no reason needed) or turn the release down
+with a reason.
 
 If `app_overview` has `commit_status`, SLAPorSLOP can also put each release's result on its commit
 on GitHub (a status named SLAPorSLOP), where anyone who can see the commit sees it. It's off until
@@ -95,18 +118,20 @@ your maker switches it on (the Manage page's **Results on GitHub**, or `set_comm
 ask you). `list_releases` stays the place to read the result and the reason: the status never
 says why. Changing the app's repository address switches it off.
 
+**In the store:** a new app stays a draft until your maker puts it in the store, with the button
+on its Manage page (a Coming soon page any time; Beta and Released once a release is published,
+and its pictures are reviewed). You can't do it for them: tell them when it's ready.
+
 Stages go Coming soon → Beta → Released, and the maker moves the app on when they decide to, once
-a release (a browser game: its play address) has been approved: on the website (the stage bar at the top of the app's Manage, Edit
+a release (a browser game: its play address) has been published: on the website (the stage bar at the top of the app's Manage, Edit
 store page and Releases pages) or with `move_to_stage` when they ask you. Only forward; Coming soon has a
 year to reach Beta and Beta a year to be released, or the page leaves the store until it does.
 
 **If a release turns out broken** and your maker wants players off it while you fix it:
-`app_overview` shows the release players get (`serving`) and the approved ones (`approved`), and
-`hold_at_release` with an earlier one's ID moves players back to it and keeps them there. It's
-applied at once when the app's releases are approved without a person (`release_settings` says);
-otherwise it waits for a person, and `cancel_pending_change` takes it back. When the fixed release
-is approved, `hold_at_release` with `release_id` null lets players follow the newest again. Only
-when your maker asks. Not for browser games.
+`app_overview` shows the release players get (`serving`) and the published ones (`approved`), and
+`hold_at_release` with an earlier one's ID moves players back to it at once and keeps them there.
+Publishing the fixed release ends the hold; `hold_at_release` with `release_id` null lets players
+follow the newest again sooner. Only when your maker asks. Not for browser games.
 
 If an app is frozen because SLAPorSLOP can't read its repository, it takes no new releases. Restore
 SLAPorSLOP's access, then `check_repository`: it checks SLAPorSLOP can read the repository again and lifts
@@ -153,7 +178,7 @@ When your maker's app receives an offer, `list_offers` shows it: review the pull
 - Don't spend money, change payout details, accept agreements or change account settings: this token can't, and you shouldn't try.
 - Don't try to set up donations: the person does that themselves (Stripe's own sign-up, 18 or older) in the **Get paid** section at the top of the app's Edit store page (Publish → the app → Edit page; also under Manage → Donations). Point them there when donations come up.
 - Don't submit the same failing release again unchanged. Read `get_fixes` first.
-- Don't make many tiny releases: each one is reviewed by a person.
+- Don't make many tiny releases: each one is downloaded and scanned, and your maker has to publish each one.
 
 ## Finding someone to hire
 

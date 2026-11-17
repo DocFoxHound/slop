@@ -46,6 +46,7 @@ import {
   ChangeCard,
   DisputeCard,
   MediaCard,
+  missingCheckOnly,
   OpsAlerts,
   PortfolioCard,
   ProblemCard,
@@ -255,8 +256,8 @@ interface Quick {
   label: string;
   /** What's announced once it's done: "Approved", "Denied"… */
   done: string;
-  /** The reason the API needs, and who reads it. */
-  reason?: { label: string; placeholder: string };
+  /** The reason the API needs, and who reads it; `optional`: a note that may be left empty. */
+  reason?: { label: string; placeholder: string; optional?: boolean };
   /** Why it can't be done from here (the button is disabled and says so). */
   unavailable?: string;
   run: (reason: string) => Promise<unknown>;
@@ -275,21 +276,18 @@ function quicksFor(box: BoxKey, key: string, d: InboxData): Quicks {
   switch (box) {
     case "releases": {
       const r = q?.releases.find((x) => x.id === key);
-      if (!r) return {};
+      // A maker's question about a failed or turned-down release is answered from its card.
+      if (!r || r.hold.kinds.includes("question") || r.status !== "awaiting_review") return {};
       return {
-        approve: {
-          label: "Approve",
-          done: "Approved and signed",
-          // A browser game's address is approved only after someone opened it and played it: from its card.
-          unavailable: r.play_address
-            ? "Open it and play it first: a play address is approved from its card."
-            : r.status !== "awaiting_review"
-              ? "Only a release waiting for review can be approved."
-              : undefined,
-          run: () => api.admin.approve(r.id),
+        // Accept can't stand in for a missing Defender check: it's waived on the card, by hand.
+        approve: missingCheckOnly(r.hold.kinds) ? undefined : {
+          label: "Accept",
+          done: "Accepted, for its maker to publish:",
+          reason: { label: "Note for the maker (optional)", placeholder: "Optional", optional: true },
+          run: (note) => api.admin.approve(r.id, note),
         },
         deny: {
-          label: "Deny",
+          label: "Reject",
           done: "Rejected",
           reason: { label: "Why (the maker reads this)", placeholder: "Reason, shown to the maker" },
           run: (reason) => api.admin.reject(r.id, reason),
@@ -344,10 +342,7 @@ function quicksFor(box: BoxKey, key: string, d: InboxData): Quicks {
         approve: {
           label: "Keep",
           done: "Kept",
-          reason: {
-            label: "Why it's a false positive (logged, at least 10 characters)",
-            placeholder: "Why it's a false positive",
-          },
+          reason: { label: "Note (optional, logged)", placeholder: "Optional", optional: true },
           run: (reason) => api.admin.clearRescan(release, platform, reason),
         },
         deny: {
@@ -604,7 +599,7 @@ function InboxRow({
           aria-labelledby={questionId}
           onSubmit={(e) => {
             e.preventDefault();
-            if (quick.reason && !reason.trim()) return;
+            if (quick.reason && !quick.reason.optional && !reason.trim()) return;
             void onAct(quick, reason.trim()).then((ok) => {
               if (ok) {
                 setAsking(undefined);
@@ -641,7 +636,7 @@ function InboxRow({
             <ConfirmButton
               buttonRef={yesButton}
               danger={asking === "deny"}
-              disabled={disabled || (!!quick.reason && !reason.trim())}
+              disabled={disabled || (!!quick.reason && !quick.reason.optional && !reason.trim())}
               autoFocus={!quick.reason}
             >
               {busy === row.key ? "…" : `Yes, ${quick.label.toLowerCase()}`}

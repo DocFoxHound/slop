@@ -45,15 +45,16 @@ update, fix and community branch.
 
 ## 🛡️ Checked before it reaches you
 
-Every app is open source, and every download is built from that source, scanned, and looked at by
-a person before anyone can install it. The SLAPorSLOP app then checks every file against what SLAPorSLOP
-approved, when it installs and every time it starts. Games that play in your browser run on their
-maker's own website instead: SLAPorSLOP checks their address and a person plays them before Play
-opens them, but it can't check what the site serves, so they're never marked scanned. Free to
+Every app is open source, and every download is built from that source, signed by its maker,
+scanned, and checked before it's listed. Anything a scanner flags waits for SLAPorSLOP staff, and
+the maker publishes each release themselves. The SLAPorSLOP app then checks every file against what
+SLAPorSLOP signed, when it installs and every time it starts. Games that play in your browser run on
+their maker's own website instead: SLAPorSLOP checks their address before Play opens it, but it
+can't check what the site serves, so they're never marked scanned. Free to
 download, always: no prices, no in-app purchases, no loot boxes.
 
 <p align="center">
-  <img src="docs/images/checks.svg" alt="Every download: open-source code is built and signed in CI, scanned with ClamAV, YARA, capa and Microsoft Defender, reviewed by a person, and verified by the SLAPorSLOP app at install and every launch." width="100%">
+  <img src="docs/images/checks.svg" alt="Every download: open-source code is built and signed in CI, scanned with ClamAV, YARA, capa and Microsoft Defender, published by its maker, and checked by the SLAPorSLOP app at install and every launch." width="100%">
 </p>
 
 <br>

@@ -2484,8 +2484,27 @@ async fn the_maker_mcp_endpoint_speaks_json_rpc_within_the_tokens_limits(db: PgP
     ] {
         assert_eq!(hints(name), (true, false), "{name}");
     }
-    for name in ["submit_release", "create_store_page", "send_job_message"] {
+    for name in [
+        "submit_release",
+        "create_store_page",
+        "send_job_message",
+        "write_to_staff_about_release",
+        "rescan_release",
+    ] {
         assert_eq!(hints(name), (false, false), "{name}");
+    }
+    assert_eq!(hints("release_hold"), (true, false));
+    // Publishing a release and putting an app in the store are the maker's, signed in: no tool
+    // does either.
+    for t in tools {
+        let name = t["name"].as_str().unwrap();
+        assert!(
+            !matches!(
+                name,
+                "publish_release" | "publish" | "list_app" | "put_in_store"
+            ),
+            "{name}"
+        );
     }
     for name in [
         "update_store_page",
@@ -2537,11 +2556,7 @@ async fn the_maker_mcp_endpoint_speaks_json_rpc_within_the_tokens_limits(db: PgP
     let (failed, text) =
         maker_tool(&app, &limited, "app_overview", json!({ "slug": "game" })).await;
     assert!(!failed, "{text}");
-    assert_eq!(
-        parsed(&text)["auto_approval_note"],
-        "an app's first release is always reviewed by a person",
-        "{text}"
-    );
+    assert!(parsed(&text).get("auto_approval_note").is_none(), "{text}");
 
     // my_apps: every app for an all-apps token, only its own for one limited to some.
     let slugs = |text: &str| -> Vec<String> {
@@ -3468,17 +3483,11 @@ async fn move_to_stage_moves_the_app_on(db: PgPool) {
         json!({ "slug": "game", "stage": "released" }),
     )
     .await;
-    assert!(failed && text.contains("approved release"), "{text}");
+    assert!(failed && text.contains("published release"), "{text}");
     let id = submit_and_fetch(&app, &maker, "1.0.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        id.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), id.parse().unwrap())
+        .await
+        .unwrap();
     let (failed, text) = maker_tool(
         &app,
         &publish,
@@ -3707,16 +3716,13 @@ async fn agents_roll_players_back_and_read_what_the_manage_page_shows(db: PgPool
     let app = test_app(db).await;
     let (_, maker) = maker_with_app(&app, "beta").await;
     let first = submit_and_fetch(&app, &maker, "1.0.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        first.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
-    submit_and_fetch(&app, &maker, "1.1.0").await;
+    approve_release(&app, lax(), first.parse().unwrap())
+        .await
+        .unwrap();
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    approve_release(&app, lax(), second.parse().unwrap())
+        .await
+        .unwrap();
     assert_eq!(served_version(&app, &maker).await, "1.1.0");
     let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
     let (publish, _) =
@@ -3800,40 +3806,29 @@ async fn agents_roll_players_back_and_read_what_the_manage_page_shows(db: PgPool
     assert!(failed, "{text}");
     assert_eq!(served_version(&app, &maker).await, "1.0.0");
 
-    // Following the newest again. With automatic updates off a person decides, and until they
-    // have, the agent can take the request back.
-    app.send(
-        req(Method::PUT, "/v1/apps/game/update-settings")
-            .cookie(&maker)
-            .json(json!({ "auto_update": false })),
-    )
-    .await;
+    // There's no automatic publishing to read or switch, and switching settings is the maker's.
     let (failed, text) = maker_tool(&app, &read, "release_settings", game()).await;
     assert!(!failed, "{text}");
-    assert_eq!(parsed(&text)["auto_update"], false);
-    // Switching it back is the maker's, on the website.
+    assert!(parsed(&text).get("auto_update").is_none(), "{text}");
     let res = app
         .send(
             req(Method::PUT, "/v1/apps/game/update-settings")
                 .header("authorization", publish.clone())
-                .json(json!({ "auto_update": true })),
+                .json(json!({ "watch_releases": true })),
         )
         .await;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    // Following the newest again is applied at once too; there's nothing left to take back.
     let (failed, text) = maker_tool(&app, &publish, "hold_at_release", hold(Value::Null)).await;
     assert!(!failed, "{text}");
     let change = parsed(&text);
-    assert_eq!(change["status"], "pending");
-    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+    assert_eq!(change["status"], "approved");
+    assert_eq!(served_version(&app, &maker).await, "1.1.0");
     let cancel = json!({ "slug": "game", "id": change["id"] });
     let (failed, text) = maker_tool(&app, &read, "cancel_pending_change", cancel.clone()).await;
     assert!(failed && text.contains("forbidden"), "{text}");
-    let (failed, text) = maker_tool(&app, &publish, "cancel_pending_change", cancel.clone()).await;
-    assert!(!failed, "{text}");
-    assert_eq!(parsed(&text)["status"], "cancelled");
     let (failed, text) = maker_tool(&app, &publish, "cancel_pending_change", cancel).await;
     assert!(failed && text.contains("conflict"), "{text}");
-    assert_eq!(served_version(&app, &maker).await, "1.0.0");
 
     // The rating and the pictures, as the Manage page shows them.
     let (failed, text) = maker_tool(&app, &read, "app_ratings", game()).await;
@@ -4847,6 +4842,15 @@ async fn whats_left_says_who_does_each_step_with_a_link(db: PgPool) {
     .await;
     let frozen = add_app("frozen").await;
     release(frozen, "awaiting_review", None).await;
+    // On hold for SLAPorSLOP staff (a scanner finding): theirs to look at.
+    sqlx::query(
+        "insert into release_holds (release_id, app_id, kinds, needs_staff)
+         select id, app_id, array['scan'], true from releases where app_id = $1",
+    )
+    .bind(frozen)
+    .execute(&app.db)
+    .await
+    .unwrap();
     sqlx::query(
         "update apps set frozen_at = now(), frozen_reason = 'the repository is private' where id = $1",
     )
@@ -4970,4 +4974,55 @@ async fn whats_left_says_who_does_each_step_with_a_link(db: PgPool) {
     let none = body_json(res).await;
     assert_eq!(none["steps"], json!([]));
     assert!(none["summary"].as_str().unwrap().starts_with("Nothing yet"));
+}
+
+/// A maker's agent reads a release's hold, writes to staff about it and has the scanner run again
+/// (a publish token for the last two), but never publishes a release or puts an app in the store:
+/// those are the maker's, signed in themselves (publish.rs).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_follow_holds_but_never_publish_or_list(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Read", "scope": "read" })).await;
+    let (publish, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Publish", "scope": "publish" }),
+    )
+    .await;
+    let post = |path: String, auth: &str| {
+        req(Method::POST, path)
+            .header("authorization", auth.to_string())
+            .json(json!({}))
+    };
+    for path in [
+        format!("/v1/apps/game/releases/{id}/publish"),
+        "/v1/apps/game/list".to_string(),
+    ] {
+        assert_eq!(
+            app.send(post(path.clone(), publish.as_str()))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN,
+            "{path}"
+        );
+    }
+    for path in [
+        format!("/v1/apps/game/releases/{id}/hold/messages"),
+        format!("/v1/apps/game/releases/{id}/rescan"),
+    ] {
+        assert_eq!(
+            app.send(post(path.clone(), read.as_str())).await.status(),
+            StatusCode::FORBIDDEN,
+            "a read token only looks: {path}"
+        );
+    }
+    let release = json!({ "slug": "game", "id": id });
+    let (failed, text) = maker_tool(&app, &read, "release_hold", release.clone()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["release_id"], id.as_str(), "{text}");
+    // It passed its checks: there's nothing for the scanner to run again on.
+    let (failed, text) = maker_tool(&app, &publish, "rescan_release", release).await;
+    assert!(failed && text.contains("conflict"), "{text}");
 }

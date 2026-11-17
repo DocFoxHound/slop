@@ -35,6 +35,8 @@ Both is fine: do one, then the other.
   Stripe for People).
 - Choose the licence for their code (see below), and anything else that's their decision.
 - Approve their AI tool's connection to SLAPorSLOP, and their GitHub sign-in, in their browser.
+- Press **Publish** on each release that passed SLAPorSLOP's checks, and, the first time, **Put it
+  in the store** on the app's Manage page. An AI agent can't do either.
 
 Everything else is yours: the repository, the code changes SLAPorSLOP needs, the store page or
 People page text, the pictures, the releases, and fixing what SLAPorSLOP's checks find.
@@ -47,7 +49,7 @@ here happens in the person's own browser or their own terminal.
 A **repository** is a folder online that holds the project's code and its history. SLAPorSLOP reads
 the code from there, and players can see it (that's what open source means). Downloads are built
 and checked from it. A game that plays on its maker's own website should be built from it too;
-SLAPorSLOP checks that game's address, and a person plays it. GitHub is the easiest place to keep
+SLAPorSLOP checks that game's address. GitHub is the easiest place to keep
 one, and it's free.
 
 ### 1. A GitHub account (the person)
@@ -121,8 +123,8 @@ project's files in (up to 100 files at a time, 25 MB each).
 
 ## Connecting your tools to SLAPorSLOP
 
-With SLAPorSLOP's tools you can create the store page, submit releases, follow the review and fix
-what it finds. The person connects you once: they add this site's `/mcp` address (e.g.
+With SLAPorSLOP's tools you can create the store page, submit releases, follow their checks and fix
+what they find. The person connects you once: they add this site's `/mcp` address (e.g.
 `https://slaporslop.games/mcp`) to their AI tool and approve it in their browser; no token to
 copy. The publishing guide's [Working with your AI agent](/publishing.md#working-with-your-ai-agent)
 has the steps for each tool (Claude Code, Claude, ChatGPT, Codex, Cursor, Gemini CLI, Grok

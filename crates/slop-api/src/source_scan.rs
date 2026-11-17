@@ -1344,7 +1344,7 @@ fn licence_problems(
             problems.push((
                 "unidentified".into(),
                 format!(
-                    "SLAPorSLOP couldn't tell which licence {} is. A reviewer checks that it's {}.",
+                    "SLAPorSLOP couldn't tell which licence {} is. Make sure it's {}.",
                     l.files[0].path, l.declared
                 ),
             ));
@@ -1417,7 +1417,7 @@ fn licence_problems(
 
 /// The repository is bigger than SLAPorSLOP reads: recorded as not checked, not as a failure.
 #[derive(Debug, thiserror::Error)]
-#[error("the repository is bigger than the {} MiB SLAPorSLOP reads, so a reviewer checks the licence by hand", MAX_ARCHIVE / 1024 / 1024)]
+#[error("the repository is bigger than the {} MiB SLAPorSLOP reads, so its licence isn't checked automatically", MAX_ARCHIVE / 1024 / 1024)]
 struct TooBig;
 
 /// Where a repository's archive at a commit comes from.
@@ -1648,7 +1648,7 @@ pub async fn scan_release(
             (serde_json::to_value(report).unwrap_or_default(), packages)
         }
         Ok(None) => (
-            json!({ "status": "not_checked", "detail": "SLAPorSLOP can only read source on GitHub, GitLab, Bitbucket, Codeberg and other Gitea or Forgejo servers so far; a reviewer checks the licence by hand." }),
+            json!({ "status": "not_checked", "detail": "SLAPorSLOP can only read source on GitHub, GitLab, Bitbucket, Codeberg and other Gitea or Forgejo servers so far, so the licence isn't checked automatically." }),
             vec![],
         ),
         Err(err) if err.downcast_ref::<TooBig>().is_some() => (
@@ -1662,15 +1662,19 @@ pub async fn scan_release(
     }
 }
 
-/// One round: releases waiting for their source check, and failed ones once an hour.
+/// One round: releases waiting for their source check, and failed ones once an hour. A release
+/// its maker can't publish yet without a result (on hold or ready, publish.rs) is tried for as
+/// long as it takes: after a week of failures it's recorded as not checked (`check_release`),
+/// which counts as a result. Published ones are tried for a week after they were sent.
 pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
     let due: Vec<(Uuid, String, String, String, bool)> = sqlx::query_as(
         "select r.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public'
          from releases r join apps a on a.id = r.app_id
-         where r.status in ('awaiting_review', 'approved')
+         where r.status in ('awaiting_review', 'ready', 'approved')
            and (r.repo_scanned_at is null
                 or (r.repo_scan ->> 'status' = 'failed' and r.repo_scanned_at < now() - interval '1 hour'
-                    and r.created_at > now() - interval '7 days'))
+                    and (r.status in ('awaiting_review', 'ready')
+                         or r.created_at > now() - interval '7 days')))
          order by r.repo_scanned_at nulls first, r.created_at desc
          limit $1",
     )
@@ -1760,16 +1764,24 @@ pub async fn flag_for_app(
     }
     // Whether it was a dedicated server when it was checked: the rule on code from outside
     // SLAPorSLOP doesn't cover servers, and the maker chooses the tag, so an app that becomes
-    // one waits for a person (`new_concerns`).
+    // one is pointed out to its maker and logged (`new_concerns`).
     report["dedicated_server"] = json!(page.dedicated_server);
     Ok(())
 }
 
+/// Failed tries to read a release's source, from the first, after which it's recorded as not
+/// checked: Publish waits for a result (publish.rs), and the maker can't fix the host.
+const GIVE_UP_AFTER: time::Duration = time::Duration::days(7);
+/// The reason then, shown to the maker as information.
+pub const UNREADABLE_FOR_A_WEEK: &str = "SLAPorSLOP couldn't read this release's source for a week";
+
 /// Checks one release's source now and stores the result. Called when a release's files are
-/// fetched, before automatic approval, and by the background round for the rest.
+/// fetched, before its checks end (publish.rs), and by the background round for the rest. A
+/// failure keeps when the failures began (`failing_since`); a week of them is recorded as not
+/// checked (`UNREADABLE_FOR_A_WEEK`).
 pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
-    let (app_id, commit): (Uuid, String) =
-        sqlx::query_as("select app_id, commit_sha from releases where id = $1")
+    let (app_id, commit, before): (Uuid, String, Option<Value>) =
+        sqlx::query_as("select app_id, commit_sha, repo_scan from releases where id = $1")
             .bind(id)
             .fetch_one(&state.db)
             .await?;
@@ -1785,6 +1797,30 @@ pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
         )
         .await;
         flag_for_app(state, app_id, &page, &mut report).await?;
+        if report["status"] == "failed" {
+            let now = time::OffsetDateTime::now_utc();
+            let since = before
+                .as_ref()
+                .filter(|b| b["status"] == "failed")
+                .and_then(|b| b["failing_since"].as_str())
+                .and_then(|t| {
+                    time::OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339)
+                        .ok()
+                })
+                .unwrap_or(now);
+            if now - since >= GIVE_UP_AFTER {
+                report = json!({
+                    "status": "not_checked",
+                    "detail": format!("{UNREADABLE_FOR_A_WEEK} ({}).", report["detail"].as_str().unwrap_or("no details").trim_end_matches('.')),
+                });
+            } else {
+                report["failing_since"] = json!(
+                    since
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_default()
+                );
+            }
+        }
         let mut tx = state.db.begin().await?;
         sqlx::query("update releases set repo_scan = $2, repo_scanned_at = now() where id = $1")
             .bind(id)
@@ -1878,38 +1914,50 @@ fn new_kinds(new: &[String]) -> String {
     }
 }
 
-/// Why an update needs a person after all: its source check found something the app's last
-/// approved release didn't have (a new monetization pattern or licence problem), the source
-/// couldn't be read, or it's a dedicated server now and wasn't when that release was checked (a
-/// person checks it really is one, since the rule on code from outside SLAPorSLOP doesn't cover
-/// servers). None when there's nothing new.
-pub async fn new_concerns(db: &sqlx::PgPool, release_id: Uuid) -> anyhow::Result<Option<String>> {
-    let (this, before): (Option<Value>, Option<Value>) = sqlx::query_as(
-        "select r.repo_scan,
-                (select p.repo_scan from releases p
-                 where p.app_id = r.app_id and p.id <> r.id and p.status = 'approved'
-                 order by p.reviewed_at desc limit 1)
-         from releases r where r.id = $1",
+/// What a release's source check found that the app's last published release didn't have (a new
+/// monetization pattern or licence problem), that its source couldn't be read, or that it's a
+/// dedicated server now and wasn't when that release was checked. Shown to its maker before they
+/// publish it and logged (publish.rs): not a reason to wait. None when there's nothing new.
+pub async fn new_concerns(
+    conn: &mut sqlx::PgConnection,
+    release_id: Uuid,
+) -> anyhow::Result<Option<String>> {
+    type Row = (Option<Value>, Option<Value>, Option<String>);
+    let (this, before, last_version): Row = sqlx::query_as(
+        "select r.repo_scan, p.repo_scan, p.version
+         from releases r
+         left join lateral (select p.repo_scan, p.version from releases p
+                            where p.app_id = r.app_id and p.id <> r.id and p.status = 'approved'
+                            order by p.published_at desc nulls last limit 1) p on true
+         where r.id = $1",
     )
     .bind(release_id)
-    .fetch_one(db)
+    .fetch_one(conn)
     .await?;
-    let is_server = |scan: Option<&Value>| scan.is_some_and(|s| s["dedicated_server"] == true);
-    let became_server = is_server(this.as_ref()) && !is_server(before.as_ref());
-    let server =
-        "it's now in the Servers category, so a person checks it really is a dedicated server";
     let Some(now) = concerns(this.as_ref().unwrap_or(&Value::Null)) else {
         return Ok(Some(
-            "SLAPorSLOP couldn't read this release's source, so a person checks it".into(),
+            "SLAPorSLOP couldn't read this release's source".into(),
         ));
     };
+    // The first release: everything it has is new, and it can't have become anything.
+    let Some(last_version) = last_version else {
+        return Ok((!now.is_empty()).then(|| {
+            format!(
+                "the source check found {}",
+                new_kinds(&now.into_iter().collect::<Vec<_>>())
+            )
+        }));
+    };
+    let is_server = |scan: Option<&Value>| scan.is_some_and(|s| s["dedicated_server"] == true);
+    let became_server = is_server(this.as_ref()) && !is_server(before.as_ref());
+    let server = "it's now in the Servers category";
     let before = before.as_ref().and_then(concerns).unwrap_or_default();
     let new: Vec<String> = now.difference(&before).cloned().collect();
     if new.is_empty() {
         return Ok(became_server.then(|| server.to_string()));
     }
     let found = format!(
-        "the source check found {} the last approved release didn't have",
+        "the source check found {} that {last_version} didn't have",
         new_kinds(&new)
     );
     Ok(Some(if became_server {

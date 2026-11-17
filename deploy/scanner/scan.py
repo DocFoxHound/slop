@@ -8,10 +8,10 @@ Static checks only; nothing in the file is ever run:
 
 Archives (.zip, .tar.*, .deb, .rpm) are unpacked into a size-limited scratch folder first.
 
-Verdicts (DESIGN §10): "on_hold" when ClamAV or YARA finds something (a person checks it: it may
-be a false positive), or when the file couldn't be scanned completely (an archive that won't
-unpack, one past the size limits, an engine error or timeout, missing signatures): a file that
-wasn't fully scanned never passes on its own. "note" when capa reports capabilities a reviewer
+Verdicts (DESIGN §10): "on_hold" when ClamAV or YARA finds something (SLAPorSLOP staff look at
+it: it may be a false positive), or when the file couldn't be scanned completely (an archive that
+won't unpack, one past the size limits, an engine error or timeout, missing signatures): a file
+that wasn't fully scanned never passes on its own. "note" when capa reports capabilities a reviewer
 should look at, else "passed". The detail is written for the maker and the reviewer.
 
 Usage: slop-scan <path> [name], or slop-scan - <name> with the file on stdin.
@@ -129,7 +129,7 @@ def main():
         with open(target, "wb") as fh:
             shutil.copyfileobj(sys.stdin.buffer, fh, 1024 * 1024)
     findings, capabilities, notes, engines = [], [], [], {}
-    # Why the file wasn't scanned completely; any of these holds it for a person.
+    # Why the file wasn't scanned completely; any of these holds it for SLAPorSLOP staff.
     incomplete = []
     try:
         tree = os.path.join(work, "files")
@@ -207,11 +207,11 @@ def main():
         result = "on_hold"
         names = sorted({f"{f['engine']}: {f['name']} in {f['file']}" for f in findings})
         detail = "Flagged by " + "; ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "") + \
-            ". A person checks it before it can be approved; it may be a false positive."
+            ". SLAPorSLOP staff look at it; it may be a false positive."
     elif incomplete:
         result = "on_hold"
         detail = "Not fully scanned: " + "; ".join(incomplete) + \
-            ". A person checks it before it can be approved."
+            ". SLAPorSLOP staff look at it."
     elif capabilities:
         result = "note"
         kinds = sorted({c["capability"] for c in capabilities})

@@ -15,6 +15,8 @@
 //!   results on GitHub end (commit_status.rs; statuses already on GitHub stay);
 //! - what its AI agents wrote to SLAPorSLOP's admins (admin_messages.rs) is deleted, and so are
 //!   its open requests on People and its names put forward for other people's requests;
+//! - what they wrote to SLAPorSLOP staff about their releases (holds.rs) is blanked, while the
+//!   conversation, staff's answers and SLAPorSLOP's own lines stay with the release;
 //! - agreements, job records, reviews and moderation records stay as they were.
 //!
 //! An account with an unfinished People job, a payment it owes, or a bounty pledge being charged
@@ -127,9 +129,27 @@ const EXPORT: &[(&str, &str)] = &[
         "app_releases",
         "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'version', r.version, 'commit', r.commit_sha,
                 'status', r.status, 'submitted_at', r.created_at, 'reviewed_at', r.reviewed_at,
-                'revoked_at', r.revoked_at, 'signed_manifest', r.signed_manifest,
+                'published_at', r.published_at, 'revoked_at', r.revoked_at, 'signed_manifest', r.signed_manifest,
                 'play_address', r.play_address, 'address_checks', r.address_checks) order by r.created_at), '[]')
          from releases r join apps a on a.id = r.app_id where a.maker_id = $1",
+    ),
+    (
+        // Holds on the maker's releases and their questions about failed ones (holds.rs): what
+        // held each, and the conversation with SLAPorSLOP staff (staff by role, never by name).
+        "release_conversations",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'version', r.version, 'hold', h.status,
+                'kinds', h.kinds, 'opened_at', h.opened_at, 'closed_at', h.closed_at,
+                'messages', (select coalesce(jsonb_agg(jsonb_build_object(
+                                 'from', case when m.kind = 'system' then 'slaporslop' when m.from_staff then 'staff'
+                                              when m.author_id = $1 then 'you' else 'maker' end,
+                                 'by_agent', m.by_agent, 'body', m.body, 'detail', m.detail, 'sent_at', m.created_at)
+                                 order by m.created_at, m.id), '[]')
+                             from release_hold_messages m where m.release_id = h.release_id))
+                order by h.opened_at), '[]')
+         from release_holds h join releases r on r.id = h.release_id join apps a on a.id = h.app_id
+         where a.maker_id = $1
+            or exists (select 1 from release_hold_messages m
+                       where m.release_id = h.release_id and m.author_id = $1 and not m.from_staff)",
     ),
     (
         // The maker's apps with results on GitHub switched on, now or before, with what GitHub
@@ -622,6 +642,16 @@ pub async fn close_account(
     ] {
         sqlx::query(sql).bind(user_id).execute(&mut *tx).await?;
     }
+    // What they wrote to SLAPorSLOP staff about their releases goes; the conversation keeps its
+    // place (holds.rs), so staff's answers and SLAPorSLOP's lines still read.
+    sqlx::query(
+        "update release_hold_messages set author_id = null, body = $2
+         where author_id = $1 and not from_staff",
+    )
+    .bind(user_id)
+    .bind(crate::holds::DELETED_MESSAGE)
+    .execute(&mut *tx)
+    .await?;
     // Private apps: nothing is shared with them any more, and their own stops being shared, with
     // people and with teams.
     sqlx::query(

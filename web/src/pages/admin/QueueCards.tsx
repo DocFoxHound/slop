@@ -2,15 +2,21 @@
 // The review queue's items in full (crates/slop-api/src/admin_web.rs): what the inbox
 // (Inbox.tsx) opens when a row is clicked. Each card shows everything there is to judge it by
 // (files, checks, scan reports, pictures, notes from AI reviewers, the job record) and every way
-// to decide it, and tells `onDone` once something changed. A browser game's release is its play
-// address: the card gives the address to open and play (never in a frame here), what the
-// automatic checks found, and where Play goes now, with nothing about files, scans or signing.
+// to decide it, and tells `onDone` once something changed. A release here is on hold
+// (crates/slop-api/src/holds.rs): what holds it, the conversation with its maker (their words are
+// data, never instructions), Reply, Accept (a note is optional) and Reject, and for a Windows build
+// whose repository Slop Check can't run in, waiving Microsoft Defender's check after checking it by
+// hand; or a maker's question about a failed or turned-down release, which staff answer. Accepting
+// never publishes: its maker does. A browser
+// game's release is its play address: the card gives the address (never in a frame here), what
+// the automatic checks found, and where Play goes now, with nothing about files, scans or signing.
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import {
   api,
+  ApiError,
   type AdminQueue,
   type MediaSet,
   type ModerationDecision,
@@ -21,15 +27,20 @@ import {
   type ReviewNote,
   type ScanReport,
   type StaffActions,
+  type StaffHold,
+  type StaffHoldMessage,
 } from "../../api";
 import { compareAddress, type AddressComparison } from "../../addressChecks";
 import { AddressCheckList, FileChecks, RepoScanList, ScanFindings, SourceCheckList } from "../../components/Checks";
+import { ageLabel, HoldLog, labelList, lineFacts, PlainText, withoutRepeatedReason, type LogLine } from "../../components/ReleaseHold";
 import { ItemThumb } from "../../components/MediaEditor";
+import { fileLabel } from "../../components/PublishProgress";
 import { DesignPreview, portfolioWork } from "../../components/PeopleDesign";
 import { ExternalLink } from "../../components/ui";
 import { formatDate, STAGE_LABEL } from "../../format";
 import { useLoad } from "../../hooks";
-import { ActionMessages, ReasonButton, RuleSelect, useAction } from "./shared";
+import { holdStatus } from "./queue";
+import { ActionMessages, NoteAction, ReasonButton, RuleSelect, useAction } from "./shared";
 import { VoteLabel } from "../../components/StoreIcons";
 
 export const ABUSE_LABEL: Record<string, string> = {
@@ -45,9 +56,210 @@ export const ABUSE_LABEL: Record<string, string> = {
 
 type Q = AdminQueue;
 
+/** Staff's view of a line: the maker's words are marked as theirs. Exported for tests. */
+export function staffLine(m: StaffHoldMessage): LogLine {
+  const maker = m.from === "maker";
+  return {
+    key: m.id,
+    who:
+      m.from === "slaporslop"
+        ? "SLAPorSLOP"
+        : maker
+          ? `${m.author ?? "The maker"}${m.by_agent ? " (their AI agent)" : ""}, the maker`
+          : `${m.author ?? "SLAPorSLOP staff"}${m.by_agent ? " (an AI reviewer)" : ""}`,
+    mine: m.from === "staff",
+    body: (maker ? m.untrusted_text : m.text) ?? "",
+    facts: lineFacts(m.detail),
+    at: m.at,
+  };
+}
+
+/** What holds a release, the rating it lowers, and the conversation with its maker, with Reply. */
+function HoldPanel({ r, hold, onDone }: { r: Q["releases"][number]; hold: StaffHold; onDone: () => void }) {
+  const question = hold.kinds.includes("question");
+  return (
+    <div className="release-hold">
+      {question ? (
+        r.status === "rejected" ? (
+          <p className="small">
+            <b>The maker asks about this release SLAPorSLOP staff turned down.</b> The reason given: {r.status_reason ?? "no reason recorded"}.
+            Answer below; answering closes the question (they can ask again).
+          </p>
+        ) : (
+          <p className="small">
+            <b>The maker asks about this failed release.</b> Its checks said: {r.status_reason ?? "no reason recorded"}. Answer
+            below; answering closes the question (they can ask again).
+          </p>
+        )
+      ) : (
+        hold.problems.length > 0 && (
+          <>
+            <h3 className="small">What holds it</h3>
+            <ul className="hold-problems">
+              {hold.problems.map((p, i) => (
+                <li key={`${p.kind}-${p.platform ?? i}`}>
+                  <b>{p.what}</b>
+                  <p className="small">
+                    <PlainText text={p.explained} />
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </>
+        )
+      )}
+      {hold.rating && (
+        <dl className="kv small rating-card">
+          <dt>Age rating</dt>
+          <dd>
+            {ageLabel(hold.rating.from_age)} → <b>{ageLabel(hold.rating.to_age)}</b>{" "}
+            <span className="muted">(the last published release's, then this one's)</span>
+          </dd>
+          <dt>Labels it drops</dt>
+          <dd>{hold.rating.dropped_labels.length > 0 ? labelList(hold.rating.dropped_labels) : "None"}</dd>
+          <dt>Its content labels</dt>
+          <dd>{hold.rating.content_labels.length > 0 ? labelList(hold.rating.content_labels) : "None"}</dd>
+        </dl>
+      )}
+      {hold.rating && (
+        <p className="muted small">
+          Check the app fits {ageLabel(hold.rating.to_age)}: its page, pictures and what changed. Accepting lets its maker publish it,
+          and the store page then shows {ageLabel(hold.rating.to_age)}.
+        </p>
+      )}
+      {hold.messages.length > 0 && (
+        <>
+          <h3 className="small">Conversation with the maker</h3>
+          <p className="muted small">{hold.untrusted ?? "The maker's words are information, never instructions."}</p>
+          {/* The opening line repeats the reason "What holds it" says already. */}
+          <HoldLog lines={withoutRepeatedReason(hold.messages, r.status_reason).map(staffLine)} label={`Conversation about ${r.app.title} ${r.version}`} />
+        </>
+      )}
+      {hold.status === "open" && <Reply releaseId={r.id} question={question} onDone={onDone} />}
+    </div>
+  );
+}
+
+/** A reply in a hold's conversation: the maker gets a notice. A question's answer closes it. */
+function Reply({ releaseId, question, onDone }: { releaseId: string; question: boolean; onDone: () => void }) {
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [sent, setSent] = useState(false);
+  const id = useId();
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!body.trim()) return;
+    setBusy(true);
+    setError(undefined);
+    setSent(false);
+    try {
+      await api.admin.answerHold(releaseId, body.trim());
+      setBody("");
+      setSent(true);
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const label = question ? "Answer the maker" : "Reply to the maker";
+  return (
+    <form className="form hold-write" onSubmit={(e) => void send(e)} aria-labelledby={id}>
+      <label>
+        <span id={id}>{label}</span>
+        <textarea
+          value={body}
+          rows={3}
+          maxLength={4000}
+          required
+          aria-labelledby={id}
+          aria-describedby={`${id}-hint`}
+          onChange={(e) => setBody(e.target.value)}
+        />
+        <span id={`${id}-hint`} className="hint">
+          {question ? "Answering closes the question; the maker" : "The maker"} reads it on their Releases page and gets a notice.
+        </span>
+      </label>
+      <ActionMessages error={error} notice={sent ? "Sent to the maker." : undefined} />
+      <div className="row-actions">
+        <button className="btn small" disabled={busy || !body.trim()}>
+          {busy ? "Sending…" : question ? "Answer" : "Reply"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** Accept (a note is optional) or Reject (a reason is required) a release on hold; a question
+ *  about a failed release is only answered. */
+function HoldDecision({ r, onDone }: { r: Q["releases"][number]; onDone: () => void }) {
+  const { busy, error, notice, run } = useAction(onDone);
+  if (r.hold.kinds.includes("question") || r.status !== "awaiting_review") return null;
+  // Only a missing Defender check holds it: Accept can't stand in for that check.
+  const missingOnly = missingCheckOnly(r.hold.kinds);
+  return (
+    <>
+      <ActionMessages error={error} notice={notice} />
+      <p className="muted small">
+        {missingOnly
+          ? waivable(r.hold).length > 0
+            ? "Only Microsoft Defender's missing check holds it. Check the Windows build by hand, then waive the check on its file above; it then waits for its maker to publish it. Or reject it."
+            : "Only Microsoft Defender's missing check holds it: it goes on by itself once its maker runs Slop Check. Reply to them, or reject it."
+          : `Accept clears what holds it${r.hold.rating ? " (and accepts the lower rating)" : " as a false positive"}; it then waits for its maker to publish it. Nothing reaches players until they do.`}
+      </p>
+      <div className="row-actions">
+        {!missingOnly && (
+          <NoteAction
+            label={busy === r.id ? "Accepting…" : "Accept"}
+            primary
+            disabled={busy !== undefined}
+            onSubmit={(note) => void run(r.id, () => api.admin.approve(r.id, note))}
+          />
+        )}
+        <ReasonButton
+          label="Reject"
+          placeholder="Reason, shown to the maker"
+          danger
+          disabled={busy !== undefined}
+          onSubmit={(reason) => void run(r.id, () => api.admin.reject(r.id, reason))}
+        />
+      </div>
+    </>
+  );
+}
+
+/** Only a missing Microsoft Defender check holds it. Exported for tests. */
+export const missingCheckOnly = (kinds: string[]) => kinds.length > 0 && kinds.every((k) => k === "defender_missing");
+
+/**
+ * The platforms whose missing Defender check staff can waive: the hold is open on one, and Slop
+ * Check can't run for its repository (its problem offers the maker no Slop Check). Exported for tests.
+ */
+export function waivable(hold: Pick<StaffHold, "status" | "problems">): string[] {
+  if (hold.status !== "open") return [];
+  return hold.problems
+    .filter((p) => p.kind === "defender_missing" && p.platform && !p.you_can.includes("run_slop_check"))
+    .map((p) => p.platform as string);
+}
+
+/** A release's badge: failed, turned down, or on hold. */
+function statusBadge(status: string): { label: string; tone: string } {
+  if (status === "failed") return { label: "FAILED", tone: "bad" };
+  if (status === "rejected") return { label: "REJECTED", tone: "bad" };
+  return { label: "ON HOLD", tone: "warn" };
+}
+
+/** The release's reason, unless the hold says it already: what holds it, or the maker's question. */
+const showReason = (r: Q["releases"][number]) => Boolean(r.status_reason) && r.status !== "awaiting_review" && !r.hold.kinds.includes("question");
+
 export function ReleaseCard({ r, onDone }: { r: Q["releases"][number]; onDone: () => void }) {
   const { busy, error, notice, run } = useAction(onDone);
   if (r.play_address) return <AddressCard r={r} address={r.play_address} onDone={onDone} />;
+  const label = holdStatus(r.hold);
+  const badge = statusBadge(r.status);
+  const canWaive = waivable(r.hold);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -58,13 +270,14 @@ export function ReleaseCard({ r, onDone }: { r: Q["releases"][number]; onDone: (
           <span className="muted">
             {r.version} · by {r.app.maker}
           </span>
-          <span className={`badge ${r.status === "failed" ? "bad" : r.status === "fetching" ? "neutral" : "soon"}`}>
-            {r.status === "awaiting_review" ? "AWAITING REVIEW" : r.status.toUpperCase()}
-          </span>
+          <span className={`badge ${badge.tone}`}>{badge.label}</span>
+          <span className={`badge ${label.tone}`}>{label.label.toUpperCase()}</span>
+          {r.hold.unanswered && <span className="badge soon">MAKER WROTE</span>}
         </div>
         <span className="muted small">{formatDate(r.created_at)}</span>
       </div>
-      {r.status_reason && <p className="notice">{r.status_reason}</p>}
+      {showReason(r) && <p className="notice">{r.status_reason}</p>}
+      <HoldPanel r={r} hold={r.hold} onDone={onDone} />
       <dl className="kv">
         <dt>Repository</dt>
         <dd>
@@ -85,31 +298,19 @@ export function ReleaseCard({ r, onDone }: { r: Q["releases"][number]; onDone: (
           <FileRow
             key={f.platform}
             file={f}
+            holdKinds={r.hold.kinds}
             canClear={r.status === "awaiting_review" && busy === undefined}
-            onClear={(reason) => void run(`${r.id}/${f.platform}`, () => api.admin.clearScan(r.id, f.platform, reason))}
+            onClear={(note) => void run(`${r.id}/${f.platform}`, () => api.admin.clearScan(r.id, f.platform, note))}
+            waivable={canWaive.includes(f.platform) && !f.defender_waived}
+            onWaive={(note) => void run(`${r.id}/${f.platform}/waive`, () => api.admin.waiveDefender(r.id, f.platform, note))}
           />
         ))}
       </dl>
+      <ActionMessages error={error} notice={notice} />
       <SourceCheckList checks={r.source_checks} audience="reviewer" />
       <RepoScanList scan={r.repo_scan} advisories={r.advisories} audience="reviewer" />
       <Notes notes={r.notes} />
-      <ActionMessages error={error} notice={notice} />
-      <div className="row-actions">
-        <button
-          className="btn slime small"
-          disabled={busy !== undefined || r.status !== "awaiting_review"}
-          onClick={() => void run(r.id, () => api.admin.approve(r.id))}
-        >
-          {busy === r.id ? "Approving…" : "Approve and sign"}
-        </button>
-        <ReasonButton
-          label="Reject"
-          placeholder="Reason, shown to the maker"
-          danger
-          disabled={busy !== undefined}
-          onSubmit={(reason) => void run(r.id, () => api.admin.reject(r.id, reason))}
-        />
-      </div>
+      <HoldDecision r={r} onDone={onDone} />
     </li>
   );
 }
@@ -130,14 +331,15 @@ const VS_WITHDRAWN: Record<AddressComparison, ReactNode> = {
 };
 
 /**
- * A browser game's release: its play address. The reviewer opens it in a new tab (with no
- * referrer; never in a frame on this page) and plays it. Nothing is signed: approving it makes it
- * the address Play opens. Where Play goes now is beside it: the current address, or the one
- * SLAPorSLOP withdrew, so a resubmitted address is never taken for a first one.
+ * A browser game's release on hold (a lowered rating, or its maker asking about a failed one): its
+ * play address, to open in a new tab (with no referrer; never in a frame on this page), and where
+ * Play goes now beside it: the current address, or the one SLAPorSLOP withdrew, so a resubmitted
+ * address is never taken for a first one. Nothing is signed; accepting lets its maker publish it.
  */
 function AddressCard({ r, address, onDone }: { r: Q["releases"][number]; address: string; onDone: () => void }) {
-  const { busy, error, notice, run } = useAction(onDone);
   const [copied, setCopied] = useState(false);
+  const label = holdStatus(r.hold);
+  const badge = statusBadge(r.status);
   const current = r.current_play_address ?? null;
   const withdrawn = r.withdrawn_play_address ?? null;
   const copy = () =>
@@ -156,14 +358,15 @@ function AddressCard({ r, address, onDone }: { r: Q["releases"][number]; address
             {r.version} · by {r.app.maker}
           </span>
           <span className="badge neutral">PLAY ADDRESS</span>
-          <span className={`badge ${r.status === "failed" ? "bad" : r.status === "fetching" ? "neutral" : "soon"}`}>
-            {r.status === "awaiting_review" ? "AWAITING REVIEW" : r.status === "fetching" ? "CHECKING" : r.status.toUpperCase()}
-          </span>
+          <span className={`badge ${badge.tone}`}>{badge.label}</span>
+          <span className={`badge ${label.tone}`}>{label.label.toUpperCase()}</span>
+          {r.hold.unanswered && <span className="badge soon">MAKER WROTE</span>}
         </div>
         <span className="muted small">{formatDate(r.created_at)}</span>
       </div>
-      {r.status_reason && <p className="notice">{r.status_reason}</p>}
+      {showReason(r) && <p className="notice">{r.status_reason}</p>}
       {r.newer_approved && <p className="notice">{r.newer_approved.note}.</p>}
+      <HoldPanel r={r} hold={r.hold} onDone={onDone} />
       <dl className="kv">
         <dt>Play address</dt>
         <dd>
@@ -195,7 +398,7 @@ function AddressCard({ r, address, onDone }: { r: Q["releases"][number]; address
               Nothing: SLAPorSLOP withdrew <code>{withdrawn}</code> {VS_WITHDRAWN[compareAddress(address, withdrawn) ?? "new_site"]}
             </>
           ) : (
-            <span className="muted">Nothing yet: no address of this game has been approved before.</span>
+            <span className="muted">Nothing yet: no address of this game has been published before.</span>
           )}
         </dd>
         <dt>Repository</dt>
@@ -219,23 +422,7 @@ function AddressCard({ r, address, onDone }: { r: Q["releases"][number]; address
       <SourceCheckList checks={r.source_checks} audience="reviewer" />
       <RepoScanList scan={r.repo_scan} advisories={r.advisories} audience="reviewer" browser />
       <Notes notes={r.notes} />
-      <ActionMessages error={error} notice={notice} />
-      <div className="row-actions">
-        <button
-          className="btn slime small"
-          disabled={busy !== undefined || r.status !== "awaiting_review"}
-          onClick={() => void run(r.id, () => api.admin.approve(r.id))}
-        >
-          {busy === r.id ? "Approving…" : "Approve address"}
-        </button>
-        <ReasonButton
-          label="Reject"
-          placeholder="Reason, shown to the maker"
-          danger
-          disabled={busy !== undefined}
-          onSubmit={(reason) => void run(r.id, () => api.admin.reject(r.id, reason))}
-        />
-      </div>
+      <HoldDecision r={r} onDone={onDone} />
     </li>
   );
 }
@@ -271,7 +458,7 @@ export function ChangeCard({ c, onDone }: { c: Q["changes"][number]; onDone: () 
             <dt>Players get</dt>
             <dd>{c.players_get ? `v${c.players_get}` : "nothing yet"}</dd>
             <dt>Change to</dt>
-            <dd>{c.release_id ? `v${c.release_version} (held there)` : "the newest approved release"}</dd>
+            <dd>{c.release_id ? `v${c.release_version} (held there)` : "the newest published release"}</dd>
           </>
         )}
         {c.note && (
@@ -539,7 +726,7 @@ export function ReadyCard({ a, onDone }: { a: Q["ready_to_list"][number]; onDone
             <b>{a.title}</b>
           </Link>
           <span className="muted">
-            {STAGE_LABEL[a.stage]} · by {a.maker} · {a.approved_releases} approved release
+            {STAGE_LABEL[a.stage]} · by {a.maker} · {a.approved_releases} published release
             {a.approved_releases === 1 ? "" : "s"}
             {a.going_public && " · Private app going public: check the repository and licence from scratch"}
             {a.after_appeal && " · Reinstated on appeal"}
@@ -608,11 +795,11 @@ export function RescanCard({ f, onDone }: { f: Q["rescans"][number]; onDone: () 
           disabled={busy !== undefined}
           onSubmit={(reason) => void run(f.release_id, () => api.admin.revoke(f.release_id, reason))}
         />
-        <ReasonButton
+        <NoteAction
           label="Keep it: false positive"
-          placeholder="Why it's a false positive (logged, at least 10 characters)"
+          noteLabel="Note (optional, logged)"
           disabled={busy !== undefined}
-          onSubmit={(reason) => void run(f.release_id, () => api.admin.clearRescan(f.release_id, f.platform, reason))}
+          onSubmit={(note) => void run(f.release_id, () => api.admin.clearRescan(f.release_id, f.platform, note))}
         />
       </div>
     </li>
@@ -708,20 +895,34 @@ export function StaffActionCard({
 
 function FileRow({
   file,
+  holdKinds,
   canClear,
   onClear,
+  waivable = false,
+  onWaive,
 }: {
   file: AdminQueue["releases"][number]["files"][number];
+  /** What the hold is about: a file is cleared only for what holds it. */
+  holdKinds: string[];
   canClear: boolean;
   onClear: (reason: string) => void;
+  /** Its Defender check is missing and can be waived (Slop Check can't run for the repository). */
+  waivable?: boolean;
+  onWaive?: (reason: string) => void;
 }) {
   const scanHeld =
+    !file.cleared &&
+    holdKinds.includes("scan") &&
     file.scan_result !== null &&
     !["passed", "note", "skipped"].includes(file.scan_result);
-  const defenderMissing =
+  // Defender's detections are cleared on their own; a missing check is waived, never cleared.
+  const defenderHeld =
+    !file.defender_cleared &&
+    holdKinds.includes("defender") &&
     file.platform === "windows" &&
-    (!file.defender || file.defender.detections.length > 0);
-  const clearable = !file.cleared_reason && (scanHeld || defenderMissing);
+    Boolean(file.defender && file.defender.detections.length > 0);
+  const clearable = scanHeld || defenderHeld;
+  const label = fileLabel(file);
   return (
     <>
       <dt>{file.platform}</dt>
@@ -765,13 +966,29 @@ function FileRow({
         <FileChecks file={file} audience="reviewer" />
         {clearable && (
           <div className="row-actions">
-            <ReasonButton
+            <NoteAction
               label="Clear as a false positive"
-              placeholder="Why it's a false positive (logged, at least 10 characters)"
+              noteLabel={`Note for the maker about the ${label} build (optional)`}
               disabled={!canClear}
               onSubmit={onClear}
             />
           </div>
+        )}
+        {waivable && onWaive && (
+          <>
+            <p className="muted small">
+              Slop Check can't run for a repository outside GitHub, so Microsoft Defender hasn't checked this build. Check it by
+              hand first; waiving lets the release go on without that check.
+            </p>
+            <div className="row-actions">
+              <NoteAction
+                label="Waive Microsoft Defender's check"
+                noteLabel={`Note for the maker about the ${label} build (optional)`}
+                disabled={!canClear}
+                onSubmit={onWaive}
+              />
+            </div>
+          </>
         )}
       </dd>
     </>
@@ -802,7 +1019,7 @@ export function OpsAlerts() {
 export function ServerChecks({ checks }: { checks: AdminQueue["checks"] }) {
   const notes = [
     !checks.signing_key &&
-      "No signing key is set (SLOP_SIGNING_KEY), so nothing can be approved.",
+      "No signing key is set (SLOP_SIGNING_KEY), so makers can't publish releases.",
     !checks.scanning && "Scanning is off: files are not scanned.",
     !checks.maker_signatures_required &&
       "Maker signatures aren't required on this server.",

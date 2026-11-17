@@ -405,7 +405,7 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .library-art .art { aspect-ratio: 460 / 215; }
 .library-art .art .initial { font-size: 34px; }
 .library-info { min-width: 0; }
-.release-list li { display: flex; flex-direction: column; gap: 6px; }
+.release-list > li { display: flex; flex-direction: column; gap: 6px; }
 .release-list p { margin: 0; }
 .file-row { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; margin: 0; }
 .file-row legend { font-weight: 600; font-size: 13px; padding: 0 6px; }
@@ -557,6 +557,19 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 .findings { margin: 4px 0; padding-left: 18px; color: var(--bad, inherit); }
 .findings li { margin: 2px 0; }
 .source-checks { display: grid; gap: 4px; margin-top: 8px; }
+/* A release on hold, its conversation with staff, and Publish (ReleaseHold.tsx, Releases.tsx). */
+.release-hold, .publish-panel { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.release-hold { border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.04); }
+.publish-panel { border-color: color-mix(in srgb, var(--slime) 40%, var(--line)); }
+.release-hold h3, .publish-panel h3 { margin: 0; font-size: 15px; }
+.hold-problems, .publish-notes { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.hold-problems p { margin: 2px 0 0; }
+.hold-log { margin: 0; }
+.hold-write textarea { width: 100%; }
+.past-hold > summary { cursor: pointer; }
+.note-action label { display: flex; flex-direction: column; gap: 2px; }
+.list-panel { margin-bottom: 16px; }
+.list-panel h2 { margin-top: 0; }
 .source-checks ul { margin: 4px 0; padding-left: 18px; }
 .admin .row-actions { margin-top: 8px; }
 .audit { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 16px; }

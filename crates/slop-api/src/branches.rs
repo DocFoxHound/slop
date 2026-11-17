@@ -243,9 +243,9 @@ pub async fn community(
         &state.config,
         ", (select u.display_name from users u where u.id = a.maker_id) as author, a.branch_kind, a.branch_note, a.platforms,
            coalesce((select (r.repo_scan ->> 'mod_code')::boolean from releases r
-                     where r.app_id = a.id and r.status = 'approved' order by r.reviewed_at desc limit 1), false) as mod_code,
+                     where r.app_id = a.id and r.status = 'approved' order by r.published_at desc limit 1), false) as mod_code,
            a.branch_kind = 'addon' and (cardinality(a.online) > 0 or coalesce((select (r.repo_scan ->> 'mod_online')::boolean from releases r
-                     where r.app_id = a.id and r.status = 'approved' order by r.reviewed_at desc limit 1), false)) as mod_online",
+                     where r.app_id = a.id and r.status = 'approved' order by r.published_at desc limit 1), false)) as mod_online",
     );
     qb.push(" where a.parent_app_id = ")
         .push_bind(app_id)

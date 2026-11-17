@@ -108,7 +108,7 @@ describe("the library's list", () => {
       ...sources,
       installed: [{ installed: inst("r", "R"), update: update("r", { pending: { version: "2", status: "awaiting_review" } }), available: false }],
     })[0];
-    expect(statusOf(review, live)).toBe("Update in review");
+    expect(statusOf(review, live)).toBe("Update being checked");
   });
 
   it("filters, searches and counts like Steam's groups", () => {

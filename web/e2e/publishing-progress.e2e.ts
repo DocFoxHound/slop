@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Publishing progress, file by file (web/src/components/PublishProgress.tsx): which file SLAPorSLOP is
-// checking and at which step, which are done or waiting, an estimate, then the wait for a person,
-// with the page refreshing itself until nothing is under way. This server checks files in a
+// checking and at which step, which are done or waiting, an estimate, then a hold and the Publish
+// step, with the page refreshing itself until it's the maker's turn. This server checks files in a
 // moment, so the states in between are answered in the browser. Also the "Donations: off" pointer
 // on the Publish page.
 import type { Route } from "@playwright/test";
@@ -45,6 +45,7 @@ function file(platform: string, file_name: string, check: Check, over: Record<st
     scan_detail: null,
     scan_report: null,
     defender: null,
+    cleared: false,
     cleared_reason: null,
     check_stage: null,
     check_started_at: null,
@@ -113,7 +114,7 @@ const PHASES = [
     ],
     { progress: progress({ files_checked: 2 }) },
   ),
-  // Every file is checked: a person reviews it.
+  // Every file is checked; the Windows build waits for Microsoft Defender's check (Slop Check).
   release(
     "awaiting_review",
     [
@@ -122,13 +123,52 @@ const PHASES = [
       done("linux-rpm", "game.rpm", 12),
       done("windows", "game.zip", 7),
     ],
-    { status_reason: "Waiting for a person: an app's first release is always reviewed by a person" },
+    {
+      status_reason: "On hold: waiting for Microsoft Defender's check on the Windows (.zip) build",
+      progress: progress({
+        stage: "on_hold",
+        files_checked: 4,
+        summary: "On hold: the Windows (.zip) build is waiting for Microsoft Defender's check. Run Slop Check; it goes on by itself.",
+      }),
+      hold: { status: "open", kinds: ["defender_missing"], needs_staff: false, rescans_left: 3, unanswered: false },
+    },
   ),
-  // Approved.
-  release("approved", [done("linux", "game.tar.gz", 22), done("windows", "game.zip", 7)]),
+  // Defender's check arrived: it passed, and waits for its maker to publish it.
+  release("ready", [done("linux", "game.tar.gz", 22), done("windows", "game.zip", 7)], {
+    hold: { status: "passed", kinds: ["defender_missing"], needs_staff: false, rescans_left: 3, unanswered: false },
+  }),
 ];
 
-test("each file's check shows while SLAPorSLOP works through them, and the page refreshes itself until it's decided", async ({ page }) => {
+/** The hold of the release above, as GET …/hold answers it. */
+const defenderHold = {
+  release_id: PHASES[0].id,
+  version: "1.0.0",
+  release_status: "awaiting_review",
+  status: "open",
+  kinds: ["defender_missing"],
+  needs_staff: false,
+  problems: [
+    {
+      kind: "defender_missing",
+      platform: "windows",
+      file_label: "Windows (.zip)",
+      what: "The Windows (.zip) build is waiting for Microsoft Defender's check",
+      explained:
+        "Windows builds need Microsoft Defender's check. Run Slop Check in your repository (see /publish/guide#slop-check). This release goes on by itself as soon as the result arrives.",
+      you_can: ["run_slop_check", "write_to_staff"],
+    },
+  ],
+  you_can: ["run_slop_check", "write_to_staff", "withdraw"],
+  rescans_left: 3,
+  next_rescan_at: null,
+  rescan_requested: false,
+  rescan_running: false,
+  asked_staff_at: null,
+  unanswered: false,
+  messages: [],
+};
+
+test("each file's check shows while SLAPorSLOP works through them, and the page refreshes itself until it's the maker's turn", async ({ page }) => {
   await page.clock.install({ time: NOW });
   await signIn(page, "maker");
   let phase = 0;
@@ -138,6 +178,7 @@ test("each file's check shows while SLAPorSLOP works through them, and the page 
     loads++;
     return route.fulfill({ json: [PHASES[phase]] });
   });
+  await answer(page, `/v1/apps/${slug}/releases/${PHASES[0].id}/hold`, defenderHold, 200, "GET");
 
   // The Publish page says which file is being checked, and that donations are off.
   await page.goto("/publish");
@@ -168,7 +209,9 @@ test("each file's check shows while SLAPorSLOP works through them, and the page 
   await expect(files.nth(2)).toContainText("Linux (.rpm) Waiting");
   await expect(files.nth(3)).toContainText("Windows (.zip) Waiting");
   await expect(box.locator("li.step").filter({ hasText: "Release" }).first()).toContainText("Version 1.0.0 received from Slop Build.");
-  await expect(box.locator("li.step").filter({ hasText: "Review by a person" })).toContainText("Not yet");
+  const step = (title: string) => box.locator("li.step").filter({ has: page.locator("b", { hasText: new RegExp(`^${title}$`) }) });
+  await expect(step("Checks")).toContainText("Not yet");
+  await expect(step("Publish")).toContainText("Once a release passes the checks, you publish it");
 
   // Ten seconds on, the page looks again by itself: the next file.
   phase = 1;
@@ -177,34 +220,48 @@ test("each file's check shows while SLAPorSLOP works through them, and the page 
   await expect(filesStep).toContainText("2 of 4 done");
   await expect(files.nth(1)).toContainText("Passed");
 
-  // All checked: it waits for a person, and says what happens next.
+  // All checked: on hold for Defender's check, which is the maker's to run (Slop Check).
   phase = 2;
   await page.clock.fastForward(10_500);
-  const review = box.locator("li.step").filter({ hasText: "Review by a person" });
-  await expect(review).toContainText("Waiting for a person");
-  await expect(review).toContainText("Waiting for review by a person at SLAPorSLOP. It usually takes a day or two.");
-  await expect(review).toContainText("Why a person: an app's first release is always reviewed by a person.");
-  await expect(review).toContainText("Either way you get a notification, in SLAPorSLOP and by email.");
+  const checks = step("Checks");
+  await expect(checks).toContainText("Waiting for Microsoft Defender's check");
+  await expect(checks).toContainText("Run Slop Check; it goes on by itself.");
+  await expect(checks.getByRole("link", { name: "See what holds version 1.0.0" })).toHaveAttribute(
+    "href",
+    `/publish/${slug}/releases#release-${PHASES[0].id}`,
+  );
   await expect(filesStep).toContainText("4 files downloaded and hashed.");
+  // The release itself says what holds it, with Slop Check to add right here.
+  const card = page.locator(`#release-${PHASES[0].id}`);
+  const hold = card.getByRole("region", { name: "Why it's on hold" });
+  await expect(hold).toContainText("The Windows (.zip) build is waiting for Microsoft Defender's check");
+  await expect(hold).toContainText("Nothing for SLAPorSLOP staff to do yet");
+  await expect(hold.getByRole("link", { name: "How Slop Check works" })).toHaveAttribute("href", "/publish/guide#slop-check");
   // Files that all passed fold away, and open on request.
   await filesStep.getByText("Each file").click();
   await expect(filesStep.getByRole("list", { name: "Files checked: each file" }).getByRole("listitem")).toHaveCount(4);
 
-  // While a person reviews it, once a minute.
+  // While it's on hold, once a minute.
   const waiting = loads;
   await page.clock.fastForward(30_000);
   expect(loads).toBe(waiting);
   phase = 3;
   await page.clock.fastForward(31_000);
   await expect.poll(() => loads).toBeGreaterThan(waiting);
-  await expect(review).toContainText("Version 1.0.0 approved and signed by SLAPorSLOP.");
-  // Decided: no more refreshing.
+  // Passed: Publish is the maker's.
+  const publish = step("Publish");
+  await expect(publish).toContainText("Waiting for you");
+  // A draft: players get it once its maker puts it in the store.
+  await expect(publish).toContainText("Version 1.0.0 passed every check. Publish it; players can get it once you put the app in the store.");
+  await expect(checks).toContainText("Version 1.0.0 passed SLAPorSLOP's checks.");
+  await expect(card.getByRole("region", { name: "Publish version 1.0.0" })).toBeVisible();
+  // The maker's turn: no more refreshing.
   const decided = loads;
   await page.clock.fastForward(180_000);
   expect(loads).toBe(decided);
 });
 
-test("a file on hold or a release not approved says why in plain words, and links to what to fix", async ({ page }) => {
+test("a file on hold or a release turned down says why in plain words, and links to what to fix", async ({ page }) => {
   await signIn(page, "maker");
   // As a scanning server reports it.
   await answer(page, "/v1/server", { scanning: true, maker_signatures_required: false, simulation: false });
@@ -223,9 +280,33 @@ test("a file on hold or a release not approved says why in plain words, and link
           }
         : f,
     ),
+    // Its hold in brief, as the server sends it: what the maker can do follows from it.
+    { hold: { status: "open", kinds: ["scan"], needs_staff: true, rescans_left: 3, unanswered: false } },
   );
   await page.route(`**/v1/apps/${slug}/releases`, (route: Route) =>
     route.request().method() === "GET" ? route.fulfill({ json: [state] }) : route.fallback(),
+  );
+  await answer(
+    page,
+    `/v1/apps/${slug}/releases/${state.id}/hold`,
+    {
+      ...defenderHold,
+      kinds: ["scan"],
+      needs_staff: true,
+      problems: [
+        {
+          kind: "scan",
+          platform: "windows",
+          file_label: "Windows (.zip)",
+          what: "A scanner flagged the Windows (.zip) build",
+          explained: "A YARA rule (`Packed_UPX`) matched `game.exe`. These rules look for patterns seen in malware.",
+          you_can: ["rescan", "write_to_staff", "new_release"],
+        },
+      ],
+      you_can: ["rescan", "write_to_staff", "new_release", "withdraw"],
+    },
+    200,
+    "GET",
   );
   await page.goto(`/publish/${slug}/releases`);
   const box = page.getByRole("region", { name: "Publishing progress" });
@@ -235,8 +316,10 @@ test("a file on hold or a release not approved says why in plain words, and link
   await expect(windows).toContainText("YARA: Packed_UPX. · Microsoft Defender found nothing");
   const scan = box.locator("li.step").filter({ hasText: /^.Scan/ });
   await expect(scan).toContainText("Windows (.zip) is on hold: YARA: Packed_UPX.");
-  await expect(scan).toContainText("If it's a false positive, they clear it and tell you why.");
-  await expect(box.locator("li.step").filter({ hasText: "Review by a person" })).toContainText("looks at the file on hold first");
+  await expect(scan).toContainText("SLAPorSLOP staff look at it, and you can scan again or tell them why it's a false positive.");
+  const checks = box.locator("li.step").filter({ has: page.locator("b", { hasText: /^Checks$/ }) });
+  await expect(checks).toContainText("On hold");
+  await expect(checks).toContainText("scan again, write to SLAPorSLOP staff, or send a new version.");
 
   // Not approved: why, and the fixes to copy for an AI agent.
   state = { ...state, status: "rejected", status_reason: "The game doesn't start on Windows." };
@@ -246,8 +329,8 @@ test("a file on hold or a release not approved says why in plain words, and link
     next: "Then submit a new release.",
   });
   await page.reload();
-  const review = box.locator("li.step").filter({ hasText: "Review by a person" });
-  await expect(review).toContainText("Not approved: The game doesn't start on Windows. Fix it and submit a new version.");
+  const review = box.locator("li.step").filter({ has: page.locator("b", { hasText: /^Checks$/ }) });
+  await expect(review).toContainText("Turned down by SLAPorSLOP staff: The game doesn't start on Windows. Fix it and submit a new version, or ask SLAPorSLOP staff about it.");
   await expect(review).toContainText("or ask your AI agent to run get_fixes.");
   await review.getByRole("link", { name: "See what to fix" }).click();
   await expect(page).toHaveURL(new RegExp(`/publish/${slug}/releases#fixes$`));

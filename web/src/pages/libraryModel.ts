@@ -158,7 +158,7 @@ export function statusOf(e: Entry, live: Live): string | null {
   if (e.installed) {
     if (e.available) return live.autoUpdate && e.installed.kind !== "installer" ? "Update queued" : "Update ready";
     if (e.update?.pending?.status === "fetching") return "Scanning update";
-    if (e.update?.pending?.status === "awaiting_review") return "Update in review";
+    if (e.update?.pending?.status === "awaiting_review") return "Update being checked";
     return null;
   }
   if (e.group === "interested" && e.app?.stage === "released") return "Released";

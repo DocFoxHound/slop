@@ -48,8 +48,8 @@ export function DefenderLine({
         <span className="muted">
           {audience === "maker" ? (
             <>
-              Windows builds need Microsoft Defender's check before they're
-              published. Slop Build does it; if you build elsewhere, add{" "}
+              Windows builds need Microsoft Defender's check before they
+              can be published. Slop Build does it; if you build elsewhere, add{" "}
               <Link to="/publish/guide#slop-check">Slop Check</Link> to your
               repository.
             </>
@@ -84,8 +84,8 @@ export function DefenderLine({
           </ExternalLink>
           , then build again once they've updated their definitions. Signing the
           program (<Link to="/publish/guide#signing">free with SignPath</Link>)
-          helps most. A reviewer can also clear it if they agree it's a false
-          positive.
+          helps most. Or write to SLAPorSLOP staff from the release's hold
+          and say why it's a false positive: they clear it if they agree.
         </p>
       )}
     </div>
@@ -126,7 +126,8 @@ export function SignedLine({
   );
 }
 
-/** Findings and capabilities from SLAPorSLOP's scanner, for the reviewer. */
+/** Findings and capabilities from SLAPorSLOP's scanner: what it matched, and where, for the maker
+ *  (so they can fix it, or say why it's a false positive) and staff. */
 export function ScanFindings({ report }: { report: ScanReport | null }) {
   if (!report) return null;
   return (
@@ -315,7 +316,7 @@ export function RepoScanList({
           </span>{" "}
           <span className="muted">
             {audience === "maker"
-              ? "Apps on SLAPorSLOP can't sell anything: no items, currencies, loot boxes or paid access. A reviewer looks at each; if one isn't a purchase (a word in a comment, say), nothing needs changing."
+              ? "Apps on SLAPorSLOP can't sell anything: no items, currencies, loot boxes or paid access. These are patterns only: if one isn't a purchase (a word in a comment, say), nothing needs changing."
               : "Patterns only: open the files and decide. Selling anything in the app breaks the Publisher Agreement."}
           </span>
           <ul>
@@ -367,7 +368,7 @@ export function RepoScanList({
           </span>{" "}
           <span className="muted">
             {audience === "maker"
-              ? "Apps on SLAPorSLOP only run code that came in a release or mod SLAPorSLOP checked, never programs, scripts or mods from a server. Data from servers must use formats that can't rebuild objects. A reviewer looks at each; loading your own files is fine. See \"Online play and mods\" in the publishing guide."
+              ? "Apps on SLAPorSLOP only run code that came in a release or mod SLAPorSLOP checked, never programs, scripts or mods from a server. Data from servers must use formats that can't rebuild objects. These are patterns only; loading your own files is fine. See \"Online play and mods\" in the publishing guide."
               : "Patterns only: open the files and decide. Running code a server sends, a self-updater, or a mod loader outside SLAPorSLOP's mods breaks the Content Policy; an unsafe format reading server data is a reason to reject until it's fixed."}
           </span>
           <ul>
@@ -419,7 +420,7 @@ export function RepoScanList({
           <span className="badge warn">PAY-TO-WIN DESIGN? ({scan.design!.length})</span>{" "}
           <span className="muted">
             {audience === "maker"
-              ? "Patterns that usually go with paying to win: premium currencies, skipping timers, VIP tiers, passes, bought boosts. Nothing on SLAPorSLOP can be sold, so a reviewer checks they're earned in play. If they are, nothing needs changing."
+              ? "Patterns that usually go with paying to win: premium currencies, skipping timers, VIP tiers, passes, bought boosts. Nothing on SLAPorSLOP can be sold, so make sure they're earned in play. If they are, nothing needs changing."
               : "Patterns only: check each is earned in play and can't be bought or traded for anything outside the game. Paying to win breaks the Content Policy."}
           </span>
           <ul>
@@ -457,7 +458,7 @@ export function RepoScanList({
           {scan.mod_online && <span className="badge warn">MOD GOES ONLINE</span>}{" "}
           <span className="muted">
             {audience === "maker"
-              ? `Mods may carry code. It gets a full read before approval${scan.mod_online ? ", and because it goes online, players see that and are told to use sandbox mode" : ""}. Say in your description what the code does${scan.mod_online ? " and what it connects to" : ""}.`
+              ? `Mods may carry code${scan.mod_online ? ". Because it goes online, players see that and are told to use sandbox mode" : ""}. Say in your description what the code does${scan.mod_online ? " and what it connects to" : ""}.`
               : `Read all of the mod's code: it runs inside the game. It may only add to its game, never run code from a server, update itself or load other mods.${scan.mod_online ? " It goes online: check what it connects to and that the description says so. Approving is fine; players see GOES ONLINE and get the sandbox suggestion." : ""}`}
           </span>
           {(scan.code_files ?? []).length > 0 && (
@@ -565,17 +566,22 @@ export function FileChecks({
         <DefenderLine defender={file.defender} audience={audience} />
       )}
       {windows && <SignedLine defender={file.defender} audience={audience} />}
-      {audience === "reviewer" && <ScanFindings report={file.scan_report} />}
+      <ScanFindings report={file.scan_report} />
       {file.sha256 && (
         <VirusTotalLink sha256={file.sha256} audience={audience} />
       )}
-      {file.cleared_reason && (
-        <div className="small">
-          <span className="badge neutral">CLEARED BY A REVIEWER</span>{" "}
-          <span className="muted">{file.cleared_reason}</span>
-        </div>
-      )}
+      {file.cleared && <ClearedLine note={file.cleared_reason} />}
     </>
+  );
+}
+
+/** SLAPorSLOP staff cleared a file's finding as a false positive, with their note if they left one. */
+export function ClearedLine({ note }: { note: string | null }) {
+  return (
+    <div className="small">
+      <span className="badge neutral">CLEARED BY SLAPorSLOP STAFF</span>{" "}
+      <span className="muted">{note ?? "Cleared by SLAPorSLOP staff as a false positive."}</span>
+    </div>
   );
 }
 

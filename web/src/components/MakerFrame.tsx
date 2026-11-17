@@ -10,6 +10,7 @@ import { api, ApiError, type AppDetail, type AppStage, type ManageOverview } fro
 import { daysUntil, formatDate, STAGE_LABEL } from "../format";
 import { useLoad } from "../hooks";
 import { AppIcon, appIconProps } from "./AppIcon";
+import { ListInStore } from "./PublishProgress";
 import { StoreIcon } from "./StoreIcons";
 
 export type MakerTab = "manage" | "page" | "releases";
@@ -49,12 +50,21 @@ export function moveEffects(to: AppStage, interested: number): string[] {
   return [...lines, "Only forward: to move it back, you'd ask SLAPorSLOP."];
 }
 
-/** What a stage move waits for, and the link to it: for a browser game, an approved play address. */
+/** What a stage move waits for, and the link to it: for a browser game, a published play address. */
 export function advanceHint(next: AppStage[], browser: boolean): { text: string; link: string } {
   const moves = next.map((s) => MOVE_LABEL[s]).join(" or ");
   return browser
-    ? { text: `${moves} once a play address is approved.`, link: "Add the play address" }
-    : { text: `${moves} once a release is approved.`, link: "Submit a release" };
+    ? { text: `${moves} once you've published a play address.`, link: "Add the play address" }
+    : { text: `${moves} once you've published a release.`, link: "Submit a release" };
+}
+
+/** Whether the maker can put a draft in the store from here: a Coming soon page, or once a release
+ *  is published (`canAdvance`). Private apps go public through SLAPorSLOP staff. Exported for tests. */
+export function canPutInStore(
+  app: Pick<AppDetail, "status" | "private" | "stage">,
+  published: boolean | undefined,
+): boolean {
+  return app.status === "draft" && !app.private && (app.stage === "coming_soon" || published === true);
 }
 
 export function MakerFrame({
@@ -121,6 +131,23 @@ export function MakerFrame({
           onStageMoved?.();
         }}
       />
+      {/* The first listing is the maker's (the Releases page has it in its progress). */}
+      {tab === "manage" && canPutInStore(app, can) && (
+        <section className="panel panel-pad list-panel" aria-labelledby="list-title">
+          <h2 id="list-title">Not in the store yet</h2>
+          <p className="small">
+            Only you can see this draft. Put it in the store when you're ready for players to find it
+            {app.stage === "coming_soon" ? ": a Coming soon page needs no release." : "."}
+          </p>
+          <ListInStore
+            slug={app.slug}
+            onListed={() => {
+              own.reload();
+              onStageMoved?.();
+            }}
+          />
+        </section>
+      )}
       <nav className="maker-tabs" aria-label={`${app.title}: maker pages`}>
         {tabs.map(([key, label, to]) => (
           <Link key={key} to={to} className={tab === key ? "on" : undefined} aria-current={tab === key ? "page" : undefined}>

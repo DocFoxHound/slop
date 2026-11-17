@@ -342,7 +342,7 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
                 r.id is not distinct from {play} as plays_now
          from releases r join apps a on a.id = r.app_id
          where r.play_address is not null
-           and (r.status in ('fetching', 'awaiting_review') or r.id is not distinct from {play})",
+           and (r.status in ('fetching', 'awaiting_review', 'ready') or r.id is not distinct from {play})",
         play = crate::catalog::PLAY_RELEASE
     )))
     .fetch_all(db)

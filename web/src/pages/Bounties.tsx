@@ -48,7 +48,7 @@ export function BountiesPage() {
     <div className="page narrow">
       <h1 className="page-title">Fix bounties</h1>
       <p className="muted">
-        Players pledge toward fixes and features they want. Whoever delivers one in an approved release, the app's
+        Players pledge toward fixes and features they want. Whoever delivers one in a published release, the app's
         maker or anyone with a community build, is paid straight from the backers' cards, less SLAPorSLOP's 5%. Nothing is
         charged until a delivery is confirmed.
       </p>
@@ -336,7 +336,7 @@ export function BountyPage() {
               <textarea value={note} maxLength={2000} rows={3} required onChange={(e) => setNote(e.target.value)} />
             </label>
             <p className="faint small">
-              Its newest approved release is the delivery. You're paid to the Stripe account you receive donations on.
+              Its newest published release is the delivery. You're paid to the Stripe account you receive donations on.
             </p>
             <button className="btn small slime" disabled={!note.trim()}>
               Claim it

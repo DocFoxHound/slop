@@ -125,8 +125,8 @@ That creates the server's app as a draft, linked to the game, named after the ga
   game's rating and each server's own where it's higher.
 - **Visibility:** a server is in the store only while its game is (`push_store_visible_as`);
   a private game's server is shared through the game's shares, and goes public, and in the store
-  once ready, with the game (`admin::make_public`). It still needs a reviewer to list it, like any
-  app.
+  once ready, with the game (`admin::make_public`). Otherwise its maker puts it in the store, like
+  any app (since 2026-11; a reviewer listed it before).
 - **Reports:** a **Report** button on each server's row, filed against the server's app.
 - **Library:** each server under its game; a game's entry has a **Dedicated server** tab;
   uninstalling the game has an unticked **Uninstall its dedicated server too**.

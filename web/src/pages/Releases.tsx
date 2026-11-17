@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Makers' releases: submit builds from your own release page, and follow them through review
-// (docs/ARCHITECTURE.md §6.3-6.4). SLAPorSLOP never stores builds; it hashes them and signs a manifest.
-// A browser game's release is a play address instead (§6.8): SLAPorSLOP checks the address, a
-// person opens it and plays it, and Play opens it once approved. Nothing is built, signed or scanned.
+// Makers' releases: submit builds from your own release page, follow them through SLAPorSLOP's
+// checks, and publish them (docs/ARCHITECTURE.md §6.3-6.4). SLAPorSLOP never stores builds; it
+// hashes them, and signs a manifest when its maker presses Publish (crates/slop-api/src/publish.rs).
+// A release the checks hold shows what holds it and the conversation with staff (ReleaseHold.tsx).
+// A browser game's release is a play address instead (§6.8): SLAPorSLOP checks the address, and
+// Play opens it once its maker publishes it. Nothing is built, signed or scanned.
 
 import {
   AddressCheckList,
@@ -10,7 +12,7 @@ import {
   RepoScanList,
   SourceCheckList,
 } from "../components/Checks";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 
 import {
@@ -29,10 +31,11 @@ import {
 } from "../api";
 import { MakerFrame } from "../components/MakerFrame";
 import { PublishProgress, refreshEvery } from "../components/PublishProgress";
+import { AskAboutFailed, PastHold, ReleaseHold } from "../components/ReleaseHold";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { CONTENT_LABEL, formatDate, isDedicatedServer, playsInBrowser } from "../format";
-import { useDocumentTitle, useInterval, useLoad } from "../hooks";
+import { useConfirmStep, useDocumentTitle, useInterval, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { useSession } from "../session";
 import { AgeSelect, ContentLabelPicker } from "./Publish";
@@ -47,24 +50,29 @@ const STATUS: Record<
     help: "SLAPorSLOP is downloading, hashing and scanning each file, one at a time: Publishing progress above shows which.",
   },
   awaiting_review: {
-    label: "IN REVIEW",
+    label: "ON HOLD",
+    badge: "warn",
+    help: "SLAPorSLOP's checks held it. Below: what was found, and what you can do.",
+  },
+  ready: {
+    label: "PASSED, NOT PUBLISHED",
     badge: "soon",
-    help: "Waiting for a person at SLAPorSLOP to review it.",
+    help: "It passed every check. Players get it once you publish it.",
   },
   approved: {
-    label: "APPROVED",
+    label: "PUBLISHED",
     badge: "official",
-    help: "Signed by SLAPorSLOP. Players can install it, and get it as an update.",
+    help: "Signed by SLAPorSLOP when you published it. Players can install it, and get it as an update.",
   },
   rejected: {
     label: "REJECTED",
     badge: "bad",
-    help: "Not approved. See the reason below.",
+    help: "Turned down by SLAPorSLOP staff. See the reason below.",
   },
   failed: {
     label: "FAILED",
     badge: "bad",
-    help: "SLAPorSLOP couldn't check the files. See the reason below.",
+    help: "It didn't pass SLAPorSLOP's checks. See the reason below.",
   },
   revoked: {
     label: "WITHDRAWN",
@@ -72,9 +80,9 @@ const STATUS: Record<
     help: "SLAPorSLOP withdrew this release; it no longer launches.",
   },
   withdrawn: {
-    label: "WITHDRAWN BEFORE REVIEW",
+    label: "WITHDRAWN BEFORE PUBLISHING",
     badge: "neutral",
-    help: "Withdrawn from your account before review. It never reached players.",
+    help: "Withdrawn before it was published. It never reached players.",
   },
 };
 
@@ -87,14 +95,19 @@ const ADDRESS_STATUS: typeof STATUS = {
     help: "SLAPorSLOP is checking the address: https, a public site, the bad-link lists, and that the page loads.",
   },
   awaiting_review: {
-    label: "IN REVIEW",
+    label: "ON HOLD",
+    badge: "warn",
+    help: "On hold for SLAPorSLOP staff. Below: why, and what you can do.",
+  },
+  ready: {
+    label: "PASSED, NOT PUBLISHED",
     badge: "soon",
-    help: "It passed the checks. Waiting for a person at SLAPorSLOP, who opens it and plays it.",
+    help: "It passed the checks. Play opens this address once you publish it.",
   },
   approved: {
-    label: "APPROVED",
+    label: "PUBLISHED",
     badge: "official",
-    help: "Approved: Play opens this address.",
+    help: "Published: Play opens this address.",
   },
   rejected: STATUS.rejected,
   failed: {
@@ -118,18 +131,54 @@ export function statusText(
   comingSoon = false,
 ): { label: string; badge: string; help: string } {
   if (browser && comingSoon && status === "approved") {
-    return { ...ADDRESS_STATUS.approved, help: "Approved: Play opens this address once the game is in Beta." };
+    return { ...ADDRESS_STATUS.approved, help: "Published: Play opens this address once the game is in Beta." };
+  }
+  if (browser && comingSoon && status === "ready") {
+    return { ...ADDRESS_STATUS.ready, help: "It passed the checks. Once you publish it, Play opens this address when the game is in Beta." };
   }
   return (browser ? ADDRESS_STATUS : STATUS)[status];
 }
 
-/** The Updates panel's line about the next release, with automatic approval on. A browser game's
- *  is approved automatically only at the address Play opens now. Exported for tests. */
-export function autoApprovalStatus(s: Pick<UpdateSettings, "auto_approval_ready" | "auto_approval_note">, browser: boolean): string {
-  if (!s.auto_approval_ready) return `Your next release waits for a person: ${s.auto_approval_note}.`;
-  return browser
-    ? "Your next release will be approved automatically if it keeps the address Play opens now and passes every check; a new address always waits for a person."
-    : "Your next release will be approved automatically if it passes every check.";
+/** "The source check found …" as a sentence. */
+const sentenceOf = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1).replace(/\.$/, "")}.`;
+
+/** What publishing a release that passed waits for, if anything: in words, or undefined when it
+ *  can be published now (the server checks again). Exported for tests. */
+export function publishWait(r: Pick<Release, "repo_scan">, picturesPending: boolean): string | undefined {
+  if (picturesPending) return "Its new pictures are waiting for review. You can publish once they're reviewed.";
+  if (!r.repo_scan || r.repo_scan.status === "failed") {
+    return "SLAPorSLOP hasn't read this release's source yet. It tries again every hour, and you can publish once it has a result.";
+  }
+  return undefined;
+}
+
+/**
+ * A published (or since withdrawn) release sent after `r`: then `r` can never be published
+ * (Publish refuses a release older than one already out, publish.rs), so it gets no Publish panel.
+ * Exported for tests.
+ */
+export function newerOut(r: Pick<Release, "id" | "created_at">, releases: Array<Pick<Release, "id" | "status" | "created_at" | "version">>) {
+  return releases.find(
+    (x) => x.id !== r.id && (x.status === "approved" || x.status === "revoked") && Date.parse(x.created_at) > Date.parse(r.created_at),
+  );
+}
+
+/** What to know before publishing, as information (none of it stops it). Exported for tests. */
+export function publishNotes(
+  r: Pick<Release, "version" | "new_concerns" | "new_play_address" | "play_address">,
+  ctx: { heldAt?: string; playsNow?: string | null },
+): string[] {
+  const notes: string[] = [];
+  if (ctx.heldAt) notes.push(`Players are held at ${ctx.heldAt}. Publishing ${r.version} ends the hold.`);
+  if (r.new_play_address && r.play_address) {
+    notes.push(
+      ctx.playsNow
+        ? `A new site: Play will open ${r.play_address} instead of ${ctx.playsNow}.`
+        : `A new address: Play will open ${r.play_address}.`,
+    );
+  }
+  if (r.new_concerns) notes.push(`${sentenceOf(r.new_concerns)} See the source check on this release.`);
+  return notes;
 }
 
 /**
@@ -233,9 +282,21 @@ export function Releases() {
     [slug, me?.id],
   );
   const server = useLoad(() => api.server(), []);
-  // New releases start from what the last approved one needed.
+  // A release that passed waits for its maker: what publishing it waits for (pictures), and the
+  // hold at an older release it would end.
+  const anyReady = Boolean(releases.data?.some((r) => r.status === "ready"));
+  const media = useLoad(() => (me && anyReady ? api.media(slug) : Promise.resolve(undefined)), [slug, me?.id, anyReady]);
+  const overview = useLoad(() => (me && anyReady ? api.manage(slug) : Promise.resolve(undefined)), [slug, me?.id, anyReady]);
+  const [published, setPublished] = useState<string>();
+  // "#release-…" (from the progress panel or Manage): scroll to that release once it's shown.
+  const loaded = Boolean(releases.data);
+  useEffect(() => {
+    if (!loaded || !location.hash.startsWith("#release-")) return;
+    document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
+  }, [loaded, location.hash]);
+  // New releases start from what the last published one needed.
   const lastRuntimes = releases.data?.find((r) => r.status === "approved")?.runtimes ?? [];
-  // While files are being checked (or a person reviews it), look again now and then so progress
+  // While files are being checked (or a release is on hold), look again now and then so progress
   // moves on its own; stop once nothing is under way.
   useInterval(releases.reload, refreshEvery(releases.data));
   useDocumentTitle(app.data ? `${app.data.title} releases` : "Releases");
@@ -272,6 +333,20 @@ export function Releases() {
     if (first) navigate(location.pathname, { replace: true, state: null });
   };
   const status = (r: Release) => statusText(r.status, browser, app.data?.stage === "coming_soon");
+  const changed = () => {
+    releases.reload();
+    media.reload();
+    overview.reload();
+  };
+  const onPublished = (r: Release) => {
+    setPublished(r.version);
+    changed();
+    // The store page now shows its rating; the stage bar may now move on.
+    app.reload();
+  };
+  const heldAt = overview.data?.held ? overview.data.serving?.version : undefined;
+  const comingSoon = app.data.stage === "coming_soon";
+  const playsNow = app.data.play_address;
 
   return (
     <MakerFrame app={app.data} tab="releases" onStageMoved={app.reload}>
@@ -281,18 +356,20 @@ export function Releases() {
             <p className="muted">
               Your game runs on your own website. Here a release is its play address:
               where Play sends players. SLAPorSLOP checks it (https, a public site, the
-              bad-link lists, and that the page loads), and a person opens it and plays
-              it before players see it, and again whenever it changes. SLAPorSLOP doesn't
+              bad-link lists, and that the page loads), and checks it again whenever it
+              changes. Once it passes, you publish it and Play opens it. SLAPorSLOP doesn't
               host, build or scan your site.
             </p>
           ) : (
             <p className="muted">
               A release is one version of your app: a GitHub release with your builds
               attached. SLAPorSLOP downloads each file once to record its size and SHA-256,
-              checks it, and signs it. Players' apps then download from your release
-              page and refuse any file that doesn't match.
+              and checks it. Once it passes, you publish it: SLAPorSLOP signs it, and
+              players' apps download from your release page and refuse any file that
+              doesn't match.
             </p>
           )}
+          <div id="new-release" tabIndex={-1}>
 
           {app.data.platforms.length === 0 ? (
             <section className="panel panel-pad">
@@ -336,6 +413,7 @@ export function Releases() {
               onSubmitted={onSubmitted}
             />
           )}
+          </div>
 
           {isGithub && !browser && app.data.platforms.length > 0 && (
             <details className="panel panel-pad help">
@@ -357,6 +435,18 @@ export function Releases() {
           <FixesPanel slug={slug} nonce={releases.data?.[0]?.status ?? ""} />
 
           <h2 className="section-title">History</h2>
+          {published && (
+            <p className="notice" role="status">
+              Version {published} is published.{" "}
+              {app.data.status === "draft"
+                ? browser
+                  ? "Players can play it once you put the game in the store."
+                  : "Players can get it once you put the app in the store."
+                : browser
+                  ? "Play opens its address."
+                  : "Players get it as an update."}
+            </p>
+          )}
           {releases.error && (
             <ErrorState error={releases.error} onRetry={releases.reload} />
           )}
@@ -365,7 +455,7 @@ export function Releases() {
           )}
           <ul className="release-list">
             {releases.data?.map((r) => (
-              <li key={r.id} className="panel panel-pad">
+              <li key={r.id} id={`release-${r.id}`} className="panel panel-pad">
                 <div className="title-row spread">
                   <div className="title-row">
                     <b>{r.version}</b>
@@ -376,11 +466,7 @@ export function Releases() {
                           ` · ${r.rating.content_labels.map((l) => CONTENT_LABEL[l]).join(", ")}`}
                       </span>
                     )}
-                    <span className={`badge ${status(r).badge}`}>
-                      {r.auto_approved && r.status === "approved"
-                        ? "APPROVED AUTOMATICALLY"
-                        : status(r).label}
-                    </span>
+                    <span className={`badge ${status(r).badge}`}>{status(r).label}</span>
                     {r.source !== "maker" && (
                       <span className="muted small">
                         {r.source === "slop_build"
@@ -397,7 +483,41 @@ export function Releases() {
                     ? r.progress.summary
                     : status(r).help}
                 </p>
-                {r.status_reason && <p className="notice">{r.status_reason}</p>}
+                {/* On hold, what holds it says the reason (ReleaseHold): not twice. */}
+                {r.status_reason && r.status !== "awaiting_review" && <p className="notice">{r.status_reason}</p>}
+                {r.status === "ready" &&
+                  (() => {
+                    const newer = newerOut(r, releases.data ?? []);
+                    return newer ? (
+                      <p className="notice small">Version {newer.version} is newer and already published, so this one can't be published.</p>
+                    ) : (
+                      <PublishPanel
+                        slug={slug}
+                        release={r}
+                        browser={browser}
+                        comingSoon={comingSoon}
+                        draft={app.data?.status === "draft"}
+                        playsNow={playsNow}
+                        heldAt={heldAt}
+                        picturesPending={Boolean(media.data?.pending)}
+                        onPublished={onPublished}
+                        onRefused={changed}
+                      />
+                    );
+                  })()}
+                {r.status === "awaiting_review" && (
+                  <>
+                    <ReleaseHold slug={slug} release={r} scanning={server.data?.scanning} onChanged={changed} />
+                    <HeldPublish version={r.version} />
+                  </>
+                )}
+                {(r.status === "failed" || r.status === "rejected") && (
+                  <AskAboutFailed slug={slug} release={r} scanning={server.data?.scanning} onChanged={changed} />
+                )}
+                {/* A failed release's only hold is a question; a turned-down one's past hold folds away until its maker asks. */}
+                {r.hold && r.hold.status !== "open" && r.status !== "failed" && !(r.status === "rejected" && r.hold.kinds.includes("question")) && (
+                  <PastHold slug={slug} release={r} summary="What held it, and the conversation with SLAPorSLOP staff" />
+                )}
                 {r.notes && (
                   <div className="release-notes doc" dangerouslySetInnerHTML={{ __html: renderMarkdown(r.notes) }} />
                 )}
@@ -416,7 +536,7 @@ export function Releases() {
                     {r.commit_verified ? (
                       <span className="muted">found in your repo</span>
                     ) : (
-                      <span className="muted">checked by the reviewer</span>
+                      <span className="muted">not found in your repository</span>
                     )}
                   </dd>
                   {r.files.map((f) => (
@@ -442,6 +562,7 @@ export function Releases() {
               app={app.data}
               releases={releases.data}
               server={server.data}
+              onListed={app.reload}
             />
           )}
           <UpdatesPanel key={settingsNonce} slug={slug} browser={browser} />
@@ -620,7 +741,7 @@ function SlopBuildSetup({ slug }: { slug: string }) {
               </span>
             </p>
           )}
-          <details>
+          <details id="slop-check">
             <summary>
               <b>Building somewhere else?</b>{" "}
               <span className="muted">
@@ -660,7 +781,7 @@ function SigningHelp() {
       <summary>
         <b>Or build and sign it yourself</b>{" "}
         <span className="muted">
-          — every build needs your signature before it can be approved
+          — every build needs your signature before it can be published
         </span>
       </summary>
       <p>
@@ -766,8 +887,7 @@ function PlayAddressForm({
       )}
       {done && (
         <p className="notice" role="status">
-          Version {done} sent. SLAPorSLOP is checking the address; then a person opens it and plays it, unless it's the address
-          Play opens now and your updates are approved automatically.
+          Version {done} sent. SLAPorSLOP is checking the address; once it passes, publish it below and Play opens it.
         </p>
       )}
       <label>
@@ -781,8 +901,7 @@ function PlayAddressForm({
           onChange={(e) => setAddress(e.target.value)}
         />
         <span className="hint">
-          Where Play sends players: https, on a site of yours. A person at SLAPorSLOP checks every new address before Play opens
-          it.
+          Where Play sends players: https, on a site of yours. SLAPorSLOP checks every new address before you can publish it.
         </span>
         {fieldError("play_address")}
       </label>
@@ -908,8 +1027,8 @@ function ReleaseForm({
       <h2>New release</h2>
       {done && (
         <p className="notice" role="status">
-          Submitted. SLAPorSLOP is checking the files; you'll see the review status
-          below.
+          Submitted. SLAPorSLOP is checking the files; you'll see how it goes
+          below, and publish it there once it passes.
         </p>
       )}
       <div className="row-2">
@@ -1308,19 +1427,18 @@ function ReleasePicker({
 }
 
 /**
- * Automatic pickup of new GitHub releases, and automatic approval of updates. `onChanged` tells
- * the page after a change (Manage's release choice says whether a person checks it first).
+ * Automatic pickup of new GitHub releases. A browser game has none to pick up (its releases are
+ * play addresses), so it shows nothing. Every release is published by its maker: nothing goes to
+ * players automatically. `onChanged` tells the page after a change.
  */
 export function UpdatesPanel({ slug, browser = false, onChanged }: { slug: string; browser?: boolean; onChanged?: () => void }) {
-  const loaded = useLoad(() => api.updateSettings(slug), [slug]);
+  const loaded = useLoad(() => (browser ? Promise.resolve(undefined) : api.updateSettings(slug)), [slug, browser]);
   const [settings, setSettings] = useState<UpdateSettings>();
   const [error, setError] = useState<string>();
   const s = settings ?? loaded.data;
-  if (!s) return null;
+  if (browser || !s) return null;
 
-  const change = async (
-    c: Partial<Pick<UpdateSettings, "watch_releases" | "auto_update">>,
-  ) => {
+  const change = async (c: Partial<Pick<UpdateSettings, "watch_releases">>) => {
     setError(undefined);
     try {
       setSettings(await api.changeUpdateSettings(slug, c));
@@ -1333,26 +1451,24 @@ export function UpdatesPanel({ slug, browser = false, onChanged }: { slug: strin
   return (
     <section className="panel panel-pad form updates-panel">
       <h2>Updates</h2>
-      {/* A browser game has no GitHub releases to pick up: its releases are play addresses. */}
-      {!browser && (
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={s.watch_releases}
-            onChange={(e) => void change({ watch_releases: e.target.checked })}
-          />
-          <span>
-            <b>Pick up new GitHub releases</b>
-            <span className="muted small" style={{ display: "block" }}>
-              When you publish a new release on GitHub (not a draft or
-              pre-release), SLAPorSLOP sends it for you, usually within 10 minutes
-              (longer for apps that haven't updated in a while). It expects the
-              same files as last time, with the new version in their names.
-            </span>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={s.watch_releases}
+          onChange={(e) => void change({ watch_releases: e.target.checked })}
+        />
+        <span>
+          <b>Pick up new GitHub releases</b>
+          <span className="muted small" style={{ display: "block" }}>
+            When you publish a new release on GitHub (not a draft or
+            pre-release), SLAPorSLOP sends it for you, usually within 10 minutes
+            (longer for apps that haven't updated in a while). It expects the
+            same files as last time, with the new version in their names. Once
+            it passes the checks, you publish it here.
           </span>
-        </label>
-      )}
-      {!browser && s.watch_releases && (
+        </span>
+      </label>
+      {s.watch_releases && (
         <p className="muted small updates-status">
           {s.watch_note ??
             (s.watch_checked_at
@@ -1360,8 +1476,8 @@ export function UpdatesPanel({ slug, browser = false, onChanged }: { slug: strin
               : "Not checked yet.")}
         </p>
       )}
-      {!browser && s.watch_problem && <p className="notice">{s.watch_problem}</p>}
-      {!browser && s.watch_releases && s.github_app && (
+      {s.watch_problem && <p className="notice">{s.watch_problem}</p>}
+      {s.watch_releases && s.github_app && (
         <div className="muted small updates-status">
           {s.github_app.installed ? (
             <>
@@ -1382,24 +1498,154 @@ export function UpdatesPanel({ slug, browser = false, onChanged }: { slug: strin
           )}
         </div>
       )}
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={s.auto_update}
-          onChange={(e) => void change({ auto_update: e.target.checked })}
-        />
-        <span>
-          <b>Approve updates automatically</b>
-          <span className="muted small" style={{ display: "block" }}>
-            {browser
-              ? "After a person at SLAPorSLOP approves your first address, new versions at the same address that pass every check go out straight away. A new address always waits for a person."
-              : "After a person at SLAPorSLOP approves your first release, new versions that pass every check go out to players straight away. Players get a notice and update when they want."}
-          </span>
-        </span>
-      </label>
-      {s.auto_update && <p className="muted small updates-status">{autoApprovalStatus(s, browser)}</p>}
       {error && <p className="form-error">{error}</p>}
     </section>
+  );
+}
+
+/**
+ * Publish, on a release that passed every check (publish.rs): what to know first, as information
+ * (a hold it ends, a new site, what the source check found), what it waits for, if anything, and
+ * the button, with a confirm step. No checkbox and no signing in again: the maker is signed in.
+ */
+export function PublishPanel({
+  slug,
+  release: r,
+  browser,
+  comingSoon,
+  draft = false,
+  playsNow,
+  heldAt,
+  picturesPending,
+  onPublished,
+  onRefused,
+}: {
+  slug: string;
+  release: Release;
+  browser: boolean;
+  comingSoon: boolean;
+  /** The app isn't in the store yet: players get nothing until its maker puts it there. */
+  draft?: boolean;
+  /** The address Play opens now (a browser game). */
+  playsNow: string | null;
+  /** The version players are held at, if they are. */
+  heldAt?: string;
+  picturesPending: boolean;
+  onPublished: (r: Release) => void;
+  /** It couldn't be published (it went back on hold, say): the page looks again. */
+  onRefused: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const titleId = useId();
+  const waitId = useId();
+  const { opener, close } = useConfirmStep(confirming, setConfirming);
+  const waits = publishWait(r, picturesPending);
+  const notes = publishNotes(r, { heldAt, playsNow });
+  const publish = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const done = await api.publishRelease(slug, r.id);
+      setConfirming(false);
+      onPublished(done);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+      onRefused();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const what = draft
+    ? browser
+      ? "Once you publish it, players can play it as soon as you put the game in the store."
+      : "Once you publish it, SLAPorSLOP signs it. Players can get it once you put the app in the store."
+    : browser
+      ? `Once you publish it, Play opens its address${comingSoon ? " when the game is in Beta" : ""}.`
+      : "Once you publish it, SLAPorSLOP signs it and players get it.";
+  // What happens at once, and how to go back on it later.
+  const effect = draft
+    ? browser
+      ? "Players can play it once you put the game in the store."
+      : "Players can get it once you put the app in the store."
+    : browser
+      ? `Play opens its address${comingSoon ? " once the game is in Beta" : " straight away"}${heldAt ? `, and the hold at ${heldAt} ends` : ""}. To change it later, publish a newer one.`
+      : null;
+  return (
+    <section className="publish-panel" aria-labelledby={titleId}>
+      <h3 id={titleId}>Publish version {r.version}</h3>
+      <p className="small">It passed SLAPorSLOP's checks. {what}</p>
+      {notes.length > 0 && (
+        <ul className="small publish-notes" aria-label="Before you publish">
+          {notes.map((n) => (
+            <li key={n}>{n}</li>
+          ))}
+        </ul>
+      )}
+      {waits && (
+        <p id={waitId} className="notice small" role="status">
+          {waits}
+        </p>
+      )}
+      {!confirming ? (
+        <div className="row-actions">
+          <button
+            ref={opener}
+            type="button"
+            className="btn slime small"
+            disabled={Boolean(waits) || busy}
+            aria-describedby={waits ? waitId : undefined}
+            onClick={() => setConfirming(true)}
+          >
+            Publish version {r.version}…
+          </button>
+        </div>
+      ) : (
+        <div className="stage-confirm" role="group" aria-label={`Publish version ${r.version}`}>
+          <b>Publish version {r.version} now?</b>
+          <p className="small">
+            {effect ?? (
+              <>
+                Players get it straight away{heldAt ? `, and the hold at ${heldAt} ends` : ""}. To roll back later, hold players at
+                an earlier version on <Link to={`/publish/${slug}/manage`}>Manage</Link>, or publish a newer one.
+              </>
+            )}
+          </p>
+          <div className="row-actions">
+            <button type="button" className="btn small slime" autoFocus disabled={busy} onClick={() => void publish()}>
+              {busy ? "Publishing…" : "Yes, publish it"}
+            </button>
+            <button type="button" className="btn small ghost" disabled={busy} onClick={close}>
+              Not yet
+            </button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * A release on hold can't be published yet: the button, unavailable, with why (so Publish is never
+ * a surprise once the hold ends).
+ */
+function HeldPublish({ version }: { version: string }) {
+  const id = useId();
+  return (
+    <div className="row-actions held-publish">
+      <button type="button" className="btn slime small" disabled aria-describedby={id}>
+        Publish version {version}
+      </button>
+      <span id={id} className="small muted">
+        You can publish once the hold ends.
+      </span>
+    </div>
   );
 }
 
@@ -1429,8 +1675,8 @@ function RatingFields({
       <ContentLabelPicker value={value.content_labels} onChange={(l) => onChange({ ...value, content_labels: l })} />
       <p className="muted small">
         {lowered
-          ? "Lower than the store page now: a person reviews this release before it goes out, even if your updates are approved automatically."
-          : "When this release is approved, the store page shows its rating."}
+          ? "Lower than the store page now: a SLAPorSLOP staff member checks a lowered rating before you can publish this release."
+          : "When you publish this release, the store page shows its rating."}
       </p>
     </details>
   );

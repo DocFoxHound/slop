@@ -72,6 +72,10 @@ struct AppRow {
     latest_version: Option<String>,
     latest_status: Option<String>,
     latest_reason: Option<String>,
+    /// The newest release's hold is in SLAPorSLOP staff's queue (holds.rs).
+    hold_needs_staff: bool,
+    /// A draft its maker can put in the store now (manage.rs `list_app`).
+    listable: bool,
 }
 
 async fn next_steps(
@@ -101,20 +105,24 @@ async fn next_steps(
         .filter(|a| !a.app_ids.is_empty())
         .map(|a| a.app_ids.clone());
 
-    let apps: Vec<AppRow> = sqlx::query_as(
+    let apps: Vec<AppRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select a.slug, a.title, a.status::text as status,
                 a.frozen_reason, a.frozen_at is not null as frozen, a.media_problem,
                 exists (select 1 from media_sets ms where ms.app_id = a.id and ms.status = 'pending') as media_pending,
                 exists (select 1 from media_sets ms where ms.app_id = a.id and ms.icon is not null
                           and (ms.status = 'pending' or ms.id = a.media_set_id)) as has_icon,
                 a.public_requested_at is not null as public_requested,
-                'browser' = any(a.platforms) as in_browser, r.version as latest_version, r.status::text as latest_status, r.status_reason as latest_reason
+                'browser' = any(a.platforms) as in_browser, r.version as latest_version, r.status::text as latest_status, r.status_reason as latest_reason,
+                coalesce((select h.status = 'open' and h.needs_staff from release_holds h where h.release_id = r.id), false) as hold_needs_staff,
+                (a.status = 'draft' and a.visibility = 'public' and a.frozen_at is null
+                 and (a.stage = 'coming_soon' or {playable})) as listable
          from apps a
-         left join lateral (select version, status, status_reason from releases
+         left join lateral (select id, version, status, status_reason from releases
                             where app_id = a.id order by created_at desc limit 1) r on true
          where a.maker_id = $1 and ($2::uuid[] is null or a.id = any($2))
          order by a.updated_at desc",
-    )
+        playable = crate::admin::playable_sql()
+    )))
     .bind(user.id)
     .bind(&only_apps)
     .fetch_all(&state.db)
@@ -161,8 +169,8 @@ async fn next_steps(
                 false,
             );
         }
-        // A browser game's release is its play address: checked in seconds, and every new one
-        // reviewed by a person.
+        // A browser game's release is its play address: checked in seconds, then published by its
+        // maker like any release.
         let releases = site(&format!("/publish/{}/releases", a.slug));
         match (a.latest_status.as_deref(), a.latest_version.as_deref()) {
             (None, _) if a.in_browser => step(
@@ -198,17 +206,37 @@ async fn next_steps(
                 releases,
                 false,
             ),
-            (Some("awaiting_review"), Some(v)) => step(
+            // On hold (holds.rs): staff's to look at, or the maker's to act on.
+            (Some("awaiting_review"), Some(v)) if a.hold_needs_staff => step(
                 Who::Slaporslop,
                 app,
-                if a.in_browser {
+                format!("SLAPorSLOP staff are looking at {name} {v}'s hold."),
+                releases,
+                false,
+            ),
+            (Some("awaiting_review"), Some(v)) => step(
+                Who::You,
+                app,
+                format!(
+                    "{name} {v} is on hold: {}. The Releases page says what you can do.",
+                    a.latest_reason
+                        .as_deref()
+                        .map(|r| r.trim_start_matches("On hold: ").trim_end_matches('.'))
+                        .unwrap_or("see the release")
+                ),
+                releases,
+                false,
+            ),
+            // Passed its checks: only its maker publishes it (publish.rs), never an agent.
+            (Some("ready"), Some(v)) => step(
+                Who::You,
+                app,
+                if a.media_pending {
                     format!(
-                        "{name} {v}'s play address passed SLAPorSLOP's checks and waits for a person, who opens it and plays it."
+                        "Publish {name} {v}: press Publish on the Releases page once its new pictures are reviewed."
                     )
                 } else {
-                    format!(
-                        "{name} {v} passed SLAPorSLOP's checks and waits for a person's review."
-                    )
+                    format!("Publish {name} {v}: press Publish on the Releases page.")
                 },
                 releases,
                 false,
@@ -220,11 +248,11 @@ async fn next_steps(
                     app,
                     if a.in_browser {
                         format!(
-                            "{name} {v}'s play address didn't go through ({why}). Fix what SLAPorSLOP found on the site or in the repository (get_fixes lists each problem), then give the play address again with a new version (submit_play_address)."
+                            "{name} {v}'s play address didn't go through ({why}). Fix what SLAPorSLOP found on the site or in the repository (get_fixes lists each problem), then give the play address again with a new version (submit_play_address). To ask SLAPorSLOP staff about it, write to them on the Releases page."
                         )
                     } else {
                         format!(
-                            "{name} {v} didn't go through ({why}). Fix what SLAPorSLOP found (get_fixes lists each problem with exact instructions), then submit a new release."
+                            "{name} {v} didn't go through ({why}). Fix what SLAPorSLOP found (get_fixes lists each problem with exact instructions), then submit a new release. To ask SLAPorSLOP staff about it, write to them on the Releases page."
                         )
                     },
                     site(&format!("/publish/{}/releases#fixes", a.slug)),
@@ -259,11 +287,21 @@ async fn next_steps(
                 false,
             );
         }
+        // A draft that can go in the store: only its maker puts it there (manage.rs).
+        if a.listable && !a.media_pending {
+            step(
+                Who::You,
+                app,
+                format!("Put {name} in the store from its Manage page."),
+                site(&format!("/publish/{}/manage", a.slug)),
+                false,
+            );
+        }
         if a.media_pending {
             step(
                 Who::Slaporslop,
                 app,
-                format!("{name}'s new pictures wait for a person's review."),
+                format!("{name}'s new pictures wait for review."),
                 site(&format!("/publish/{}", a.slug)),
                 false,
             );
@@ -272,7 +310,7 @@ async fn next_steps(
             step(
                 Who::Slaporslop,
                 app,
-                format!("Making {name} public waits for a reviewer."),
+                format!("Making {name} public waits for SLAPorSLOP staff."),
                 site(&format!("/publish/{}/manage", a.slug)),
                 false,
             );

@@ -14,8 +14,8 @@ import { ExternalLink } from "./ui";
 /** Shown before the maker switches it on: what is posted, and that anyone can see it. */
 const HINT =
   "For each release you send from now on, SLAPorSLOP puts its result on the release's commit on GitHub, as a status named " +
-  "SLAPorSLOP: being checked, waiting for review, passed, not approved, couldn't be checked, or withdrawn. Anyone who can see " +
-  "the commit on GitHub sees it, also when a release isn't approved or is withdrawn. It never says why. Switching this off " +
+  "SLAPorSLOP: being checked, on hold, passed, passed and published, not approved, couldn't be checked, or withdrawn. Anyone " +
+  "who can see the commit on GitHub sees it, also when a release isn't approved or is withdrawn. It never says why. Switching this off " +
   "stops new ones; those already on GitHub stay, also if the app later leaves SLAPorSLOP or your account is closed. One " +
   "exception: if a release that showed as passed is later withdrawn by SLAPorSLOP, the status is corrected even after you " +
   "switched this off.";

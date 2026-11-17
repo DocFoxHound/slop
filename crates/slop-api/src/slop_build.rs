@@ -358,7 +358,8 @@ async fn submit_from_ci(
     Ok((StatusCode::CREATED, Json(release)))
 }
 
-/// Keeps a Defender check and attaches it to any Windows file of the app with that hash.
+/// Keeps a Defender check and attaches it to any Windows file of the app with that hash, then
+/// lets a release on hold for want of it go on.
 async fn record_defender(
     state: &AppState,
     app_id: Uuid,
@@ -378,7 +379,7 @@ async fn record_defender(
     .bind(report)
     .execute(&state.db)
     .await?;
-    Ok(sqlx::query(
+    let matched = sqlx::query(
         "update release_files f set defender = $3 from releases r
          where r.id = f.release_id and r.app_id = $1 and f.sha256 = $2 and f.platform = 'windows'
            and jsonb_array_length(coalesce(f.defender->'detections', '[]')) = 0",
@@ -388,7 +389,29 @@ async fn record_defender(
     .bind(report)
     .execute(&state.db)
     .await?
-    .rows_affected())
+    .rows_affected();
+    // A release on hold waiting for this check goes on by itself: ready, or held for staff when
+    // Defender flagged it (publish.rs). Only held ones: a release still being fetched gets the
+    // check when its file is hashed.
+    let waiting: Vec<Uuid> = sqlx::query_scalar(
+        "select h.release_id from release_holds h join releases r on r.id = h.release_id
+         where h.app_id = $1 and h.status = 'open' and 'defender_missing' = any(h.kinds)
+           and r.status = 'awaiting_review'",
+    )
+    .bind(app_id)
+    .fetch_all(&state.db)
+    .await?;
+    for id in waiting {
+        crate::publish::finish_checks(
+            &state.db,
+            crate::admin::ReviewRules::from_config(&state.config),
+            id,
+            crate::updates::AUTO_REVIEWER,
+        )
+        .await
+        .map_err(ApiError::Internal)?;
+    }
+    Ok(matched)
 }
 
 #[derive(Deserialize)]

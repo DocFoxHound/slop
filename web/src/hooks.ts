@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "./api";
 
@@ -94,4 +94,25 @@ export function useMediaQuery(query: string): boolean {
     return () => list.removeEventListener("change", changed);
   }, [query]);
   return matches;
+}
+
+/**
+ * A confirm step that replaces the button that opened it: once it closes with "Not yet", focus goes
+ * back to that button (so keyboard and screen reader users aren't dropped at the top of the page).
+ * Returns the opening button's ref, and `close` for the step's own way out.
+ */
+export function useConfirmStep(open: boolean, setOpen: (open: boolean) => void) {
+  const opener = useRef<HTMLButtonElement>(null);
+  const back = useRef(false);
+  useEffect(() => {
+    if (!open && back.current) {
+      back.current = false;
+      opener.current?.focus();
+    }
+  }, [open]);
+  const close = useCallback(() => {
+    back.current = true;
+    setOpen(false);
+  }, [setOpen]);
+  return { opener, close };
 }

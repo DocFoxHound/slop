@@ -510,9 +510,9 @@ async fn release_feedback(
 ) -> ApiResult<Json<Vec<ReleaseFeedback>>> {
     let (app_id, _) = crate::updates::owned(&state, &slug, &user).await?;
     let releases: Vec<(String, OffsetDateTime)> = sqlx::query_as(
-        "select version, reviewed_at from releases
-         where app_id = $1 and status in ('approved', 'revoked') and reviewed_at is not null
-         order by reviewed_at desc limit $2",
+        "select version, published_at from releases
+         where app_id = $1 and status in ('approved', 'revoked') and published_at is not null
+         order by published_at desc limit $2",
     )
     .bind(app_id)
     .bind(FEEDBACK_RELEASES)

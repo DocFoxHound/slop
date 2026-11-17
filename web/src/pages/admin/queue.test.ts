@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AdminQueue, ReleaseFile } from "../../api";
-import { BOXES, boxCounts, defaultBox, inboxUrl, releaseBlurb, rowsFor, sortRows, totalWaiting, waited } from "./queue";
+import { BOXES, boxCounts, defaultBox, holdStatus, inboxUrl, releaseBlurb, rowsFor, sortRows, totalWaiting, waited } from "./queue";
 
 const NOW = Date.parse("2026-10-25T12:00:00Z");
 
@@ -22,7 +22,27 @@ const file = (over: Partial<ReleaseFile>): ReleaseFile => ({
   scan_detail: null,
   scan_report: null,
   defender: { sha256: "", engine: "", signatures: "", signatures_updated: null, detections: [], signed_by: null },
+  cleared: false,
   cleared_reason: null,
+  ...over,
+});
+
+const hold = (over: object = {}) => ({
+  release_id: "r",
+  version: "1.0.0",
+  release_status: "awaiting_review",
+  status: "open",
+  kinds: ["scan"],
+  needs_staff: true,
+  problems: [],
+  you_can: [],
+  rescans_left: 3,
+  next_rescan_at: null,
+  rescan_requested: false,
+  rescan_running: false,
+  asked_staff_at: null,
+  unanswered: false,
+  messages: [],
   ...over,
 });
 
@@ -41,6 +61,7 @@ const release = (id: string, created_at: string, files: ReleaseFile[], over: obj
     repo_scan: null,
     advisories: [],
     app: { slug: "golf", title: "Pocket Golf", stage: "released", status: "listed", repo_url: "https://github.com/o/golf", maker: "Bo" },
+    hold: hold(),
     notes: [],
     ...over,
   }) as unknown as AdminQueue["releases"][number];
@@ -101,6 +122,32 @@ describe("the review inbox", () => {
     expect(releaseBlurb(release("r", "2026-10-20T00:00:00Z", [file({})], { status: "fetching" }))).toBe("1 file · still fetching");
     const [row] = rowsFor("releases", { queue: queue({ releases: [release("r", "2026-10-20T00:00:00Z", [file({ scan_result: "on_hold" })])] }) });
     expect(row).toMatchObject({ key: "r", title: "Pocket Golf 1.0.0", by: "by Bo", status: { label: "Scan hold", tone: "warn" } });
+    expect(row.since).toBe("2026-10-20T00:00:00Z");
+  });
+
+  it("says what each hold is about, and waits from when the maker last wrote", () => {
+    expect(holdStatus({ kinds: ["scan", "defender"] })).toEqual({ label: "Scan hold", tone: "warn" });
+    expect(holdStatus({ kinds: ["defender"] })).toEqual({ label: "Defender hold", tone: "warn" });
+    expect(holdStatus({ kinds: ["rating_lowered"] })).toEqual({ label: "Lower rating", tone: "warn" });
+    expect(holdStatus({ kinds: ["defender_missing"] })).toEqual({ label: "No Defender check", tone: "neutral" });
+    expect(holdStatus({ kinds: ["question"] })).toEqual({ label: "Question", tone: "soon" });
+    const wrote = release("r", "2026-10-20T00:00:00Z", [file({ scan_result: "on_hold" })], {
+      hold: hold({ unanswered: true, asked_staff_at: "2026-10-24T00:00:00Z" }),
+    });
+    expect(releaseBlurb(wrote)).toBe("1 file · scan found something · Defender clean · signed · the maker wrote");
+    expect(rowsFor("releases", { queue: queue({ releases: [wrote] }) })[0].since).toBe("2026-10-24T00:00:00Z");
+    // A lowered rating says from and to; a question about a failed release says why it failed.
+    const rating = release("r", "2026-10-20T00:00:00Z", [file({})], {
+      hold: hold({ kinds: ["rating_lowered"], rating: { from_age: 16, to_age: 12, dropped_labels: [], content_labels: [] } }),
+    });
+    expect(releaseBlurb(rating)).toBe("1 file · scans passed · Defender clean · signed · rating 16+ → 12+");
+    const question = release("r", "2026-10-20T00:00:00Z", [file({})], {
+      status: "failed",
+      status_reason: "Windows (.zip) build has no maker signature: no attestation.",
+      hold: hold({ kinds: ["question"], release_status: "failed", unanswered: true }),
+    });
+    expect(releaseBlurb(question)).toBe("Failed · Windows (.zip) build has no maker signature: no attestation · the maker asks about it");
+    expect(rowsFor("releases", { queue: queue({ releases: [question] }) })[0].status).toEqual({ label: "Question", tone: "soon" });
   });
 
   it("sums up a browser game's release by its play address: never files or signing", () => {
@@ -124,7 +171,7 @@ describe("the review inbox", () => {
         app: { slug: "tap", title: "Orbit Tap", stage: "beta", status: "draft", repo_url: "https://github.com/o/tap", maker: "Sam", platforms: ["browser"] },
         ...over,
       });
-    expect(releaseBlurb(address({}))).toBe("Plays in the browser · games.example.com · address checks passed · no address approved before");
+    expect(releaseBlurb(address({}))).toBe("Plays in the browser · games.example.com · address checks passed · no address published before");
     // Another address on the same host isn't "the same site": it can be someone else's game.
     expect(releaseBlurb(address({ current_play_address: "https://games.example.com/play/" }))).toBe(
       "Plays in the browser · games.example.com · address checks passed · same host",
@@ -136,7 +183,7 @@ describe("the review inbox", () => {
       "Plays in the browser · games.example.com · address checks passed · new site · 1 note",
     );
     expect(releaseBlurb(address({ status: "fetching", address_checks: null }))).toBe(
-      "Plays in the browser · games.example.com · still checking · no address approved before",
+      "Plays in the browser · games.example.com · still checking · no address published before",
     );
     // After SLAPorSLOP withdrew the address Play opened, it's never a first address.
     expect(releaseBlurb(address({ withdrawn_play_address: "https://games.example.com/v2/" }))).toBe(
@@ -151,15 +198,17 @@ describe("the review inbox", () => {
           newer_approved: { version: "1.3.0", play_address: "https://games.example.com/v3/", note: "Version 1.3.0 is approved and newer" },
         }),
       ),
-    ).toBe("Plays in the browser · games.example.com · address checks passed · same host · older than approved 1.3.0");
+    ).toBe("Plays in the browser · games.example.com · address checks passed · same host · older than published 1.3.0");
     expect(
       releaseBlurb(address({ status: "failed", address_checks: { ...checks, ok: false, bad_links: { listed_by: "URLhaus", lists_loaded: true } } })),
     ).toContain("on URLhaus");
     for (const r of [address({}), address({ status: "failed", address_checks: { ...checks, ok: false } })]) {
       expect(releaseBlurb(r)).not.toMatch(/file|sign|scan|Defender/);
     }
-    const [checking] = rowsFor("releases", { queue: queue({ releases: [address({ status: "fetching", address_checks: null })] }) });
-    expect(checking.status).toEqual({ label: "Checking", tone: "neutral" });
+    const [held] = rowsFor("releases", {
+      queue: queue({ releases: [address({ hold: hold({ kinds: ["rating_lowered"] }) })] }),
+    });
+    expect(held.status).toEqual({ label: "Lower rating", tone: "warn" });
     const [ready] = rowsFor("listing", {
       queue: queue({
         ready_to_list: [
@@ -179,7 +228,7 @@ describe("the review inbox", () => {
         ] as never,
       }),
     });
-    expect(ready.blurb).toBe("Beta · 1 approved release · plays at games.example.com");
+    expect(ready.blurb).toBe("Beta · 1 published release · plays at games.example.com");
   });
 
   it("says how long something waited, and sorts by it", () => {

@@ -65,7 +65,7 @@ describe("flagFact", () => {
     expect(
       text({ newest_release: { version: "0.2.0", status: "failed", status_reason: "The scanner timed out" } }, "release_failed"),
     ).toEqual({ tone: "bad", text: "0.2.0 failed: The scanner timed out" });
-    expect(text({ pending_releases: 1 }, "release_waiting")).toEqual({ tone: "warn", text: "A release waiting for review" });
+    expect(text({ pending_releases: 1 }, "release_waiting")).toEqual({ tone: "warn", text: "A release not published yet" });
     expect(text({ donations_paused: true }, "donations_paused").text).toBe("Donations paused");
   });
 
@@ -127,9 +127,18 @@ describe("quietLine", () => {
 describe("cantListReason", () => {
   it("explains why a draft can't go in yet", () => {
     expect(cantListReason(app())).toBeNull();
-    expect(cantListReason(app({ status: "draft", stage: "coming_soon", releases: [] }))).toBeNull();
+    // Staff don't list a plain draft (its maker does), nor relist one taken out without an appeal.
+    expect(cantListReason(app({ status: "draft", stage: "coming_soon", releases: [] }))).toBe(
+      "Its maker puts a draft in the store, from its Manage page.",
+    );
+    expect(cantListReason(app({ status: "draft", stage: "coming_soon", releases: [], visibility: "private" }))).toBe(
+      "A private app goes public once its owner asks: it's then under Review queue → Apps to list.",
+    );
+    expect(cantListReason(app({ status: "delisted" }))).toBe(
+      "It goes back in the store once an appeal is upheld: it's then under Review queue → Apps to list.",
+    );
     expect(cantListReason(app({ status: "draft", stage: "beta", releases: [], pending_releases: 1 }))).toMatch(
-      /approve its release under Review queue → New releases first/,
+      /no release is published \(one is being checked, on hold, or waiting for its maker to publish it\)/,
     );
     expect(cantListReason(app({ status: "delisted", stage: "beta", releases: [] }))).toMatch(
       /the maker hasn't submitted a release\. Set the stage to Coming soon/,
@@ -169,20 +178,22 @@ describe("a browser game", () => {
   });
 
   it("can't be listed with nothing for Play to open, approved releases or not", () => {
-    expect(cantListReason(game({ status: "draft" }))).toBeNull();
+    // A draft is its maker's to put in; what it still needs follows.
+    const maker = "Its maker puts a draft in the store, from its Manage page.";
+    expect(cantListReason(game({ status: "draft" }))).toBe(maker);
     expect(cantListReason(game({ status: "draft", ...withdrawn }))).toBe(
-      "Can't list yet: its play address was withdrawn, so Play opens nothing. The maker sends a new one on Releases & progress.",
+      `${maker} Can't list yet: its play address was withdrawn, so Play opens nothing. The maker sends a new one on Releases & progress.`,
     );
-    expect(cantListReason(game({ status: "draft", ...withdrawn, pending_releases: 1 }))).toMatch(/approve its play address under Review queue/);
+    expect(cantListReason(game({ status: "draft", ...withdrawn, pending_releases: 1 }))).toMatch(/its play address isn't published/);
     expect(cantListReason(game({ status: "draft", play_address: null, serving_version: null, releases: [], newest_release: null }))).toMatch(
       /the maker hasn't given a play address\. Set the stage to Coming soon/,
     );
-    expect(cantListReason(game({ status: "draft", stage: "coming_soon", ...withdrawn }))).toBeNull();
+    expect(cantListReason(game({ status: "draft", stage: "coming_soon", ...withdrawn }))).toBe(maker);
   });
 
   it("withdrawing says what happens to Play, and that the reason goes to the maker", () => {
     expect(withdrawWords("Orbit Tap", "1.1.0", true, true)).toEqual({
-      what: "Withdraw 1.1.0 of “Orbit Tap”: Play stops opening its address for everyone, and opens nothing until a person approves a new one. Anyone who saved the address can still visit the site.",
+      what: "Withdraw 1.1.0 of “Orbit Tap”: Play stops opening its address for everyone, and opens nothing until its maker publishes a new one. Anyone who saved the address can still visit the site.",
       placeholder: "Reason, shown to the maker (Play stops opening it)",
     });
     expect(withdrawWords("Orbit Tap", "1.0.0", true, false)).toEqual({
@@ -198,15 +209,23 @@ describe("a browser game", () => {
   });
 
   it("finds the release Play opens in a record, as the server does", () => {
-    const r = (id: string, status: string, reviewed: number | null, created: number, play_address: string | null = "https://g.example/") => ({
+    const r = (id: string, status: string, published: number | null, created: number, play_address: string | null = "https://g.example/") => ({
       id,
       status,
-      reviewed_at: reviewed === null ? null : daysAgo(reviewed),
+      published_at: published === null ? null : daysAgo(published),
       created_at: daysAgo(created),
       play_address,
     });
-    // The newest reviewed, not the newest sent: 1.0.0 was approved after 1.1.0.
+    // The newest published, not the newest sent: 1.0.0 was published after 1.1.0.
     expect(playReleaseId([r("b", "approved", 5, 6), r("a", "approved", 2, 9)])).toBe("a");
+    // When its checks passed doesn't count: publish order isn't check order.
+    const checked = [
+      { ...r("b", "approved", 1, 6), reviewed_at: daysAgo(5) },
+      { ...r("a", "approved", 2, 9), reviewed_at: daysAgo(3) },
+    ];
+    expect(playReleaseId(checked)).toBe("b");
+    // One never published (none recorded) comes after any that were.
+    expect(playReleaseId([r("b", "revoked", null, 1), r("a", "approved", 4, 9)])).toBe("a");
     // Withdrawn since: nothing, never the older one.
     expect(playReleaseId([r("b", "revoked", 1, 6), r("a", "approved", 2, 9)])).toBeNull();
     // Withdrawing an older one leaves Play where it was; waiting and rejected ones never count.

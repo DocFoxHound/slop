@@ -44,8 +44,10 @@ test("the dashboard says where each app is, and checks again while one is moving
   const row = (name: string) => page.locator("li.status-row").filter({ hasText: name });
   await expect(row("Delisted Dash")).toContainText("Stuck at: In the store");
   await expect(row("Delisted Dash")).toContainText("Taken out of the store by SLAPorSLOP staff.");
-  // Pocket Golf's new release is still being looked at.
-  await expect(row("Pocket Golf")).toContainText(/Waiting on: /);
+  // Pocket Golf's new release is on hold: a scanner flagged it (this test server scans nothing
+  // itself, so its own Scan step is skipped and the hold shows at Checks).
+  await expect(row("Pocket Golf")).toContainText("Stuck at: Checks");
+  await expect(row("Pocket Golf")).toContainText("See what holds version 1.1.0");
   await expect(row("Pocket Golf")).toContainText("v1.1.0");
   await expect(row("Pocket Golf").getByRole("link", { name: "Manage" })).toHaveAttribute("href", "/publish/pocket-golf/manage");
   await expect(row("Pocket Golf").getByRole("link", { name: "Edit page" })).toHaveAttribute("href", "/publish/pocket-golf");
@@ -55,7 +57,7 @@ test("the dashboard says where each app is, and checks again while one is moving
   );
   const before = loads;
   expect(before).toBeGreaterThan(0);
-  // A review is awaited: every minute.
+  // On hold: every minute (staff, a re-scan or Defender's check may move it on).
   await page.clock.fastForward(61_000);
   await expect.poll(() => loads).toBeGreaterThan(before);
 });

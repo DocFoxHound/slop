@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 
-import { advanceHint, moveEffects } from "./MakerFrame";
+import { advanceHint, canPutInStore, moveEffects } from "./MakerFrame";
 
 describe("moveEffects", () => {
   it("says who's told and that it's one way", () => {
@@ -17,15 +17,30 @@ describe("moveEffects", () => {
 });
 
 describe("advanceHint", () => {
-  it("says what moving on waits for: an approved release, or a browser game's play address", () => {
+  it("says what moving on waits for: a published release, or a browser game's play address", () => {
     expect(advanceHint(["beta", "released"], false)).toEqual({
-      text: "Move to Beta or Release it once a release is approved.",
+      text: "Move to Beta or Release it once you've published a release.",
       link: "Submit a release",
     });
     expect(advanceHint(["beta", "released"], true)).toEqual({
-      text: "Move to Beta or Release it once a play address is approved.",
+      text: "Move to Beta or Release it once you've published a play address.",
       link: "Add the play address",
     });
-    expect(advanceHint(["released"], true).text).toBe("Release it once a play address is approved.");
+    expect(advanceHint(["released"], true).text).toBe("Release it once you've published a play address.");
+  });
+});
+
+describe("canPutInStore", () => {
+  it("lets its maker list a draft: a Coming soon page, or once a release is published; never a private app", () => {
+    expect(canPutInStore({ status: "draft", private: false, stage: "coming_soon" }, false)).toBe(true);
+    expect(canPutInStore({ status: "draft", private: false, stage: "beta" }, true)).toBe(true);
+    expect(canPutInStore({ status: "draft", private: false, stage: "beta" }, false)).toBe(false);
+    // Still loading: no button yet.
+    expect(canPutInStore({ status: "draft", private: false, stage: "beta" }, undefined)).toBe(false);
+    expect(canPutInStore({ status: "draft", private: true, stage: "coming_soon" }, true)).toBe(false);
+    // Already listed, or taken out by staff (an appeal brings it back).
+    expect(canPutInStore({ status: "listed", private: false, stage: "beta" }, true)).toBe(false);
+    expect(canPutInStore({ status: "delisted", private: false, stage: "beta" }, true)).toBe(false);
+    expect(canPutInStore({ status: undefined, private: false, stage: "beta" }, true)).toBe(false);
   });
 });

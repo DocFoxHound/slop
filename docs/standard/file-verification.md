@@ -36,10 +36,10 @@ Each match:
 | `release_id`, `version` | strings | The release |
 | `platform` | string | Which of the release's files this is |
 | `status` | string | `approved` or `revoked` |
-| `approved_at` | string | When a person approved it (RFC 3339) |
+| `approved_at` | string | When its maker published it, after it passed SLAPorSLOP's checks (RFC 3339) |
 | `revoked_at` | string | Optional. When it was revoked |
-| `scan` | string | SLAPorSLOP's scan of the file: `passed`, `note` (passed, with something a person looked at), `on_hold` (a re-scan found something a person is checking), `rejected`, `blocked`, or `not_scanned` (this SLAPorSLOP doesn't scan files) |
-| `defender` | string | Optional, for Windows files: Microsoft Defender's check, `clean` or `detections` (a reviewer judged them false positives before approving) |
+| `scan` | string | SLAPorSLOP's scan of the file: `passed`, `note` (passed, with a note such as a notable program capability), `on_hold` (a re-scan found something a person is checking), `rejected`, `blocked`, or `not_scanned` (this SLAPorSLOP doesn't scan files) |
+| `defender` | string | Optional, for Windows files: Microsoft Defender's check, `clean` or `detections` (SLAPorSLOP staff cleared them as false positives before it could be published) |
 | `page_url` | string | The app's store page |
 
 A file can match more than one release, for example when a maker re-releases the same build.

@@ -3,15 +3,17 @@
 // Built from the app, its releases (with each file's check, crates/slop-api/src/release_progress.rs)
 // and what this server checks (GET /v1/server). A browser game's release is a play address
 // instead of files: its steps are the address and its checks, with no signature or scan, and a
-// step that says plainly what SLAPorSLOP can't check (the site itself).
+// step that says plainly what SLAPorSLOP can't check (the site itself). The checks end with the
+// release passed (its maker then publishes it), on hold (ReleaseHold.tsx says what holds it), or
+// failed; the last step puts a draft in the store, which its maker does from here or Manage.
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { addressCheckItems } from "../addressChecks";
-import type { AppSummary, FileCheckStage, Release, ReleaseFile } from "../api";
-import { isDedicatedServer } from "../format";
-import { useNow } from "../hooks";
+import { api, ApiError, type AppSummary, type FileCheckStage, type Release, type ReleaseFile } from "../api";
+import { formatDate, isDedicatedServer } from "../format";
+import { useConfirmStep, useNow } from "../hooks";
 
 type State = "done" | "active" | "problem" | "waiting" | "skipped";
 
@@ -36,6 +38,8 @@ export interface Step {
   items?: SubItem[];
   /** What the items are, for their list's name: "file" (the default) or "check". */
   itemName?: "file" | "check";
+  /** A button the maker presses right here: "list" puts the draft in the store. */
+  action?: "list";
 }
 
 const ICON: Record<State, string> = {
@@ -65,6 +69,8 @@ const LONGEST_SCAN_MINUTES = 30;
 type Server = { scanning: boolean; maker_signatures_required: boolean };
 type ProgressApp = Pick<AppSummary, "stage" | "status"> & {
   slug?: string;
+  /** Private: shared, never in the store (going public is for SLAPorSLOP staff). */
+  private?: boolean;
   plays_in_browser?: boolean;
   tags?: string[];
   /** A dedicated server: its game's address. It has no store page of its own. */
@@ -176,12 +182,15 @@ function fileItem(f: ReleaseFile, status: Release["status"], server: Server, now
   if (check === "waiting") return { ...base, state: "waiting", status: "Waiting" };
   if (check === "not_checked") return { ...base, state: "skipped", status: "Not checked" };
   const r = f.scan_result;
-  if (held(r) && f.cleared_reason) {
+  if (held(r) && f.cleared) {
     return {
       ...base,
       state: "done",
-      status: "Cleared by a reviewer",
-      detail: sentence([`found: ${f.scan_detail ?? "a scanner finding"}; cleared: ${f.cleared_reason}`, ...extra]),
+      status: "Cleared by SLAPorSLOP staff",
+      detail: sentence([
+        `found: ${f.scan_detail ?? "a scanner finding"}; cleared as a false positive${f.cleared_reason ? `: ${f.cleared_reason}` : ""}`,
+        ...extra,
+      ]),
     };
   }
   if (held(r)) {
@@ -189,13 +198,110 @@ function fileItem(f: ReleaseFile, status: Release["status"], server: Server, now
       ...base,
       state: "problem",
       status: "On hold",
-      detail: sentence([f.scan_detail ?? "the scanner found something a person needs to look at", ...extra]),
+      detail: sentence([f.scan_detail ?? "the scanner found something", ...extra]),
     };
   }
   if (r === "note") return { ...base, state: "done", status: "Passed, with a note", detail: sentence([f.scan_detail, took, ...extra]) };
   if (r === "passed") return { ...base, state: "done", status: "Passed", detail: sentence([took, ...extra]) };
   // Scanning off (test servers): downloaded and hashed only.
   return { ...base, state: "done", status: "Hashed", detail: sentence([took, ...extra]) };
+}
+
+/** A link to one release on the Releases page (it scrolls there). */
+function ReleaseLink({ slug, release, children }: { slug?: string; release: Release; children: ReactNode }) {
+  if (!slug) return <>{children}</>;
+  return <Link to={`/publish/${slug}/releases#release-${release.id}`}>{children}</Link>;
+}
+
+/**
+ * What the maker can do about a hold, from its kinds (holds.rs): Slop Check for a missing Defender
+ * check it can run, Scan again only for a scanner's hold with re-runs left, and always writing to
+ * staff or sending a new version. Exported for tests.
+ */
+export function holdActions(hold: Release["hold"], address: boolean): string {
+  const kinds = hold?.kinds ?? [];
+  // Slop Check can run (a GitHub repository): staff have nothing to do until the maker writes.
+  if (kinds.length === 1 && kinds[0] === "defender_missing" && !hold?.needs_staff) return ": run Slop Check, and it goes on by itself.";
+  const scan = !address && kinds.includes("scan") && (hold?.rescans_left ?? 0) > 0;
+  return scan ? ": scan again, write to SLAPorSLOP staff, or send a new version." : ": write to SLAPorSLOP staff there, or send a new version.";
+}
+
+/** What holds a release, from its maker's hold summary: who has to do something. */
+function holdStep(app: ProgressApp, latest: Release, address: boolean): Step {
+  const hold = latest.hold;
+  const missingCheck = hold?.kinds.length === 1 && hold.kinds[0] === "defender_missing" && !hold.needs_staff;
+  return {
+    title: "Checks",
+    state: "problem",
+    stateLabel: missingCheck ? "Waiting for Microsoft Defender's check" : "On hold",
+    detail: latest.progress?.summary ?? latest.status_reason ?? "On hold.",
+    more: (
+      <>
+        <ReleaseLink slug={app.slug} release={latest}>
+          See what holds version {latest.version}
+        </ReleaseLink>
+        {holdActions(hold, address)}
+      </>
+    ),
+  };
+}
+
+/** The Publish step: done once it's published, the maker's to press once it passed. */
+function publishStep(app: ProgressApp, latest: Release, published: Release | undefined, address: boolean): Step {
+  // A draft isn't in the store: players get nothing until its maker puts it there.
+  const draft = app.status === "draft";
+  const players = draft
+    ? address
+      ? app.stage === "coming_soon"
+        ? "Play opens its address once the game is in the store and in Beta"
+        : "players can play it once you put the game in the store"
+      : "players can get it once you put the app in the store"
+    : address
+      ? "Play opens its address"
+      : "players get it";
+  if (latest.status === "approved") {
+    return {
+      title: "Publish",
+      state: "done",
+      detail: `You published version ${latest.version}${latest.published_at ? ` on ${formatDate(latest.published_at)}` : ""}.`,
+      more: address ? latest.progress?.summary : undefined,
+    };
+  }
+  if (latest.status === "ready") {
+    return {
+      title: "Publish",
+      state: "active",
+      stateLabel: "Waiting for you",
+      detail: (
+        <>
+          Version {latest.version} passed every check.{" "}
+          <ReleaseLink slug={app.slug} release={latest}>
+            Publish it
+          </ReleaseLink>
+          {draft ? "; " : " and "}
+          {players}
+          {address && !draft && app.stage === "coming_soon" ? " once the game is in Beta" : ""}.
+        </>
+      ),
+      more: latest.progress?.summary,
+    };
+  }
+  if (published) {
+    return {
+      title: "Publish",
+      state: "done",
+      detail: draft
+        ? `Version ${published.version} is published: ${players}.`
+        : `Version ${published.version} is published${address ? ": Play keeps opening its address" : ": players keep it"} until you publish a newer one.`,
+    };
+  }
+  return {
+    title: "Publish",
+    state: "waiting",
+    detail: address
+      ? "Once the address passes the checks, you publish it and Play opens it."
+      : "Once a release passes the checks, you publish it: SLAPorSLOP signs it, and players get it.",
+  };
 }
 
 /** A link to the fixes SLAPorSLOP's checks found, ready to copy for an AI agent (Releases page). */
@@ -271,24 +377,21 @@ function checkingStep(latest: Release, server: Server, now: number): Step {
 /** The steps, from the app's own data. Exported for tests. */
 export function progressSteps(app: ProgressApp, releases: Release[], server: Server, now: number = Date.now()): Step[] {
   const comingSoon = app.stage === "coming_soon";
-  // The release that matters: the newest one, unless an approved one is newer than a failure.
-  // One withdrawn before review never counts.
+  // The release that matters: the newest one. One withdrawn before it was published never counts.
   releases = releases.filter((r) => r.status !== "withdrawn");
   const latest = releases[0];
   const approved = releases.find((r) => r.status === "approved");
-  // The API leaves `status` out once an app is listed.
-  const listed = app.status === undefined || app.status === "listed";
   const steps: Step[] = [
     app.server_for
       ? {
           title: "Dedicated server",
           state: "done",
-          detail: "Saved as a draft. Once it's in the store, players get it on its game's store page.",
+          detail: "Saved. Once it's in the store, players get it on its game's store page.",
         }
       : {
           title: "Store page",
           state: "done",
-          detail: "Your store page is saved as a draft.",
+          detail: "Your store page is saved.",
         },
   ];
 
@@ -298,7 +401,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
     steps.push({
       title: "Release",
       state: "skipped",
-      detail: "Coming soon pages go in the store without a build. Submit a release when you move to beta.",
+      detail: "Coming soon pages go in the store without a build. Submit a release when you move to Beta.",
     });
   } else if (!latest) {
     steps.push({
@@ -371,7 +474,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
     }
 
     const scans = files.map((f) => f.scan_result);
-    const onHold = files.filter((f) => held(f.scan_result) && !f.cleared_reason);
+    const onHold = files.filter((f) => held(f.scan_result) && !f.cleared);
     if (fetching || scans.some((s) => s === null)) {
       steps.push({
         title: "Scan",
@@ -384,28 +487,42 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
         state: "skipped",
         detail: "Automatic scanning isn't running on this server yet.",
       });
-    } else if (onHold.length > 0) {
+    } else if (onHold.length > 0 && latest.status === "awaiting_review") {
       steps.push({
         title: "Scan",
         state: "problem",
         stateLabel: "On hold",
         detail: `${onHold.length === 1 ? `${fileLabel(onHold[0])} is` : `${onHold.length} files are`} on hold: ${
-          onHold[0].scan_detail?.replace(/\.$/, "") ?? "a scanner found something to look at"
+          onHold[0].scan_detail?.replace(/\.$/, "") ?? "a scanner found something"
         }.`,
         more:
-          "Scanners make mistakes, so a person at SLAPorSLOP looks before anything else happens. If it's a false positive, they clear it and tell you why. If the finding is real, fix the build and submit a new version.",
+          "Scanners make mistakes. SLAPorSLOP staff look at it, and you can scan again or tell them why it's a false positive. If the finding is real, fix the build and submit a new version.",
+      });
+    } else if (onHold.length > 0) {
+      // Turned down, or failed for another reason, with a file still flagged.
+      steps.push({
+        title: "Scan",
+        state: "problem",
+        stateLabel: "Flagged",
+        detail: `${onHold.length === 1 ? `${fileLabel(onHold[0])} was` : `${onHold.length} files were`} flagged: ${
+          onHold[0].scan_detail?.replace(/\.$/, "") ?? "a scanner found something"
+        }.`,
       });
     } else {
+      const cleared = files.some((f) => held(f.scan_result) && f.cleared);
       steps.push({
         title: "Scan",
         state: "done",
-        detail: scans.includes("note") ? "Passed, with notes for the reviewer." : "Passed.",
+        detail: cleared
+          ? "Flagged, then cleared by SLAPorSLOP staff as a false positive."
+          : scans.includes("note")
+            ? "Passed, with notes: see the release below."
+            : "Passed.",
       });
     }
 
     const source = latest.repo_scan;
     const notes = sourceNotes(source, false);
-    const waitingForPerson = latest.status === "awaiting_review";
     if (fetching) {
       steps.push({
         title: "Source check",
@@ -428,23 +545,23 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
       steps.push({
         title: "Source check",
         state: "active",
-        detail: `SLAPorSLOP couldn't read the source (${source.detail}); it tries again within the hour.`,
+        detail: `SLAPorSLOP couldn't read the source (${source.detail}); it tries again every hour.`,
       });
     } else if (notes > 0) {
-      // Notes, not failures: once a person approves the release, they've looked at them. A
-      // dedicated server's code loading is one too: the rule on outside code doesn't cover it.
+      // Notes, not failures: information for the maker, and logged. A dedicated server's code
+      // loading is one too: the rule on outside code doesn't cover it.
       const server = (isDedicatedServer(app) || source.dedicated_server) && (source.code_loading?.length ?? 0) > 0;
       steps.push({
         title: "Source check",
-        state: waitingForPerson ? "problem" : "done",
-        stateLabel: waitingForPerson ? "Notes for you and the reviewer" : undefined,
+        state: "done",
+        stateLabel: "Done, with notes",
         detail: (
           <>
-            {notes} note{notes === 1 ? "" : "s"} about the licence{server ? ", selling or code loading" : " or selling"} in the app,
-            for you and the reviewer: see the release below.
+            {notes} note{notes === 1 ? "" : "s"} about the licence{server ? ", selling or code loading" : " or selling"} in the app:
+            see the release below.
             {server &&
               " A dedicated server may load mods, maps and plugins from other places: the Content Policy's rule on outside code doesn't cover it, so that's a note, not a problem."}
-            {waitingForPerson && <FixesLink slug={app.slug} />}
+            <FixesLink slug={app.slug} />
           </>
         ),
       });
@@ -456,98 +573,140 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
       });
     }
 
-    if (latest.status === "approved" || (approved && !waitingForPerson && !fetching)) {
-      const r = latest.status === "approved" ? latest : (approved ?? latest);
-      steps.push({
-        title: "Review by a person",
-        state: "done",
-        detail: `Version ${r.version} ${r.auto_approved ? "approved automatically as an update" : "approved"} and signed by SLAPorSLOP.`,
-      });
-    } else if (waitingForPerson) {
-      const why = latest.status_reason?.replace(/^Waiting for a person: /, "").replace(/\.$/, "");
-      steps.push({
-        title: "Review by a person",
-        state: "active",
-        stateLabel: "Waiting for a person",
-        detail:
-          onHold.length > 0
-            ? "Waiting for review by a person at SLAPorSLOP, who looks at the file on hold first."
-            : "Waiting for review by a person at SLAPorSLOP. It usually takes a day or two.",
-        more: (
-          <>
-            {why && <>Why a person: {why}. </>}
-            What happens next: they look at the checks above and the app itself. If it's approved, SLAPorSLOP signs it and players can
-            get it; if something needs changing, you're told what. Either way you get a notification, in SLAPorSLOP and by email.
-            Nothing to do meanwhile.
-          </>
-        ),
-      });
-    } else if (latest.status === "rejected") {
-      steps.push({
-        title: "Review by a person",
-        state: "problem",
-        stateLabel: "Not approved",
-        detail: (
-          <>
-            Not approved: {latest.status_reason?.replace(/\.$/, "") ?? "no reason given"}. Fix it and submit a new version.
-            <FixesLink slug={app.slug} />
-          </>
-        ),
-      });
-    } else if (latest.status === "revoked") {
-      steps.push({
-        title: "Review by a person",
-        state: "problem",
-        detail: `Withdrawn by SLAPorSLOP: ${latest.status_reason ?? "no reason given"}.`,
-      });
-    } else {
-      steps.push({
-        title: "Review by a person",
-        state: "waiting",
-        detail: approved
-          ? "Comes after the checks above. Your approved version stays live meanwhile."
-          : "Comes after the checks above: a person at SLAPorSLOP reviews each app's first release.",
-      });
-    }
+    steps.push(...outcomeSteps(app, latest, approved, false));
   }
 
+  steps.push(storeStep(app, releases, approved));
+  return steps;
+}
+
+/** The checks' outcome (passed, on hold, turned down, failed, withdrawn), then Publish. */
+function outcomeSteps(app: ProgressApp, latest: Release, published: Release | undefined, address: boolean): Step[] {
+  const what = address ? "the address" : "the files";
+  switch (latest.status) {
+    case "fetching":
+      return [
+        { title: "Checks", state: "waiting", detail: `They end once ${what} and the source are checked.` },
+        publishStep(app, latest, published, address),
+      ];
+    case "awaiting_review":
+      return [holdStep(app, latest, address), publishStep(app, latest, published, address)];
+    case "rejected":
+      return [
+        {
+          title: "Checks",
+          state: "problem",
+          stateLabel: "Turned down",
+          detail: (
+            <>
+              Turned down by SLAPorSLOP staff: {latest.status_reason?.replace(/\.$/, "") ?? "no reason given"}. Fix it and submit a new
+              version, or{" "}
+              <ReleaseLink slug={app.slug} release={latest}>
+                ask SLAPorSLOP staff
+              </ReleaseLink>{" "}
+              about it.
+              <FixesLink slug={app.slug} />
+            </>
+          ),
+        },
+        publishStep(app, latest, published, address),
+      ];
+    case "failed":
+      return [
+        {
+          title: "Checks",
+          state: "problem",
+          stateLabel: "Failed",
+          detail: (
+            <>
+              Version {latest.version} didn't pass. Fix it and submit a new version, or{" "}
+              <ReleaseLink slug={app.slug} release={latest}>
+                ask SLAPorSLOP staff
+              </ReleaseLink>{" "}
+              if you think the checks got it wrong.
+            </>
+          ),
+        },
+        publishStep(app, latest, published, address),
+      ];
+    case "revoked":
+      return [
+        { title: "Checks", state: "done", detail: `Version ${latest.version} passed SLAPorSLOP's checks.` },
+        {
+          title: "Publish",
+          state: "problem",
+          stateLabel: "Withdrawn",
+          detail: `Withdrawn by SLAPorSLOP: ${latest.status_reason?.replace(/\.$/, "") ?? "no reason given"}.${
+            address ? " Play opens nothing until you publish a new address: submit one on the Releases page." : ""
+          }`,
+        },
+      ];
+    default:
+      // ready or approved: it passed.
+      return [
+        {
+          title: "Checks",
+          state: "done",
+          detail:
+            latest.hold?.status === "cleared"
+              ? `Version ${latest.version} passed: SLAPorSLOP staff accepted its hold.`
+              : `Version ${latest.version} passed SLAPorSLOP's checks.`,
+        },
+        publishStep(app, latest, published, address),
+      ];
+  }
+}
+
+/** Putting the app in the store: the maker's step the first time (a Coming soon page, or once a
+ *  release is published); appeals and going public stay with SLAPorSLOP staff. */
+function storeStep(app: ProgressApp, releases: Release[], published: Release | undefined): Step {
+  const comingSoon = app.stage === "coming_soon";
+  // The API leaves `status` out once an app is listed.
+  const listed = app.status === undefined || app.status === "listed";
   // Listed, but SLAPorSLOP withdrew the address Play opened: players find it, and can't play it.
   const play = app.plays_in_browser ? wherePlayGoes(releases) : undefined;
+  if (app.private) {
+    return {
+      title: "In the store",
+      state: "skipped",
+      stateLabel: "Private",
+      detail: "A private app is shared, not listed. To put it in the store, ask to make it public on Manage.",
+    };
+  }
   if (listed && play && !comingSoon && !play.plays) {
-    steps.push({
+    return {
       title: "In the store",
       state: "problem",
       stateLabel: "Play opens nothing",
-      detail: `Players can find it, but Play opens nothing until a person at SLAPorSLOP approves ${
-        play.withdrawn ? "a new" : "its"
-      } play address.`,
-    });
-  } else if (listed) {
-    steps.push({
+      detail: `Players can find it, but Play opens nothing until you publish ${play.withdrawn ? "a new" : "its"} play address.`,
+    };
+  }
+  if (listed) {
+    return {
       title: "In the store",
       state: "done",
       detail: app.server_for ? "Players can get it on its game's store page." : "Players can find it.",
-    });
-  } else if (app.status === "delisted") {
-    steps.push({
-      title: "In the store",
-      state: "problem",
-      detail: "Taken out of the store by SLAPorSLOP staff.",
-    });
-  } else if (comingSoon || approved) {
-    steps.push({
+    };
+  }
+  if (app.status === "delisted") {
+    return { title: "In the store", state: "problem", detail: "Taken out of the store by SLAPorSLOP staff." };
+  }
+  if (comingSoon || published) {
+    return {
       title: "In the store",
       state: "active",
-      detail: "Ready: waiting for SLAPorSLOP staff to put it in the store.",
-    });
-  } else {
-    steps.push({
-      title: "In the store",
-      state: "waiting",
-      detail: app.plays_in_browser ? "After the play address is approved." : "After a release is approved.",
-    });
+      stateLabel: "Waiting for you",
+      detail: app.server_for
+        ? "Ready: put it in the store when you want players to find it on its game's page."
+        : "Ready: put it in the store when you want players to find it.",
+      action: "list",
+    };
   }
-  return steps;
+  return {
+    title: "In the store",
+    state: "waiting",
+    detail: app.plays_in_browser ? "Once you've published its play address." : "Once you've published a release.",
+  };
 }
 
 /** The source check's notes that apply: for a browser game, not the save folder, code loading or
@@ -573,7 +732,7 @@ function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
             title: "Play address",
             state: "skipped",
             detail:
-              "Coming soon pages go in the store without a play address. Add it, and have it approved, before you move to Beta.",
+              "Coming soon pages go in the store without a play address. Add it, and publish it, before you move to Beta.",
           }
         : { title: "Play address", state: "waiting", detail: "Add your game's play address on the Releases page." },
     ];
@@ -639,7 +798,6 @@ function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
 
   const source = latest.repo_scan;
   const notes = sourceNotes(source, true);
-  const waitingForPerson = latest.status === "awaiting_review";
   if (fetching) {
     steps.push({ title: "Source check", state: "waiting", detail: "Runs once the address is checked." });
   } else if (latest.status === "failed") {
@@ -652,18 +810,17 @@ function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
     steps.push({
       title: "Source check",
       state: "active",
-      detail: `SLAPorSLOP couldn't read the source (${source.detail}); it tries again within the hour.`,
+      detail: `SLAPorSLOP couldn't read the source (${source.detail}); it tries again every hour.`,
     });
   } else if (notes > 0) {
     steps.push({
       title: "Source check",
-      state: waitingForPerson ? "problem" : "done",
-      stateLabel: waitingForPerson ? "Notes for you and the reviewer" : undefined,
+      state: "done",
+      stateLabel: "Done, with notes",
       detail: (
         <>
-          {notes} note{notes === 1 ? "" : "s"} about the licence or selling in the game, for you and the reviewer: see the release
-          below.
-          {waitingForPerson && <FixesLink slug={app.slug} />}
+          {notes} note{notes === 1 ? "" : "s"} about the licence or selling in the game: see the release below.
+          <FixesLink slug={app.slug} />
         </>
       ),
     });
@@ -675,70 +832,33 @@ function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
     });
   }
 
-  if (plays && (latest.status === "approved" || (!waitingForPerson && !fetching))) {
-    const r = latest.status === "approved" ? latest : plays;
-    steps.push({
-      title: "Review by a person",
-      state: "done",
-      detail: r.auto_approved
-        ? `Version ${r.version} approved automatically: a person approved this address before.`
-        : `Version ${r.version} approved by a person at SLAPorSLOP.`,
-      more: r.progress?.summary,
-    });
-  } else if (waitingForPerson) {
-    const why = latest.status_reason?.replace(/^Waiting for a person: /, "").replace(/\.$/, "");
-    steps.push({
-      title: "Review by a person",
-      state: "active",
-      stateLabel: "Waiting for a person",
-      detail: "Waiting for review by a person at SLAPorSLOP, who opens the address and plays it. It usually takes a day or two.",
+  // Play goes to one address only: an older published one it no longer opens doesn't count.
+  const outcome = outcomeSteps(app, latest, plays, true);
+  // Play opens nothing meanwhile, when SLAPorSLOP withdrew the address it opened.
+  if (opensNothing && latest.status !== "approved" && latest.status !== "revoked") {
+    const last = outcome[outcome.length - 1];
+    outcome[outcome.length - 1] = {
+      ...last,
       more: (
         <>
-          {why && <>Why a person: {why}. </>}
-          What happens next: if it's approved, Play opens this address{app.stage === "coming_soon" ? " once the game is in Beta" : ""}; if
-          something needs changing, you're told what. Either way you get a notification, in SLAPorSLOP and by email. Nothing to do
-          meanwhile.{opensNothing}
+          {last.more}
+          {opensNothing}
         </>
       ),
-    });
-  } else if (latest.status === "rejected") {
-    steps.push({
-      title: "Review by a person",
-      state: "problem",
-      stateLabel: "Not approved",
-      detail: (
-        <>
-          Not approved: {latest.status_reason?.replace(/\.$/, "") ?? "no reason given"}. Fix it and submit the address again with a new
-          version.{opensNothing}
-          <FixesLink slug={app.slug} />
-        </>
-      ),
-    });
-  } else if (withdrawn) {
-    // The address Play opened was withdrawn, and nothing newer is approved: nothing to play.
-    steps.push({
-      title: "Review by a person",
+    };
+  }
+  if (withdrawn && withdrawn !== latest && latest.status !== "fetching" && latest.status !== "awaiting_review" && latest.status !== "ready") {
+    // The address Play opened was withdrawn, and nothing newer is published: nothing to play.
+    outcome[outcome.length - 1] = {
+      title: "Publish",
       state: "problem",
       stateLabel: "Withdrawn",
-      detail: `${withdrawn === latest ? "Withdrawn" : `Version ${withdrawn.version} was withdrawn`} by SLAPorSLOP: ${
+      detail: `Version ${withdrawn.version} was withdrawn by SLAPorSLOP: ${
         withdrawn.status_reason?.replace(/\.$/, "") ?? "no reason given"
-      }. Play opens nothing until a person approves a new address: submit one on the Releases page.`,
-    });
-  } else if (latest.status === "revoked") {
-    steps.push({
-      title: "Review by a person",
-      state: "problem",
-      detail: `Withdrawn by SLAPorSLOP: ${latest.status_reason ?? "no reason given"}. Play no longer opens it.`,
-    });
-  } else {
-    steps.push({
-      title: "Review by a person",
-      state: "waiting",
-      detail: plays
-        ? "Comes after the checks above. Play keeps opening your approved address meanwhile."
-        : "Comes after the checks above: a person at SLAPorSLOP opens and plays every new address.",
-    });
+      }. Play opens nothing until you publish a new address: submit one on the Releases page.`,
+    };
   }
+  steps.push(...outcome);
   return steps;
 }
 
@@ -753,14 +873,13 @@ export function currentStep(steps: Step[]): Step {
 }
 
 /** How often to look again: every 10 seconds while files are checked (each takes minutes, so
- *  that's plenty) and while SLAPorSLOP then reads the source (it starts once the files are in, so the
- *  release is waiting for review before its source check shows), every minute while a person
- *  reviews it, otherwise not at all. */
+ *  that's plenty), every minute while it's on hold (staff, a re-scan or Defender's check may move
+ *  it on) or passed while its source is still being read, otherwise not at all. */
 export function refreshEvery(releases: Release[] | undefined): number | null {
   const latest = releases?.find((r) => r.status !== "withdrawn");
   if (latest?.status === "fetching") return 10_000;
-  if (latest?.status === "awaiting_review" && !latest.repo_scan) return 10_000;
   if (latest?.status === "awaiting_review") return 60_000;
+  if (latest?.status === "ready" && (!latest.repo_scan || latest.repo_scan.status === "failed")) return 60_000;
   return null;
 }
 
@@ -785,7 +904,67 @@ export function StepItems({ items, label }: { items: SubItem[]; label: string })
   );
 }
 
-export function PublishProgress(props: { app: ProgressApp; releases: Release[]; server: Server }) {
+/** "Put it in the store": a draft goes in the store the first time, by its maker (manage.rs
+ *  `list_app`), signed in; never an AI agent. Asks first: only SLAPorSLOP staff take it out again. */
+export function ListInStore({ slug, onListed }: { slug: string; onListed?: () => void }) {
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [done, setDone] = useState(false);
+  const { opener, close } = useConfirmStep(confirm, setConfirm);
+  const list = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.listApp(slug);
+      setConfirm(false);
+      setDone(true);
+      onListed?.();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (done) {
+    return (
+      <p className="notice small" role="status">
+        It's in the store.
+      </p>
+    );
+  }
+  return (
+    <div className="list-in-store">
+      {!confirm ? (
+        <button ref={opener} type="button" className="btn small slime" onClick={() => setConfirm(true)}>
+          Put it in the store…
+        </button>
+      ) : (
+        <div className="stage-confirm" role="group" aria-label="Put it in the store">
+          <b>Put it in the store now?</b>
+          <p className="small">
+            Anyone can find its page and get what you've published. Taking it out again is for SLAPorSLOP staff.
+          </p>
+          <div className="row-actions">
+            <button type="button" className="btn small slime" autoFocus disabled={busy} onClick={() => void list()}>
+              {busy ? "Putting it in…" : "Yes, put it in the store"}
+            </button>
+            <button type="button" className="btn small ghost" disabled={busy} onClick={close}>
+              Not yet
+            </button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function PublishProgress(props: { app: ProgressApp; releases: Release[]; server: Server; onListed?: () => void }) {
   // While files are checked, "started 4 minutes ago" moves on between refreshes.
   const checking = props.releases.some((r) => r.status === "fetching");
   const now = useNow(checking ? 15_000 : null);
@@ -809,6 +988,7 @@ export function PublishProgress(props: { app: ProgressApp; releases: Release[]; 
                 <b>{s.title}</b> <span className="step-state">{s.stateLabel ?? STATE_LABEL[s.state]}</span>
                 <div className="muted small">{s.detail}</div>
                 {s.more && <div className="muted small step-more">{s.more}</div>}
+                {s.action === "list" && props.app.slug && <ListInStore slug={props.app.slug} onListed={props.onListed} />}
                 {items.length > 0 &&
                   (open ? (
                     <StepItems items={items} label={`${s.title}: ${each}`} />

@@ -100,16 +100,15 @@ export function Store() {
           {server.data?.scanning ? (
             <li>
               <b>Downloads are scanned before they're listed.</b> Malware, stolen code and scams are checked on every upload.
-              Games that play in your browser have their address checked and are opened by a person; what their site serves
-              isn't scanned.
+              Games that play in your browser have their address checked; what their site serves isn't scanned.
             </li>
           ) : (
             <li>
-              <b>Reviewed before it's listed.</b>{" "}
+              <b>Checked before players get it.</b>{" "}
               {server.data?.maker_signatures_required
-                ? "Every build is signed by its maker and checked by a person."
-                : "Every build is checked by a person."}{" "}
-              Games that play in your browser have their address checked and are opened by a person.
+                ? "Every build is signed by its maker and checked before it's listed."
+                : "Every build is checked before it's listed."}{" "}
+              Games that play in your browser have their address checked.
             </li>
           )}
           <li>

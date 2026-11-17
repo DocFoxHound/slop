@@ -33,6 +33,7 @@ mod browser_games_tests;
 mod checks_tests;
 mod discover_tests;
 mod history_tests;
+mod holds_tests;
 mod icons_tests;
 mod messages_tests;
 mod money_tests;
@@ -2035,6 +2036,78 @@ fn lax() -> admin::ReviewRules {
     }
 }
 
+/// Gets release `id` to players the way it now goes: if it's still being checked or on hold, its
+/// checks end (`publish::finish_checks`, with `rules`, as SLAPorSLOP staff accepting it would
+/// re-run them), its source check gets a result if the background round hasn't run, and its
+/// maker presses Publish (`publish::publish`). The error says why it
+/// isn't out: the checks' verdict, or why Publish refused.
+async fn approve_release(app: &TestApp, rules: admin::ReviewRules, id: Uuid) -> Result<(), String> {
+    use slop_api::publish::{self, Outcome};
+    let (status, maker): (String, Uuid) = sqlx::query_as(
+        "select r.status::text, a.maker_id from releases r join apps a on a.id = r.app_id where r.id = $1",
+    )
+    .bind(id)
+    .fetch_one(&app.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    if status == "fetching" {
+        return Err("still being checked".into());
+    }
+    if status == "awaiting_review" {
+        match publish::finish_checks(&app.db, rules, id, "rev")
+            .await
+            .map_err(|e| format!("{e:#}"))?
+        {
+            Outcome::Ready | Outcome::NotChecking => {}
+            Outcome::Failed(reason) => return Err(reason),
+            Outcome::Replaced(by) => return Err(format!("replaced by {by}")),
+            Outcome::Held { .. } => {
+                let reason: Option<String> =
+                    sqlx::query_scalar("select status_reason from releases where id = $1")
+                        .bind(id)
+                        .fetch_one(&app.db)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                return Err(reason.unwrap_or_default());
+            }
+        }
+    }
+    sqlx::query(
+        "update releases set repo_scan = '{\"status\": \"not_checked\"}', repo_scanned_at = now()
+         where id = $1 and repo_scan is null",
+    )
+    .bind(id)
+    .execute(&app.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    publish::publish(&app.db, Some(&app.signing_key), rules, id, maker)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// A release on hold accepted by SLAPorSLOP staff (`admin::approve`), then published by its maker.
+async fn accept_and_publish(app: &TestApp, id: &str) {
+    admin::approve(&app.db, lax(), id.parse().unwrap(), "rev")
+        .await
+        .unwrap();
+    approve_release(app, lax(), id.parse().unwrap())
+        .await
+        .unwrap();
+}
+
+/// Its maker puts app `slug` in the store, as the Manage page's button does (manage.rs
+/// `list_draft`). The error is what they'd be told.
+async fn maker_lists(app: &TestApp, slug: &str) -> Result<(), String> {
+    let (id, maker): (Uuid, Uuid) = sqlx::query_as("select id, maker_id from apps where slug = $1")
+        .bind(slug)
+        .fetch_one(&app.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    manage::list_draft(&app.db, id, slug, maker)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// A maker with an app whose repo is on the fake release host. Returns (maker cookie, slug).
 async fn maker_with_app(app: &TestApp, stage: &str) -> (Uuid, String) {
     let (maker_id, cookie) = app.user("Maker", "US").await;
@@ -2130,6 +2203,25 @@ fn release_body(app: &TestApp, version: &str, file: &str) -> Value {
             "args": ["--fullscreen"]
         }]
     })
+}
+
+/// Release `id` (fetched) as if SLAPorSLOP's scanner had flagged its build (the test server
+/// doesn't scan): its checks end on hold, for SLAPorSLOP staff.
+async fn flag_release(app: &TestApp, id: &str) {
+    for sql in [
+        "update release_files set scan_result = 'on_hold', scan_detail = 'Flagged by ClamAV: Win.Test'
+         where release_id = $1::uuid",
+        "update releases set status = 'awaiting_review' where id = $1::uuid",
+    ] {
+        sqlx::query(sql).bind(id).execute(&app.db).await.unwrap();
+    }
+    let outcome = slop_api::publish::finish_checks(&app.db, lax(), id.parse().unwrap(), "slop")
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, slop_api::publish::Outcome::Held { .. }),
+        "{outcome:?}"
+    );
 }
 
 async fn submit_and_fetch(app: &TestApp, cookie: &str, version: &str) -> String {
@@ -2248,8 +2340,8 @@ async fn source_checks_and_the_dependency_watch(db: PgPool) {
     assert_eq!(lodash["fixed"], "4.17.21");
     assert_eq!(lodash["known_at_build"], true);
 
-    // An update whose source check finds something the approved release didn't have waits for
-    // a person instead of being approved automatically.
+    // An update whose source check finds something the published release didn't have says so
+    // to its maker (information, not a reason to wait).
     let update = Uuid::now_v7();
     sqlx::query(
         "insert into releases (id, app_id, version, commit_sha, status, submitted_by, repo_scan)
@@ -2263,7 +2355,7 @@ async fn source_checks_and_the_dependency_watch(db: PgPool) {
     .await
     .unwrap();
     assert_eq!(
-        slop_api::source_scan::new_concerns(&app.db, update)
+        slop_api::source_scan::new_concerns(&mut app.db.acquire().await.unwrap(), update)
             .await
             .unwrap(),
         None,
@@ -2279,18 +2371,20 @@ async fn source_checks_and_the_dependency_watch(db: PgPool) {
         .execute(&app.db)
         .await
         .unwrap();
-    let why = slop_api::source_scan::new_concerns(&app.db, update)
+    let why = slop_api::source_scan::new_concerns(&mut app.db.acquire().await.unwrap(), update)
         .await
         .unwrap()
         .unwrap();
     assert!(why.contains("loot boxes"), "{why}");
+    assert!(why.contains("that 1.0.0 didn't have"), "{why}");
+    assert!(!why.contains("person"), "{why}");
     sqlx::query("update releases set repo_scan = '{\"status\": \"failed\"}' where id = $1")
         .bind(update)
         .execute(&app.db)
         .await
         .unwrap();
     assert!(
-        slop_api::source_scan::new_concerns(&app.db, update)
+        slop_api::source_scan::new_concerns(&mut app.db.acquire().await.unwrap(), update)
             .await
             .unwrap()
             .is_some()
@@ -2424,17 +2518,15 @@ async fn release_files_in_parts(db: PgPool) {
             .await,
     )
     .await;
-    assert_eq!(mine[0]["status"], "awaiting_review", "{mine}");
+    assert_eq!(mine[0]["status"], "ready", "{mine}");
     assert_eq!(mine[0]["files"][0]["size_bytes"], joined.len());
     assert_eq!(
         mine[0]["files"][0]["sha256"],
         hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&joined))
     );
 
-    admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
-        .await
-        .unwrap();
-    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    approve_release(&app, lax(), id).await.unwrap();
+    maker_lists(&app, "game").await.unwrap();
     let signed: slop_manifest::Signed = serde_json::from_value(
         body_json(
             app.send(req(Method::GET, "/v1/apps/game/manifest").header("x-country", "US"))
@@ -2486,40 +2578,31 @@ async fn release_review_and_signed_manifest(db: PgPool) {
     let (_, maker) = maker_with_app(&app, "beta").await;
     let id = submit_and_fetch(&app, &maker, "1.0.0").await;
 
-    // Fetched and hashed, waiting for a person.
+    // Fetched and hashed, and it passed: waiting for its maker to publish it.
     let mine = body_json(
         app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
             .await,
     )
     .await;
-    assert_eq!(mine[0]["status"], "awaiting_review");
+    assert_eq!(mine[0]["status"], "ready");
     let expected_sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(BUILD_BYTES));
     assert_eq!(mine[0]["files"][0]["sha256"], expected_sha);
     assert_eq!(mine[0]["files"][0]["size_bytes"], BUILD_BYTES.len());
     assert_eq!(mine[0]["files"][0]["file_name"], "game-windows.zip");
-    let pending = admin::pending(&app.db).await.unwrap();
-    assert_eq!(pending.len(), 1);
+    assert!(admin::pending(&app.db).await.unwrap().is_empty());
 
-    // Nothing to install yet; the store can't list a beta app without an approved release.
+    // Nothing to install yet; the store can't list a beta app without a published release.
     assert_eq!(
         app.send(req(Method::GET, "/v1/apps/game/manifest").cookie(&maker))
             .await
             .status(),
         StatusCode::NOT_FOUND
     );
-    assert!(admin::list_app(&app.db, "game", "rev").await.is_err());
+    assert!(maker_lists(&app, "game").await.is_err());
 
     let release_id: Uuid = id.parse().unwrap();
-    assert!(
-        admin::approve(&app.db, Some(&app.signing_key), lax(), release_id, "")
-            .await
-            .is_err(),
-        "reviewer required"
-    );
-    admin::approve(&app.db, Some(&app.signing_key), lax(), release_id, "rev")
-        .await
-        .unwrap();
-    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    approve_release(&app, lax(), release_id).await.unwrap();
+    maker_lists(&app, "game").await.unwrap();
 
     // Anyone can now fetch the signed manifest, and it verifies with SLAPorSLOP's key.
     let res = app
@@ -2581,7 +2664,15 @@ async fn release_review_and_signed_manifest(db: PgPool) {
         .fetch_all(&app.db)
         .await
         .unwrap();
-    assert_eq!(actions, ["release.approve", "app.list", "release.revoke"]);
+    assert_eq!(
+        actions,
+        [
+            "release.ready",
+            "release.publish",
+            "app.list",
+            "release.revoke"
+        ]
+    );
     assert!(
         sqlx::query("delete from audit_log")
             .execute(&app.db)
@@ -2673,11 +2764,7 @@ async fn a_missing_file_fails_the_release(db: PgPool) {
     );
     // A failed release can't be approved.
     let id: Uuid = mine[0]["id"].as_str().unwrap().parse().unwrap();
-    assert!(
-        admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
-            .await
-            .is_err()
-    );
+    assert!(approve_release(&app, lax(), id).await.is_err());
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -2685,7 +2772,7 @@ async fn stages_need_an_approved_release(db: PgPool) {
     let app = test_app(db).await;
     let (_, maker) = maker_with_app(&app, "coming_soon").await;
     // A Coming soon page can be listed without a build...
-    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    maker_lists(&app, "game").await.unwrap();
     // ...but can't move to beta until a release is approved.
     assert!(
         admin::set_stage(&app.db, "game", slop_api::catalog::AppStage::Beta, "rev")
@@ -2693,15 +2780,9 @@ async fn stages_need_an_approved_release(db: PgPool) {
             .is_err()
     );
     let id = submit_and_fetch(&app, &maker, "0.1.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        id.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), id.parse().unwrap())
+        .await
+        .unwrap();
     admin::set_stage(&app.db, "game", slop_api::catalog::AppStage::Beta, "rev")
         .await
         .unwrap();
@@ -2752,18 +2833,12 @@ async fn makers_move_their_app_forward(db: PgPool) {
         body_json(res).await["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("approved release")
+            .contains("published release")
     );
     let id = submit_and_fetch(&app, &maker, "0.1.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        id.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), id.parse().unwrap())
+        .await
+        .unwrap();
     assert_eq!(manage(&app, maker.clone()).await["can_advance"], true);
 
     // Only the maker.
@@ -2911,31 +2986,35 @@ async fn unsigned_builds_cant_be_approved(db: PgPool) {
             .await,
     )
     .await;
-    assert_eq!(mine[0]["status"], "awaiting_review");
+    assert_eq!(mine[0]["status"], "ready");
     assert!(mine[0]["files"][0]["provenance"].is_null());
     let problem = mine[0]["files"][0]["provenance_problem"].as_str().unwrap();
     assert!(problem.contains("only supported for GitHub"), "{problem}");
 
-    // With signatures required (the default), approval is refused with that reason.
-    let err = admin::approve(
-        &app.db,
-        Some(&app.signing_key),
+    // With signatures required (the default), the checks fail it with that reason: here at
+    // Publish, which runs every check again.
+    let err = approve_release(
+        &app,
         admin::ReviewRules {
             require_maker_signature: true,
             ..lax()
         },
         id.parse().unwrap(),
-        "rev",
     )
     .await
     .unwrap_err()
     .to_string();
-    assert!(err.contains("no verified maker signature"), "{err}");
-    let status: String = sqlx::query_scalar("select status::text from releases")
-        .fetch_one(&app.db)
-        .await
-        .unwrap();
-    assert_eq!(status, "awaiting_review");
+    assert!(
+        err.contains("The Windows (.zip) build has no maker signature: "),
+        "{err}"
+    );
+    let (status, reason): (String, String) =
+        sqlx::query_as("select status::text, status_reason from releases")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "failed");
+    assert!(reason.contains("only supported for GitHub"), "{reason}");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -3078,26 +3157,34 @@ async fn unscanned_files_are_marked_and_the_server_says_so(db: PgPool) {
             .contains("scanning is off")
     );
 
-    // A file the scan step never saw can't be approved.
+    // A file the scan step never saw fails the release.
     sqlx::query("update release_files set scan_result = null")
         .execute(&app.db)
         .await
         .unwrap();
     let id: Uuid = mine[0]["id"].as_str().unwrap().parse().unwrap();
-    let err = admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
+    let err = approve_release(&app, lax(), id)
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("hasn't been through the scan step"), "{err}");
+    assert!(
+        err.contains("The Windows (.zip) build wasn't scanned"),
+        "{err}"
+    );
+    // A scanner finding holds it instead, for SLAPorSLOP staff.
     sqlx::query("update release_files set scan_result = 'rejected', scan_detail = 'loot box'")
         .execute(&app.db)
         .await
         .unwrap();
-    let err = admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
+    sqlx::query("update releases set status = 'awaiting_review'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let err = approve_release(&app, lax(), id)
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("rejected: loot box"), "{err}");
+    assert_eq!(err, "On hold: a scanner flagged the Windows (.zip) build.");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3710,6 +3797,7 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
     let (_, maker) = maker_with_app(&app, "beta").await;
     let (admin_id, admin) = app.user("Ada Admin", "US").await;
     let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+    flag_release(&app, &id).await;
 
     // Not an admin: the admin API doesn't exist.
     for path in ["/v1/admin/queue", "/v1/admin/apps", "/v1/admin/audit"] {
@@ -3746,7 +3834,7 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
         true
     );
 
-    // The queue shows the release with its files and the app it belongs to.
+    // The queue shows the held release with its files and the app it belongs to.
     let queue = body_json(
         app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
             .await,
@@ -3755,7 +3843,7 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
     assert_eq!(queue["releases"][0]["id"], id.as_str());
     assert_eq!(queue["releases"][0]["status"], "awaiting_review");
     assert_eq!(queue["releases"][0]["app"]["slug"], "game");
-    assert_eq!(queue["releases"][0]["files"][0]["scan_result"], "skipped");
+    assert_eq!(queue["releases"][0]["files"][0]["scan_result"], "on_hold");
     assert_eq!(queue["checks"]["signing_key"], true);
     assert!(queue["ready_to_list"].as_array().unwrap().is_empty());
     let apps = body_json(
@@ -3766,32 +3854,49 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
     assert_eq!(apps[0]["pending_releases"], 1);
     assert!(apps[0]["releases"].as_array().unwrap().is_empty());
 
-    // A beta app can't be listed before a release is approved; the refusal says why.
+    // A beta app can't be listed before a release is published; the refusal says why. And a
+    // draft is its maker's to list, not staff's.
     let res = app
-        .send(req(Method::POST, "/v1/admin/apps/game/list").cookie(&admin))
+        .send(req(Method::POST, "/v1/apps/game/list").cookie(&maker))
         .await;
     assert_eq!(res.status(), StatusCode::CONFLICT);
     assert!(
         body_json(res).await["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("approve a release")
+            .contains("needs a published release")
     );
+    let res = app
+        .send(req(Method::POST, "/v1/admin/apps/game/list").cookie(&admin))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
 
-    // Approve, then list.
+    // Accept the hold: it's ready for its maker, who publishes it; then list.
     let res = app
         .send(req(Method::POST, format!("/v1/admin/releases/{id}/approve")).cookie(&admin))
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(release_status(&app, &id).await.0, "ready");
     let queue = body_json(
         app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
             .await,
     )
     .await;
     assert!(queue["releases"].as_array().unwrap().is_empty());
-    assert_eq!(queue["ready_to_list"][0]["slug"], "game");
+    assert!(queue["ready_to_list"].as_array().unwrap().is_empty());
+    approve_release(&app, lax(), id.parse().unwrap())
+        .await
+        .unwrap();
+    // Its maker puts it in the store (staff list only a relist after an appeal, or a private app
+    // going public).
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert!(queue["ready_to_list"].as_array().unwrap().is_empty());
     assert_eq!(
-        app.send(req(Method::POST, "/v1/admin/apps/game/list").cookie(&admin))
+        app.send(req(Method::POST, "/v1/apps/game/list").cookie(&maker))
             .await
             .status(),
         StatusCode::NO_CONTENT
@@ -3871,8 +3976,12 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
             "staff_action.request",
             "app.stage",
             "app.list",
-            "release.approve",
-            "admin.grant"
+            "release.publish",
+            "release.ready",
+            "release.clear_scan",
+            "admin.grant",
+            "release.hold",
+            "release.ready"
         ]
     );
     assert!(log[0]["actor"].as_str().unwrap().starts_with("Ada Admin ("));
@@ -4201,82 +4310,508 @@ async fn release_status(app: &TestApp, id: &str) -> (String, Option<String>, Opt
     .unwrap()
 }
 
-#[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn updates_are_approved_automatically_after_a_person_approves_one(db: PgPool) {
-    let app = test_app(db).await;
-    let (_, maker) = maker_with_app(&app, "beta").await;
-
-    // The first release waits for a person, and says so.
-    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
-    let (status, reason, _) = release_status(&app, &first).await;
-    assert_eq!(status, "awaiting_review");
-    assert!(reason.unwrap().contains("first release"));
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        first.parse().unwrap(),
-        "rev",
+/// What players get of app `game`: the public release list, the manifest, a download link, the
+/// file verification and the library's update check. (releases listed, manifest status, download
+/// status, verification matches, library latest, library pending)
+async fn what_players_get(
+    app: &TestApp,
+    id: &str,
+) -> (usize, StatusCode, StatusCode, usize, Value, Value) {
+    let player = |r: Req| r.header("x-country", "US");
+    let public = body_json(
+        app.send(player(req(Method::GET, "/v1/apps/game/releases")))
+            .await,
     )
-    .await
+    .await;
+    let manifest = app
+        .send(player(req(Method::GET, "/v1/apps/game/manifest")))
+        .await
+        .status();
+    let download = app
+        .send(player(req(
+            Method::GET,
+            format!("/v1/apps/game/releases/{id}/download/windows"),
+        )))
+        .await
+        .status();
+    let sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(BUILD_BYTES));
+    let signed: slop_manifest::Signed = serde_json::from_value(
+        body_json(
+            app.send(req(Method::GET, format!("/v1/verify/{sha}")))
+                .await,
+        )
+        .await,
+    )
     .unwrap();
+    let verified: Value = serde_json::from_str(&signed.payload).unwrap();
+    let updates = body_json(
+        app.send(player(req(Method::GET, "/v1/library/updates?apps=game")))
+            .await,
+    )
+    .await;
+    (
+        public.as_array().unwrap().len(),
+        manifest,
+        download,
+        verified["matches"].as_array().unwrap().len(),
+        updates[0]["latest"].clone(),
+        updates[0]["pending"].clone(),
+    )
+}
 
-    // The next one passes every check, so SLAPorSLOP approves and signs it.
-    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+/// Checks, then Publish: every release goes through the same automatic checks, a person never
+/// reviews it, and one that passes waits for its maker to press Publish. Until then players can't
+/// see it, download it, verify it or be offered it. Publishing is for the maker signed in
+/// themselves: never someone else, and never an AI agent's token.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_release_that_passes_waits_for_its_maker_to_publish_it(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "beta").await;
+    sqlx::query("update apps set status = 'listed'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // The first release passes its checks: ready, not published.
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
     assert_eq!(
-        release_status(&app, &second).await,
-        ("approved".into(), None, Some("slop".into()))
+        release_status(&app, &first).await,
+        ("ready".into(), None, Some("slop".into()))
+    );
+    assert!(
+        admin::pending(&app.db).await.unwrap().is_empty(),
+        "nothing for staff"
     );
     let mine = body_json(
         app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
             .await,
     )
     .await;
-    assert_eq!(mine[0]["auto_approved"], true);
-    assert_eq!(mine[0]["source"], "maker");
-    assert_eq!(mine[1]["auto_approved"], false);
-
-    // After a withdrawal, a person looks again.
-    admin::revoke(&app.db, second.parse().unwrap(), "rev", "broken build")
-        .await
-        .unwrap();
-    let third = submit_and_fetch(&app, &maker, "1.2.0").await;
-    let (status, reason, _) = release_status(&app, &third).await;
-    assert_eq!(status, "awaiting_review");
-    assert!(reason.unwrap().contains("withdrawn"));
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        third.parse().unwrap(),
-        "rev",
+    assert_eq!(mine[0]["status"], "ready");
+    assert_eq!(mine[0]["progress"]["stage"], "ready");
+    assert!(mine[0]["published_at"].is_null());
+    let (title, body): (String, String) = sqlx::query_as(
+        "select title, body from notifications where user_id = $1 and title like '%passed%'",
     )
+    .bind(maker_id)
+    .fetch_one(&app.db)
     .await
     .unwrap();
+    assert_eq!(title, "Game 1.0.0 passed SLAPorSLOP's checks");
+    assert!(
+        body.starts_with("Players get it once you press Publish"),
+        "{body}"
+    );
 
-    // The maker can turn it off.
+    // Players get nothing of it.
+    let (listed, manifest, download, verified, latest, pending) =
+        what_players_get(&app, &first).await;
+    assert_eq!(listed, 0);
+    assert_eq!(manifest, StatusCode::NOT_FOUND);
+    assert_eq!(download, StatusCode::NOT_FOUND);
+    assert_eq!(verified, 0);
+    assert!(latest.is_null());
+    assert!(
+        pending.is_null(),
+        "a release its maker may never publish isn't queued"
+    );
+
+    // Publishing is the maker's: someone else doesn't see it, and an AI agent can't.
+    let publish = |r: Req| r.json(json!({}));
+    let path = format!("/v1/apps/game/releases/{first}/publish");
+    let (_, stranger) = app.user("Stranger", "US").await;
+    assert_eq!(
+        app.send(publish(req(Method::POST, &path).cookie(&stranger)))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     let res = app
         .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&maker)
+                .json(json!({ "name": "Agent", "scope": "publish" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let token = format!(
+        "Bearer {}",
+        body_json(res).await["secret"].as_str().unwrap()
+    );
+    assert_eq!(
+        app.send(publish(
+            req(Method::POST, &path).header("authorization", &token)
+        ))
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(release_status(&app, &first).await.0, "ready");
+
+    // The maker presses Publish: it's signed now and players get it.
+    let res = app
+        .send(publish(req(Method::POST, &path).cookie(&maker)))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let published = body_json(res).await;
+    assert_eq!(published["status"], "approved");
+    assert!(published["published_at"].is_string());
+    let (published_by, published_at): (String, OffsetDateTime) =
+        sqlx::query_as("select published_by, published_at from releases where id = $1::uuid")
+            .bind(&first)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(published_by, maker_id.to_string());
+    let (listed, manifest, download, verified, latest, _) = what_players_get(&app, &first).await;
+    assert_eq!(listed, 1);
+    assert_eq!(manifest, StatusCode::OK);
+    assert_eq!(download, StatusCode::OK);
+    assert_eq!(verified, 1);
+    assert_eq!(latest["release_id"], first.as_str());
+    // The manifest's approval time is when it was published.
+    let signed: slop_manifest::Signed = serde_json::from_value(
+        body_json(
+            app.send(req(Method::GET, "/v1/apps/game/manifest").header("x-country", "US"))
+                .await,
+        )
+        .await,
+    )
+    .unwrap();
+    let manifest: slop_manifest::ReleaseManifest = slop_manifest::verify(
+        &signed,
+        slop_manifest::Purpose::ReleaseManifest,
+        &[app.signing_key.verifying_key()],
+    )
+    .unwrap();
+    let approved_at = OffsetDateTime::parse(&manifest.approved_at, &Rfc3339).unwrap();
+    assert!(
+        (published_at - approved_at).abs() < time::Duration::seconds(2),
+        "{approved_at} {published_at}"
+    );
+    let titles: Vec<String> = sqlx::query_scalar(
+        "select title from notifications where user_id = $1 order by created_at",
+    )
+    .bind(maker_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert!(
+        titles.contains(&"Game 1.0.0 is out".to_string()),
+        "{titles:?}"
+    );
+    let actors: Vec<(String, String)> =
+        sqlx::query_as("select action, actor from audit_log where subject = $1 order by id")
+            .bind(&first)
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        actors,
+        [
+            ("release.ready".to_string(), "slop".to_string()),
+            ("release.publish".to_string(), maker_id.to_string())
+        ]
+    );
+    assert_eq!(
+        app.send(publish(req(Method::POST, &path).cookie(&maker)))
+            .await
+            .status(),
+        StatusCode::CONFLICT,
+        "once"
+    );
+
+    // A release that passed its checks can still be withdrawn: it never reached players.
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    assert_eq!(release_status(&app, &second).await.0, "ready");
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/apps/game/releases/{second}/withdraw"),
+            )
+            .cookie(&maker),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        release_status(&app, &second).await.1.as_deref(),
+        Some("Withdrawn by the maker before it was published.")
+    );
+
+    // There's nothing to switch on or off: no release goes out by itself.
+    let settings = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/update-settings").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(settings.get("auto_update").is_none(), "{settings}");
+    assert!(settings.get("auto_approval_ready").is_none(), "{settings}");
+    assert!(
+        app.send(
             req(Method::PUT, "/v1/apps/game/update-settings")
                 .cookie(&maker)
                 .json(json!({ "auto_update": false })),
         )
-        .await;
-    assert_eq!(res.status(), StatusCode::OK);
-    let settings = body_json(res).await;
-    assert_eq!(settings["auto_update"], false);
-    assert_eq!(settings["auto_approval_ready"], false);
-    let fourth = submit_and_fetch(&app, &maker, "1.3.0").await;
-    assert_eq!(release_status(&app, &fourth).await.0, "awaiting_review");
+        .await
+        .status()
+        .is_client_error()
+    );
 
     // Settings are the maker's alone.
-    let (_, stranger) = app.user("Stranger", "US").await;
     assert_eq!(
         app.send(req(Method::GET, "/v1/apps/game/update-settings").cookie(&stranger))
             .await
             .status(),
         StatusCode::NOT_FOUND
     );
+}
+
+/// Holds and replacement: a release a scanner flagged is on hold for staff, who can clear it
+/// without a note; a newer release that passes replaces an older held one; publishing replaces
+/// older releases that never reached players and ends a hold at an older release.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn publishing_replaces_older_releases_and_ends_a_hold(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let (_, admin_cookie) = app.user("Ada Admin", "US").await;
+    for sql in [
+        "update users set is_admin = true where display_name = 'Ada Admin'",
+        "insert into staff_roles (user_id, role, granted_by)
+         select id, 'reviewer', 'test' from users where display_name = 'Ada Admin'",
+    ] {
+        sqlx::query(sql).execute(&app.db).await.unwrap();
+    }
+    let publish = |id: &str| {
+        req(Method::POST, format!("/v1/apps/game/releases/{id}/publish"))
+            .cookie(&maker)
+            .json(json!({}))
+    };
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    assert_eq!(app.send(publish(&first)).await.status(), StatusCode::OK);
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    assert_eq!(app.send(publish(&second)).await.status(), StatusCode::OK);
+    assert_eq!(served_version(&app, &maker).await, "1.1.0");
+
+    // Holding players at an older published release is applied at once.
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "release", "release_id": first }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let change = body_json(res).await;
+    assert_eq!(change["status"], "approved", "{change}");
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+
+    // 1.2.0 is flagged: on hold for SLAPorSLOP staff, and its maker is told.
+    let third = submit_and_fetch(&app, &maker, "1.2.0").await;
+    flag_release(&app, &third).await;
+    let (kinds, needs_staff): (Vec<String>, bool) =
+        sqlx::query_as("select kinds, needs_staff from release_holds where release_id = $1::uuid")
+            .bind(&third)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((kinds, needs_staff), (vec!["scan".to_string()], true));
+    let (status, reason, _) = release_status(&app, &third).await;
+    assert_eq!(status, "awaiting_review");
+    assert_eq!(
+        reason.as_deref(),
+        Some("On hold: a scanner flagged the Windows (.zip) build.")
+    );
+    let line: String = sqlx::query_scalar(
+        "select body from release_hold_messages where release_id = $1::uuid and kind = 'system'",
+    )
+    .bind(&third)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(line, "On hold: a scanner flagged the Windows (.zip) build.");
+    let notice: String =
+        sqlx::query_scalar("select body from notifications where title = 'Game 1.2.0 is on hold'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(
+        notice.starts_with("Windows (.zip): a scanner flagged it."),
+        "{notice}"
+    );
+    assert_eq!(
+        app.send(publish(&third)).await.status(),
+        StatusCode::CONFLICT,
+        "a held release can't be published"
+    );
+
+    // Staff clear it as a false positive, with no note: it's ready for its maker.
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/admin/releases/{third}/files/windows/clear"),
+            )
+            .cookie(&admin_cookie)
+            .json(json!({})),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(release_status(&app, &third).await.0, "ready");
+    let (hold, closed_by): (String, Option<String>) =
+        sqlx::query_as("select status, closed_by from release_holds where release_id = $1::uuid")
+            .bind(&third)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(hold, "cleared");
+    assert!(closed_by.unwrap().contains("Ada Admin"));
+
+    // 1.3.0 is flagged too, then 1.4.0 passes: the held 1.3.0 is replaced. The ready 1.2.0 stays
+    // until something is published.
+    let fourth = submit_and_fetch(&app, &maker, "1.3.0").await;
+    flag_release(&app, &fourth).await;
+    let fifth = submit_and_fetch(&app, &maker, "1.4.0").await;
+    assert_eq!(release_status(&app, &fifth).await.0, "ready");
+    assert_eq!(
+        release_status(&app, &fourth).await,
+        (
+            "withdrawn".into(),
+            Some("Replaced by 1.4.0 before it was published.".into()),
+            Some("slop".into())
+        )
+    );
+    let hold: String =
+        sqlx::query_scalar("select status from release_holds where release_id = $1::uuid")
+            .bind(&fourth)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(hold, "replaced");
+    assert_eq!(release_status(&app, &third).await.0, "ready");
+
+    // Publishing 1.4.0 ends the hold at 1.0.0 and replaces 1.2.0.
+    assert_eq!(app.send(publish(&fifth)).await.status(), StatusCode::OK);
+    assert_eq!(served_version(&app, &maker).await, "1.4.0");
+    let pinned: Option<Uuid> =
+        sqlx::query_scalar("select pinned_release_id from apps where slug = 'game'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(pinned, None);
+    assert_eq!(
+        release_status(&app, &third).await.1.as_deref(),
+        Some("Replaced by 1.4.0 before it was published.")
+    );
+    let detail: Value = sqlx::query_scalar(
+        "select detail from audit_log where action = 'release.publish' and subject = $1",
+    )
+    .bind(&fifth)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(detail["ended_hold"], "1.0.0", "{detail}");
+    assert_eq!(detail["replaced"], json!(["1.2.0"]), "{detail}");
+    assert_eq!(
+        app.send(publish(&third)).await.status(),
+        StatusCode::CONFLICT
+    );
+}
+
+/// Publish waits for the app's new pictures to be reviewed, and for the source check to have a
+/// result ("couldn't read it" counts), so the maker always sees what it found first.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn publish_waits_for_pictures_and_the_source_check(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "beta").await;
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+    assert_eq!(release_status(&app, &id).await.0, "ready");
+    let set = Uuid::now_v7();
+    sqlx::query(
+        "insert into media_sets (id, app_id, commit_sha, fingerprint, source)
+         select $1, id, repeat('a', 40), 'f', 'maker' from apps where slug = 'game'",
+    )
+    .bind(set)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let publish = || {
+        req(Method::POST, format!("/v1/apps/game/releases/{id}/publish"))
+            .cookie(&maker)
+            .json(json!({}))
+    };
+    let res = app.send(publish()).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let message = body_json(res).await["error"]["message"].clone();
+    assert_eq!(
+        message,
+        "Its new pictures are waiting for review. You can publish once they're reviewed."
+    );
+
+    // Once they're reviewed, the maker hears again (in the same notice, while it's unread).
+    let times_told = || async {
+        sqlx::query_scalar::<_, i32>(
+            "select count from notifications where user_id = $1 and collapse_key = 'ready:game'",
+        )
+        .bind(maker_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+    let before = times_told().await;
+    slop_api::media::approve_set(&app.db, set, "rev")
+        .await
+        .unwrap();
+    let ready: Vec<String> = sqlx::query_scalar(
+        "select body from notifications where user_id = $1 and title = 'Game 1.0.0 passed SLAPorSLOP''s checks'",
+    )
+    .bind(maker_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(ready.len(), 1, "{ready:?}");
+    assert_eq!(times_told().await, before + 1);
+    // Pictures decided while it still can't be published (no source check result yet): nothing
+    // new to say, so no notice (B-11).
+    sqlx::query("update releases set repo_scan = null where id = $1::uuid")
+        .bind(&id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let again = Uuid::now_v7();
+    sqlx::query(
+        "insert into media_sets (id, app_id, commit_sha, fingerprint, source)
+         select $1, id, repeat('b', 40), 'g', 'maker' from apps where slug = 'game'",
+    )
+    .bind(again)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    slop_api::media::reject_set(&app.db, again, "rev", "Blurry.")
+        .await
+        .unwrap();
+    assert_eq!(times_told().await, before + 1);
+
+    sqlx::query("update releases set repo_scan = '{\"status\": \"failed\"}' where id = $1::uuid")
+        .bind(&id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(publish()).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("hasn't read this release's source yet")
+    );
+    sqlx::query(
+        "update releases set repo_scan = '{\"status\": \"not_checked\"}' where id = $1::uuid",
+    )
+    .bind(&id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(app.send(publish()).await.status(), StatusCode::OK);
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -4460,17 +4995,21 @@ async fn makers_choose_the_release_and_moves_are_reviewed(db: PgPool) {
     let app = test_app(db).await;
     let (_, maker) = maker_with_app(&app, "beta").await;
     let first = submit_and_fetch(&app, &maker, "1.0.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        first.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), first.parse().unwrap())
+        .await
+        .unwrap();
     let second = submit_and_fetch(&app, &maker, "1.1.0").await;
-    assert_eq!(release_status(&app, &second).await.0, "approved");
+    assert_eq!(release_status(&app, &second).await.0, "ready");
+    let manage = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(manage["waiting"][0]["status"], "ready", "not published yet");
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+    approve_release(&app, lax(), second.parse().unwrap())
+        .await
+        .unwrap();
     assert_eq!(served_version(&app, &maker).await, "1.1.0");
 
     let manage = body_json(
@@ -4495,9 +5034,9 @@ async fn makers_choose_the_release_and_moves_are_reviewed(db: PgPool) {
     assert_eq!(change["status"], "approved");
     assert_eq!(change["automatic"], true);
     assert_eq!(served_version(&app, &maker).await, "1.0.0");
-    // A new approved release doesn't go out while the app is held.
+    // A release that passed its checks doesn't go out until it's published.
     let third = submit_and_fetch(&app, &maker, "1.2.0").await;
-    assert_eq!(release_status(&app, &third).await.0, "approved");
+    assert_eq!(release_status(&app, &third).await.0, "ready");
     assert_eq!(served_version(&app, &maker).await, "1.0.0");
     let res = request_change(
         &app,
@@ -4507,13 +5046,7 @@ async fn makers_choose_the_release_and_moves_are_reviewed(db: PgPool) {
     .await;
     assert_eq!(res.status(), StatusCode::CONFLICT, "already held there");
 
-    // Without automatic approval, a person decides.
-    app.send(
-        req(Method::PUT, "/v1/apps/game/update-settings")
-            .cookie(&maker)
-            .json(json!({ "auto_update": false })),
-    )
-    .await;
+    // Following the newest published release again is applied at once too.
     let res = request_change(
         &app,
         &maker,
@@ -4521,34 +5054,21 @@ async fn makers_choose_the_release_and_moves_are_reviewed(db: PgPool) {
     )
     .await;
     let change = body_json(res).await;
-    assert_eq!(change["status"], "pending");
-    assert!(change["status_reason"].as_str().unwrap().contains("person"));
-    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+    assert_eq!(change["status"], "approved");
+    assert_eq!(served_version(&app, &maker).await, "1.1.0");
 
-    let (admin_id, admin_cookie) = app.user("Ada Admin", "US").await;
-    admin::set_admin(&app.db, &admin_id.to_string(), true, "test")
-        .await
-        .unwrap();
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
-            .await,
+    // Held again, publishing 1.2.0 ends the hold.
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "release", "release_id": first }),
     )
     .await;
-    assert_eq!(queue["changes"][0]["id"], change["id"]);
-    assert_eq!(queue["changes"][0]["players_get"], "1.0.0");
-    let res = app
-        .send(
-            req(
-                Method::POST,
-                format!(
-                    "/v1/admin/changes/{}/approve",
-                    change["id"].as_str().unwrap()
-                ),
-            )
-            .cookie(&admin_cookie),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(body_json(res).await["status"], "approved");
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+    approve_release(&app, lax(), third.parse().unwrap())
+        .await
+        .unwrap();
     assert_eq!(served_version(&app, &maker).await, "1.2.0");
 
     // Moving the repository: not from the store page editor, and always by a person.
@@ -4580,12 +5100,6 @@ async fn makers_choose_the_release_and_moves_are_reviewed(db: PgPool) {
         body_json(res).await
     );
 
-    app.send(
-        req(Method::PUT, "/v1/apps/game/update-settings")
-            .cookie(&maker)
-            .json(json!({ "auto_update": true })),
-    )
-    .await;
     let change = body_json(
         request_change(
             &app,
@@ -4622,18 +5136,6 @@ async fn makers_choose_the_release_and_moves_are_reviewed(db: PgPool) {
         .await
         .unwrap();
     assert_eq!(repo, elsewhere);
-    let settings = body_json(
-        app.send(req(Method::GET, "/v1/apps/game/update-settings").cookie(&maker))
-            .await,
-    )
-    .await;
-    assert_eq!(settings["auto_approval_ready"], false);
-    assert!(
-        settings["auto_approval_note"]
-            .as_str()
-            .unwrap()
-            .contains("moved")
-    );
 
     // The history shows each decision; a pending one can be cancelled.
     let pending = body_json(
@@ -4671,7 +5173,14 @@ async fn makers_choose_the_release_and_moves_are_reviewed(db: PgPool) {
         .collect();
     assert_eq!(
         statuses,
-        ["cancelled", "approved", "rejected", "approved", "approved"]
+        [
+            "cancelled",
+            "approved",
+            "rejected",
+            "approved",
+            "approved",
+            "approved"
+        ]
     );
 
     // Only the maker sees it.
@@ -4994,7 +5503,17 @@ async fn pictures_come_from_the_repository_and_wait_for_review(db: PgPool) {
     )
     .await;
     assert_eq!(queue["media"][0]["id"], set_id.as_str());
-    assert_eq!(queue["ready_to_list"][0]["pictures_pending"], true);
+    // Its maker can't put it in the store either until they're reviewed.
+    let res = app
+        .send(req(Method::POST, "/v1/apps/pics/list").cookie(&cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("pictures are waiting for review")
+    );
 
     // Checking again finds nothing new.
     let body = body_json(
@@ -5103,7 +5622,7 @@ async fn pictures_come_from_the_repository_and_wait_for_review(db: PgPool) {
     assert_eq!(order(&page), ["b.png", "a.png"]);
 
     let res = app
-        .send(req(Method::POST, "/v1/admin/apps/pics/list").cookie(&admin_cookie))
+        .send(req(Method::POST, "/v1/apps/pics/list").cookie(&cookie))
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let listed = list_slugs(&app, req(Method::GET, "/v1/apps")).await;
@@ -5349,6 +5868,13 @@ async fn ai_reviewers_use_admin_tokens(db: PgPool) {
         actor.starts_with("AI reviewer \"Claude review\""),
         "{actor}"
     );
+    // Staff list an app reinstated on appeal (makers list their own drafts).
+    sqlx::query(
+        "update apps set status = 'delisted', relist_after_appeal = true where slug = 'robot'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
     let feed = body_json(
         app.send(
             req(Method::GET, "/v1/admin/review?kind=listing")
@@ -8152,9 +8678,7 @@ async fn donations_to_mods_are_shared_with_the_original(db: PgPool) {
     .execute(&app.db)
     .await
     .unwrap();
-    admin::list_app(&app.db, "arena-dragons", "test")
-        .await
-        .unwrap();
+    maker_lists(&app, "arena-dragons").await.unwrap();
     donations_on(&app, &modder, "arena-dragons", false).await;
 
     let info = body_json(
@@ -8929,9 +9453,7 @@ async fn branches_are_community_builds_on_the_original_page(db: PgPool) {
     .execute(&app.db)
     .await
     .unwrap();
-    admin::list_app(&app.db, "castle-linux", "test")
-        .await
-        .unwrap();
+    maker_lists(&app, "castle-linux").await.unwrap();
 
     // Not in the store on its own; in the Community list; on the original's page, filling the gap.
     let store = list_slugs(&app, req(Method::GET, "/v1/apps")).await;
@@ -9047,12 +9569,8 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
         .execute(&app.db)
         .await
         .unwrap();
-    admin::approve(&app.db, Some(&app.signing_key), lax(), release_id, "rev")
-        .await
-        .unwrap();
-    admin::list_app(&app.db, "castle-dragons", "test")
-        .await
-        .unwrap();
+    approve_release(&app, lax(), release_id).await.unwrap();
+    maker_lists(&app, "castle-dragons").await.unwrap();
     let signed: slop_manifest::Signed = serde_json::from_value(
         body_json(
             app.send(req(Method::GET, "/v1/apps/castle-dragons/manifest"))
@@ -9150,9 +9668,7 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
         .execute(&app.db)
         .await
         .unwrap();
-    admin::approve(&app.db, Some(&app.signing_key), lax(), hd_release, "rev")
-        .await
-        .unwrap();
+    approve_release(&app, lax(), hd_release).await.unwrap();
     let signed: slop_manifest::Signed = serde_json::from_value(
         sqlx::query_scalar("select signed_manifest from releases where id = $1")
             .bind(hd_release)
@@ -9466,11 +9982,7 @@ async fn private_slop_is_seen_only_by_who_it_is_shared_with(db: PgPool) {
             .await
             .is_empty()
     );
-    assert!(
-        admin::list_app(&app.db, "secret-tool", "test")
-            .await
-            .is_err()
-    );
+    assert!(maker_lists(&app, "secret-tool").await.is_err());
     let res = app
         .send(req(Method::GET, "/v1/apps/secret-tool/donate").cookie(&friend))
         .await;
@@ -10098,9 +10610,7 @@ async fn private_slop_goes_public_after_a_fresh_review(db: PgPool) {
     assert_eq!(ready.len(), 1);
     assert_eq!(ready[0]["going_public"], true);
     assert!(
-        admin::list_app(&app.db, "secret-tool", "test")
-            .await
-            .is_err(),
+        maker_lists(&app, "secret-tool").await.is_err(),
         "only through the panel, which checks the repository again"
     );
 
@@ -10216,14 +10726,10 @@ async fn community_builds_of_pulse_games_need_a_pulse_handshake(db: PgPool) {
     // The original doesn't use Pulse: no requirement.
     let (player, _) = app.user("Pat Player", "US").await;
     session("castle", player).await;
-    let err = admin::list_app(&app.db, "castle-mod", "test")
-        .await
-        .unwrap_err();
+    let err = maker_lists(&app, "castle-mod").await.unwrap_err();
     assert!(err.to_string().contains("Pulse"), "{err}");
     session("castle-mod", author_id).await;
-    admin::list_app(&app.db, "castle-mod", "test")
-        .await
-        .unwrap();
+    maker_lists(&app, "castle-mod").await.unwrap();
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -11924,7 +12430,7 @@ async fn scans_and_defender_checks_gate_approval(db: PgPool) {
     assert_eq!(report["engines"]["clamav"], "test");
 
     // Scanned clean, but a Windows build also needs Microsoft Defender's check.
-    let err = admin::approve(&app.db, Some(&app.signing_key), rules, id, "rev")
+    let err = approve_release(&app, rules, id)
         .await
         .unwrap_err()
         .to_string();
@@ -11981,30 +12487,52 @@ async fn scans_and_defender_checks_gate_approval(db: PgPool) {
     )
     .await;
     assert_eq!(body_json(res).await["matched"], 1);
-    let err = admin::approve(&app.db, Some(&app.signing_key), rules, id, "rev")
+    let err = approve_release(&app, rules, id)
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("Wacatac"), "{err}");
-
-    // A reviewer who judges it a false positive clears it, with a reason; then it can go out.
     assert!(
-        admin::clear_scan(&app.db, id, "windows", "rev", "short")
-            .await
-            .is_err()
+        err.contains("Microsoft Defender flagged the Windows (.zip) build"),
+        "{err}"
     );
-    admin::clear_scan(
-        &app.db,
-        id,
-        "windows",
-        "rev",
-        "Heuristic detection of an unsigned Godot export; submitted to Microsoft as a false positive.",
-    )
-    .await
-    .unwrap();
-    admin::approve(&app.db, Some(&app.signing_key), rules, id, "rev")
+    // A Defender finding is for SLAPorSLOP staff.
+    let (kinds, needs_staff): (Vec<String>, bool) =
+        sqlx::query_as("select kinds, needs_staff from release_holds where release_id = $1")
+            .bind(id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(kinds, ["defender"]);
+    assert!(needs_staff);
+
+    // A reviewer who judges it a false positive clears it, with no note needed: it's ready for
+    // its maker to publish then, and they're told.
+    let outcome = admin::clear_scan(&app.db, rules, id, "windows", "rev", Some("  "))
         .await
         .unwrap();
+    assert_eq!(outcome, slop_api::publish::Outcome::Ready);
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["status"], "ready", "{mine}");
+    assert_eq!(mine[0]["files"][0]["cleared"], true);
+    assert!(mine[0]["files"][0]["cleared_reason"].is_null());
+    let hold: String = sqlx::query_scalar("select status from release_holds where release_id = $1")
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(hold, "cleared");
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where title = 'Game 1.0.0 passed SLAPorSLOP''s checks'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 1);
+    approve_release(&app, rules, id).await.unwrap();
     let logged: i64 =
         sqlx::query_scalar("select count(*) from audit_log where action = 'release.clear_scan'")
             .fetch_one(&app.db)
@@ -12042,23 +12570,22 @@ async fn scans_and_defender_checks_gate_approval(db: PgPool) {
         0,
         "a clean report doesn't replace a detection"
     );
-    let err = admin::approve(&app.db, Some(&app.signing_key), rules, next, "rev")
+    let err = approve_release(&app, rules, next)
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("Wacatac"), "{err}");
+    assert!(err.contains("Microsoft Defender flagged"), "{err}");
     admin::clear_scan(
         &app.db,
+        rules,
         next,
         "windows",
         "rev",
-        "Same file as 1.0.0, already judged a false positive and reported to Microsoft.",
+        Some("Same file as 1.0.0, already judged a false positive and reported to Microsoft."),
     )
     .await
     .unwrap();
-    admin::approve(&app.db, Some(&app.signing_key), rules, next, "rev")
-        .await
-        .unwrap();
+    approve_release(&app, rules, next).await.unwrap();
     let mine = body_json(
         app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
             .await,
@@ -12237,15 +12764,9 @@ async fn installed_apps_see_updates_queued_releases_and_other_builds(db: PgPool)
         .await
         .unwrap();
     let first = submit_and_fetch(&app, &maker, "1.0.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        first.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), first.parse().unwrap())
+        .await
+        .unwrap();
 
     let check = || req(Method::GET, "/v1/library/updates?apps=game,nope");
     let u = body_json(app.send(check()).await).await;
@@ -12255,12 +12776,13 @@ async fn installed_apps_see_updates_queued_releases_and_other_builds(db: PgPool)
     assert!(u[0]["pending"].is_null());
     assert_eq!(u[0]["builds"], json!([]), "no other builds to switch to");
 
-    // A newer release being checked is the queued update.
-    sqlx::query("update apps set auto_update = false")
-        .execute(&app.db)
-        .await
-        .unwrap();
-    submit_and_fetch(&app, &maker, "1.1.0").await;
+    // A newer release on hold is the queued update; one that passed but isn't published isn't
+    // (its maker may never publish it).
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    let u = body_json(app.send(check()).await).await;
+    assert_eq!(u[0]["latest"]["version"], "1.0.0");
+    assert!(u[0]["pending"].is_null(), "{u}");
+    flag_release(&app, &second).await;
     let u = body_json(app.send(check()).await).await;
     assert_eq!(u[0]["latest"]["version"], "1.0.0");
     assert_eq!(u[0]["pending"]["version"], "1.1.0");
@@ -12449,22 +12971,16 @@ async fn private_repositories_outside_github_use_a_read_only_token(db: PgPool) {
         .fetch_one(&app.db)
         .await
         .unwrap();
-    assert_eq!(status, "awaiting_review");
+    assert_eq!(status, "ready");
     // Its source check read the private repository with the token, as a Gitea host.
     let scan: Value = sqlx::query_scalar("select repo_scan from releases")
         .fetch_one(&app.db)
         .await
         .unwrap();
     assert_eq!(scan["status"], "checked", "{scan}");
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        release_id.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), release_id.parse().unwrap())
+        .await
+        .unwrap();
 
     // Someone it's shared with gets the host's short-lived link, never the token.
     let res = app
@@ -12629,9 +13145,7 @@ async fn live_releases_are_rescanned_and_new_findings_go_to_review(db: PgPool) {
         .await
         .parse()
         .unwrap();
-    admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
-        .await
-        .unwrap();
+    approve_release(&app, lax(), id).await.unwrap();
 
     // Just approved: not due for a week.
     assert_eq!(slop_api::rescan::run_once(&app.state).await.unwrap(), 0);
@@ -12699,8 +13213,9 @@ async fn live_releases_are_rescanned_and_new_findings_go_to_review(db: PgPool) {
         .json(json!({ "reason": reason }))
     };
     assert_eq!(
-        app.send(clear("ok")).await.status(),
-        StatusCode::UNPROCESSABLE_ENTITY
+        app.send(clear(&"x".repeat(1001))).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a note is optional, and up to 1,000 characters"
     );
     assert_eq!(
         app.send(clear("Test signature, matches a known false positive"))
@@ -12918,15 +13433,9 @@ async fn sensitive_actions_need_two_people_and_roles_limit_staff(db: PgPool) {
     let (c_id, c) = app.user("Cleo", "US").await;
     let (_, maker) = maker_with_app(&app, "released").await;
     let id = submit_and_fetch(&app, &maker, "1.0.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        id.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), id.parse().unwrap())
+        .await
+        .unwrap();
     let release_status = || async {
         sqlx::query_scalar::<_, String>("select status::text from releases where id = $1::uuid")
             .bind(&id)
@@ -13256,15 +13765,9 @@ async fn makers_hear_about_every_release_and_security_txt_is_served(db: PgPool) 
     let app = test_app(db).await;
     let (maker_id, maker) = maker_with_app(&app, "released").await;
     let id = submit_and_fetch(&app, &maker, "1.0.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        id.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), id.parse().unwrap())
+        .await
+        .unwrap();
     let titles: Vec<String> = sqlx::query_scalar(
         "select title from notifications where user_id = $1 and category = 'apps' order by created_at",
     )
@@ -13274,7 +13777,11 @@ async fn makers_hear_about_every_release_and_security_txt_is_served(db: PgPool) 
     .unwrap();
     assert_eq!(
         titles,
-        ["Game 1.0.0 was submitted", "Game 1.0.0 is approved"],
+        [
+            "Game 1.0.0 was submitted",
+            "Game 1.0.0 passed SLAPorSLOP's checks",
+            "Game 1.0.0 is out"
+        ],
         "no notice asks for a passkey (optional since 2026-10-25)"
     );
 
@@ -13434,24 +13941,12 @@ async fn makers_sign_hand_built_files_with_a_registered_key(db: PgPool) {
         require_maker_signature: true,
         scanner: slop_api::scan::Scanner::Off,
     };
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        strict,
-        early.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap_err();
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        strict,
-        id.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, strict, early.parse().unwrap())
+        .await
+        .unwrap_err();
+    approve_release(&app, strict, id.parse().unwrap())
+        .await
+        .unwrap();
     let manifest: Value =
         sqlx::query_scalar("select signed_manifest from releases where id = $1::uuid")
             .bind(&id)
@@ -14143,7 +14638,7 @@ async fn removal_orders_take_content_down_in_one_step(db: PgPool) {
 }
 
 /// Ratings per release (AGE-7): each release carries its rating, the store page takes the
-/// approved one, raising is immediate, and lowering waits for a person.
+/// published one, raising is immediate, and lowering is held for SLAPorSLOP staff.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn ratings_are_kept_per_release(db: PgPool) {
     let app = test_app(db).await;
@@ -14176,15 +14671,9 @@ async fn ratings_are_kept_per_release(db: PgPool) {
     let first = body_json(res).await;
     assert_eq!(first["rating"]["min_age"], 12);
     assert!(releases::fetch_next(&app.state).await.unwrap());
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        first["id"].as_str().unwrap().parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), first["id"].as_str().unwrap().parse().unwrap())
+        .await
+        .unwrap();
     let p = page().await;
     assert_eq!(
         (&p["min_age"], &p["content_labels"]),
@@ -14216,7 +14705,8 @@ async fn ratings_are_kept_per_release(db: PgPool) {
         StatusCode::OK
     );
 
-    // An update that lowers it waits for a person, even where updates go out by themselves.
+    // An update that lowers it is held for SLAPorSLOP staff (AGE-7: a lowered rating waits for
+    // a person); its maker sees how it lowers the rating.
     let res = app
         .send(submit(
             "1.1.0",
@@ -14229,27 +14719,137 @@ async fn ratings_are_kept_per_release(db: PgPool) {
         .parse()
         .unwrap();
     assert!(releases::fetch_next(&app.state).await.unwrap());
-    slop_api::updates::try_auto_approve(&app.state, lower)
-        .await
-        .unwrap();
-    let (status, reason): (String, Option<String>) =
-        sqlx::query_as("select status::text, status_reason from releases where id = $1")
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["status"], "awaiting_review", "{mine}");
+    assert_eq!(
+        mine[0]["status_reason"],
+        "On hold: it lowers the age rating, so SLAPorSLOP staff check it first."
+    );
+    assert_eq!(
+        mine[0]["rating_change"],
+        // From what players are shown: the store page, raised to 16 above.
+        json!({ "from_age": 16, "to_age": 7, "dropped_labels": ["violence"] })
+    );
+    let (kinds, needs_staff): (Vec<String>, bool) =
+        sqlx::query_as("select kinds, needs_staff from release_holds where release_id = $1")
             .bind(lower)
             .fetch_one(&app.db)
             .await
             .unwrap();
-    assert_eq!(status, "awaiting_review");
-    assert!(reason.unwrap().contains("age rating"));
+    assert_eq!(
+        (kinds, needs_staff),
+        (vec!["rating_lowered".to_string()], true)
+    );
+    let body: String =
+        sqlx::query_scalar("select body from notifications where title = 'Game 1.1.0 is on hold'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        body,
+        "It lowers the age rating, so a SLAPorSLOP staff member checks it first. You'll be told when it's ready to publish."
+    );
+    let publish = || {
+        req(
+            Method::POST,
+            format!("/v1/apps/game/releases/{lower}/publish"),
+        )
+        .cookie(&maker)
+    };
+    assert_eq!(app.send(publish()).await.status(), StatusCode::CONFLICT);
+    assert_eq!(page().await["min_age"], 16);
 
-    // A person approves it: the store page follows.
-    admin::approve(&app.db, Some(&app.signing_key), lax(), lower, "rev")
+    // Staff accept it: recorded on the release and logged; it's ready, and its maker publishes it.
+    admin::approve(&app.db, lax(), lower, "Rex Reviewer")
         .await
         .unwrap();
+    let (status, accepted_by): (String, Option<String>) = sqlx::query_as(
+        "select status::text, rating_accepted_by from releases where id = $1 and rating_accepted_at is not null",
+    )
+    .bind(lower)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (status.as_str(), accepted_by.as_deref()),
+        ("ready", Some("Rex Reviewer"))
+    );
+    let detail: Value = sqlx::query_scalar(
+        "select detail from audit_log where action = 'release.rating_lowered_accepted'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        detail,
+        json!({ "release": lower, "from": 16, "to": 7, "dropped": ["violence"] })
+    );
+    let res = app.send(publish()).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["status"], "approved");
     let p = page().await;
     assert_eq!(
         (&p["min_age"], &p["content_labels"]),
         (&json!(7), &json!([]))
     );
+    let detail: Value = sqlx::query_scalar(
+        "select detail from audit_log where action = 'release.publish' and subject = $1",
+    )
+    .bind(lower.to_string())
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(detail["rating"]["from_age"], 16, "{detail}");
+
+    // Defence in depth: a release that's ready but lowers the rating with no acceptance recorded
+    // (here written straight to the database) is put back on hold at Publish.
+    let res = app
+        .send(submit(
+            "1.1.5",
+            Some(json!({ "min_age": 3, "content_labels": [] })),
+        ))
+        .await;
+    let sneaky: Uuid = body_json(res).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    sqlx::query("update releases set status = 'ready' where id = $1")
+        .bind(sneaky)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/apps/game/releases/{sneaky}/publish"),
+            )
+            .cookie(&maker),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("lowers the age rating"),
+    );
+    assert_eq!(
+        release_status(&app, &sneaky.to_string()).await.0,
+        "awaiting_review"
+    );
+    assert_eq!(page().await["min_age"], 7);
+    sqlx::query("update releases set status = 'withdrawn' where id = $1")
+        .bind(sneaky)
+        .execute(&app.db)
+        .await
+        .unwrap();
 
     // Left out, a release takes the store page's rating.
     let res = app.send(submit("1.2.0", None)).await;
@@ -14351,15 +14951,9 @@ async fn releases_name_shared_runtimes(db: PgPool) {
         json!(["vcredist-x64", "dotnet-desktop-8"])
     );
     assert!(releases::fetch_next(&app.state).await.unwrap());
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        first["id"].as_str().unwrap().parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), first["id"].as_str().unwrap().parse().unwrap())
+        .await
+        .unwrap();
     let res = app
         .send(req(Method::GET, "/v1/apps/game/manifest").cookie(&maker))
         .await;
@@ -14445,10 +15039,8 @@ async fn anyone_can_verify_a_file_by_its_hash(db: PgPool) {
     // Not approved yet: unknown.
     assert!(verify(sha256.clone()).await.matches.is_empty());
 
-    admin::approve(&app.db, Some(&app.signing_key), lax(), release, "rev")
-        .await
-        .unwrap();
-    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    approve_release(&app, lax(), release).await.unwrap();
+    maker_lists(&app, "game").await.unwrap();
     let answer = verify(sha256.to_ascii_uppercase()).await;
     assert_eq!(answer.sha256, sha256);
     assert_eq!(answer.matches.len(), 1);

@@ -2013,7 +2013,7 @@ pub async fn report(db: &PgPool) -> anyhow::Result<PeopleReport> {
     let hired: Vec<(Uuid, f32, f32)> = sqlx::query_as(
         "select distinct s.app_id, s.quality, s.quality_after from sim_apps s
          join jobs j on j.app_id = s.app_id and j.credited_at is not null
-         join releases r on r.app_id = s.app_id and r.status = 'approved' and r.reviewed_at >= j.credited_at
+         join releases r on r.app_id = s.app_id and r.status = 'approved' and r.published_at >= j.credited_at
          where s.quality_after is not null",
     )
     .fetch_all(db)

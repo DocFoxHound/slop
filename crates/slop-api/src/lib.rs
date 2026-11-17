@@ -38,6 +38,7 @@ pub mod friends;
 pub mod frozen;
 pub mod github_app;
 pub mod history;
+pub mod holds;
 pub mod interested;
 pub mod label;
 pub mod legal;
@@ -58,6 +59,7 @@ pub mod passkeys;
 pub mod people;
 pub mod policy;
 pub mod private;
+pub mod publish;
 pub mod pulse;
 pub mod push;
 pub mod ratelimit;
@@ -275,6 +277,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(catalog::routes())
         .merge(checks::routes())
         .merge(releases::routes())
+        .merge(publish::routes())
+        .merge(holds::routes())
         .merge(library::routes())
         .merge(slop_build::routes())
         .merge(staff::routes())

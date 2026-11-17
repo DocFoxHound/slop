@@ -7,11 +7,9 @@
 //!   submits it, using the previous release's files as the pattern (same file names with the
 //!   version swapped, same program to start). Apps built by Slop Build are left to it, and
 //!   browser games (their releases are play addresses) have neither picking nor watching.
-//! - **Automatic approval:** once a person has approved one release of an app, later releases
-//!   that pass every check are approved and signed without waiting for a person. A withdrawal or
-//!   rejection since that approval sends the next release back to a person. A browser game's
-//!   release goes through on its own only with the address Play opens now: a new address
-//!   always waits for a person.
+//! - **No automatic publishing:** a release picked up here goes through the same checks as any
+//!   other, then waits for its maker to press Publish (publish.rs). Watching never puts a build
+//!   in front of players by itself.
 
 use std::time::Duration as StdDuration;
 
@@ -26,7 +24,7 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::{
-    AppState, admin,
+    AppState,
     auth::session::CurrentUser,
     error::{ApiError, ApiResult},
     github_app,
@@ -34,7 +32,8 @@ use crate::{
     slop_build::path_segment,
 };
 
-/// The reviewer name on automatic approvals, in releases.reviewed_by and the audit log.
+/// The name SLAPorSLOP's automatic checks go by, in releases.reviewed_by, app_changes and the audit
+/// log.
 pub const AUTO_REVIEWER: &str = "slop";
 /// How often the watcher looks at every repository.
 const WATCH_INTERVAL: StdDuration = StdDuration::from_secs(10 * 60);
@@ -55,98 +54,6 @@ pub fn routes() -> Router<AppState> {
             "/apps/{slug}/update-settings",
             get(get_settings).put(put_settings),
         )
-}
-
-// ---------------------------------------------------------------------------------------------
-// Automatic approval
-
-/// Whether the app's next release may be approved without a person, and if not, why.
-pub async fn auto_approval(db: &sqlx::PgPool, app_id: Uuid) -> anyhow::Result<Result<(), String>> {
-    let (enabled, approved_at, setback, moved): (bool, Option<OffsetDateTime>, bool, bool) =
-        sqlx::query_as(
-            "select a.auto_update,
-                h.at,
-                exists (select 1 from releases r where r.app_id = a.id and h.at is not null and (
-                    (r.status = 'revoked' and r.revoked_at > h.at) or
-                    (r.status in ('rejected', 'withdrawn') and r.reviewed_at > h.at))),
-                a.repo_changed_at is not null
-         from apps a
-         left join lateral (
-             -- The last approval by a person, since the app last moved repository.
-             select max(reviewed_at) as at from releases r
-             where r.app_id = a.id and r.status in ('approved', 'revoked')
-               and coalesce(r.reviewed_by, '') <> $2
-               and (a.repo_changed_at is null or r.reviewed_at > a.repo_changed_at)
-         ) h on true
-         where a.id = $1",
-        )
-        .bind(app_id)
-        .bind(AUTO_REVIEWER)
-        .fetch_one(db)
-        .await?;
-    Ok(if !enabled {
-        Err("automatic updates are off for this app".into())
-    } else if approved_at.is_none() && moved {
-        Err("the app moved repository, so its next release is reviewed by a person".into())
-    } else if approved_at.is_none() {
-        Err("an app's first release is always reviewed by a person".into())
-    } else if setback {
-        Err("a release was withdrawn or rejected since the last one a person approved".into())
-    } else {
-        Ok(())
-    })
-}
-
-/// Called once a release's files are checked. Approves it if the app qualifies and every file
-/// meets the server's rules; otherwise it stays waiting for a person, with the reason noted.
-pub async fn try_auto_approve(state: &AppState, release_id: Uuid) -> anyhow::Result<()> {
-    let app_id: Uuid = sqlx::query_scalar("select app_id from releases where id = $1")
-        .bind(release_id)
-        .fetch_one(&state.db)
-        .await?;
-    let why_not = match auto_approval(&state.db, app_id).await? {
-        // A browser game's update goes through on its own only with the address a person
-        // approved before (the one Play opens): what a new site serves hasn't been looked at.
-        Ok(()) if crate::releases::new_play_address(&state.db, release_id).await? => {
-            "Waiting for a person: a new play address is always checked by a person".to_string()
-        }
-        Ok(())
-            if let Some(why) = crate::source_scan::new_concerns(&state.db, release_id).await? =>
-        {
-            format!("Waiting for a person: {why}")
-        }
-        Ok(()) if crate::releases::rating_lowered(&state.db, release_id).await? => {
-            "Waiting for a person: its age rating or content labels go down from the last release"
-                .to_string()
-        }
-        Ok(()) => {
-            let cfg = &state.config;
-            match admin::approve(
-                &state.db,
-                cfg.releases.signing_key.as_ref(),
-                admin::ReviewRules::from_config(cfg),
-                release_id,
-                AUTO_REVIEWER,
-            )
-            .await
-            {
-                Ok(_) => {
-                    tracing::info!(release = %release_id, "release approved automatically");
-                    return Ok(());
-                }
-                Err(err) => format!("Waiting for a person: {err:#}"),
-            }
-        }
-        Err(why) => format!("Waiting for a person: {why}"),
-    };
-    sqlx::query(
-        "update releases set status_reason = $2 where id = $1 and status = 'awaiting_review'",
-    )
-    .bind(release_id)
-    .bind(why_not)
-    .execute(&state.db)
-    .await?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -494,10 +401,6 @@ struct Settings {
     /// SLAPorSLOP's GitHub App on this repository; absent when SLAPorSLOP has no App.
     github_app: Option<GithubAppStatus>,
     watch_releases: bool,
-    auto_update: bool,
-    /// Whether the next release would be approved without a person, and if not, why.
-    auto_approval_ready: bool,
-    auto_approval_note: Option<String>,
     /// Whether the watcher can work for this app at all, and if not, why.
     watch_note: Option<String>,
     watch_last_tag: Option<String>,
@@ -514,20 +417,18 @@ struct GithubAppStatus {
 }
 
 async fn load_settings(state: &AppState, app_id: Uuid, repo_url: &str) -> ApiResult<Settings> {
-    let (watch_releases, auto_update, watch_last_tag, watch_checked_at, watch_problem): (
-        bool,
+    let (watch_releases, watch_last_tag, watch_checked_at, watch_problem): (
         bool,
         Option<String>,
         Option<OffsetDateTime>,
         Option<String>,
     ) = sqlx::query_as(
-        "select watch_releases, auto_update, watch_last_tag, watch_checked_at, watch_problem
+        "select watch_releases, watch_last_tag, watch_checked_at, watch_problem
          from apps where id = $1",
     )
     .bind(app_id)
     .fetch_one(&state.db)
     .await?;
-    let approval = auto_approval(&state.db, app_id).await?;
     let newest_source: Option<String> = sqlx::query_scalar(
         "select source from releases where app_id = $1 order by created_at desc limit 1",
     )
@@ -565,9 +466,6 @@ async fn load_settings(state: &AppState, app_id: Uuid, repo_url: &str) -> ApiRes
     Ok(Settings {
         github_app,
         watch_releases,
-        auto_update,
-        auto_approval_ready: approval.is_ok(),
-        auto_approval_note: approval.err(),
         watch_note,
         watch_last_tag,
         watch_checked_at,
@@ -588,7 +486,6 @@ async fn get_settings(
 #[serde(deny_unknown_fields)]
 struct SettingsChange {
     watch_releases: Option<bool>,
-    auto_update: Option<bool>,
 }
 
 async fn put_settings(
@@ -601,16 +498,11 @@ async fn put_settings(
     if change.watch_releases == Some(true) {
         not_a_browser_game(&state, app_id).await?;
     }
-    sqlx::query(
-        "update apps set watch_releases = coalesce($2, watch_releases),
-                         auto_update = coalesce($3, auto_update)
-         where id = $1",
-    )
-    .bind(app_id)
-    .bind(change.watch_releases)
-    .bind(change.auto_update)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("update apps set watch_releases = coalesce($2, watch_releases) where id = $1")
+        .bind(app_id)
+        .bind(change.watch_releases)
+        .execute(&state.db)
+        .await?;
     state.watch_wakeup.notify_one();
     Ok(Json(load_settings(&state, app_id, &repo_url).await?))
 }
@@ -790,10 +682,10 @@ async fn watch_app(
         return Ok(false);
     }
 
-    // The pattern: the newest approved release, or else the newest one with files.
+    // The pattern: the newest published release, or else the newest one with files.
     let template_id: Option<(Uuid, String)> = sqlx::query_as(
         "select id, version from releases where app_id = $1 and status <> 'failed'
-         order by (status = 'approved') desc, created_at desc limit 1",
+         order by (status = 'approved') desc, published_at desc nulls last, created_at desc limit 1",
     )
     .bind(app_id)
     .fetch_optional(&state.db)

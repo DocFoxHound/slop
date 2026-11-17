@@ -50,6 +50,10 @@ pub fn routes() -> Router<AppState> {
             "/admin/releases/{id}/files/{platform}/clear",
             post(clear_scan),
         )
+        .route(
+            "/admin/releases/{id}/files/{platform}/waive-defender",
+            post(waive_defender),
+        )
         .route("/admin/apps/{slug}/list", post(list_app))
         .route("/admin/apps/{slug}/delist", post(delist_app))
         .route("/admin/apps/{slug}/stage", post(set_stage))
@@ -162,6 +166,9 @@ struct QueuedRelease {
     /// address this one would take over from (releases.rs `AddressContext`). Null for downloads.
     #[serde(flatten)]
     address: releases::AddressContext,
+    /// What holds it, the maker's messages (as `untrusted_text`) and SLAPorSLOP's lines, and
+    /// for a lowered age rating what it lowers (holds.rs).
+    hold: crate::holds::StaffHold,
     notes: Vec<Note>,
 }
 
@@ -229,7 +236,9 @@ struct ServerChecks {
 
 #[derive(Serialize)]
 struct Queue {
-    /// Releases being checked, waiting for review, or whose checks failed; oldest first.
+    /// Releases on hold that need staff (a scanner or Defender finding, a lowered age rating, or
+    /// a maker who wrote to staff) and makers' questions about failed releases: makers waiting
+    /// for an answer first, then the oldest (holds.rs).
     releases: Vec<QueuedRelease>,
     /// Makers' changes that would have players download something different; oldest first.
     changes: Vec<QueuedChange>,
@@ -247,8 +256,8 @@ struct Queue {
     appeals: Vec<crate::moderation::QueuedAppeal>,
     /// The Content Policy rules a decision can cite: (code, title).
     rules: &'static [(&'static str, &'static str)],
-    /// Drafts that could go in the store (Coming soon pages, or apps with an approved release),
-    /// and apps reinstated on appeal that wait to go back.
+    /// Apps reinstated on appeal that wait to go back, and private apps whose owner asked to
+    /// make them public (`admin::STAFF_LISTS`); makers put drafts in the store themselves.
     ready_to_list: Vec<ReadyApp>,
     /// Live releases a re-scan flagged (rescan.rs): withdraw them or keep them.
     rescans: Vec<FlaggedFile>,
@@ -261,15 +270,23 @@ const APP_COLUMNS: &str =
     "a.slug, a.title, a.stage, a.status, a.repo_url, u.display_name as maker, a.platforms";
 
 async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Json<Queue>> {
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "select r.id, a.slug from releases r join apps a on a.id = r.app_id
-         where r.status in ('fetching', 'awaiting_review', 'failed')
-         order by r.created_at limit 100",
-    )
+    let rows: Vec<(Uuid, String, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select r.id, a.slug, {unanswered} as unanswered
+         from release_holds h join releases r on r.id = h.release_id join apps a on a.id = r.app_id
+         where {needs} order by {order} limit 100",
+        unanswered = crate::holds::UNANSWERED,
+        needs = crate::holds::NEEDS_STAFF,
+        order = crate::holds::QUEUE_ORDER,
+    )))
     .fetch_all(&state.db)
     .await?;
+    let scanning = state.config.releases.scanner.is_on();
     let mut releases = Vec::with_capacity(rows.len());
-    for (id, slug) in rows {
+    for (id, slug, _) in rows {
+        let hold = {
+            let mut conn = state.db.acquire().await?;
+            crate::holds::staff_view(&mut conn, scanning, id).await?
+        };
         let app: AppRef = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "select {APP_COLUMNS} from apps a join users u on u.id = a.maker_id where a.slug = $1"
         )))
@@ -280,6 +297,7 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
             app,
             release: releases::load_release(&state, id).await?,
             address: releases::address_context(&state.db, id).await?,
+            hold,
             notes: review::notes(&state.db, "release", id).await?,
         });
     }
@@ -290,13 +308,12 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
                 exists (select 1 from media_sets ms where ms.app_id = a.id and ms.status = 'pending') as pictures_pending,
                 a.visibility = 'private' as going_public,
                 a.relist_after_appeal as after_appeal,
-                greatest(a.updated_at, (select max(r.reviewed_at) from releases r where r.app_id = a.id and r.status = 'approved')) as waiting_since
+                greatest(a.updated_at, (select max(r.published_at) from releases r where r.app_id = a.id and r.status = 'approved')) as waiting_since
          from apps a join users u on u.id = a.maker_id
-         where (a.status = 'draft' or (a.status = 'delisted' and a.relist_after_appeal))
-           and (a.visibility = 'public' or a.public_requested_at is not null)
-           and (a.stage = 'coming_soon' or {playable})
+         where {staff_lists} and (a.stage = 'coming_soon' or {playable})
          order by a.updated_at",
         play = crate::catalog::PLAY_ADDRESS,
+        staff_lists = crate::admin::STAFF_LISTS,
         playable = crate::admin::playable_sql()
     )))
     .fetch_all(&state.db)
@@ -376,6 +393,9 @@ struct ApprovedRelease {
     version: String,
     #[serde(with = "time::serde::rfc3339::option")]
     reviewed_at: Option<OffsetDateTime>,
+    /// When its maker published it.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    published_at: Option<OffsetDateTime>,
     /// A browser game's release: its play address.
     #[serde(default)]
     play_address: Option<String>,
@@ -470,8 +490,8 @@ struct ModeratedApp {
     app: AppRef,
     /// Approved releases, newest first, for withdrawing one.
     releases: Vec<ApprovedRelease>,
-    /// Releases still being checked or waiting for review: what listing a Beta or Released app
-    /// is waiting on when it has no approved release yet.
+    /// Releases not published yet (being checked, on hold, or waiting for their maker to
+    /// publish): what listing a Beta or Released app is waiting on when it has none published.
     pending_releases: i64,
     /// What needs staff, most urgent first (`FLAGS`); empty for a healthy app.
     flags: Vec<String>,
@@ -656,18 +676,19 @@ async fn apps(
                 nr.version as newest_version, nr.status::text as newest_status, nr.status_reason as newest_reason,
                 sv.version as serving_version, sv.play_address as serving_play_address,
                 (select count(*) from releases r
-                 where r.app_id = b.id and r.status in ('fetching', 'awaiting_review')) as pending_releases,
+                 where r.app_id = b.id and r.status in ('fetching', 'awaiting_review', 'ready')) as pending_releases,
                 fl.rescan_flags, fl.downloads_lost,
                 (select count(*) from reports p
                  where p.subject_kind = 'app' and p.subject_id = b.id and p.status = 'open') as open_reports,
                 exists (select 1 from donation_holds h where h.app_id = b.id and h.lifted_at is null) as donations_paused,
                 pl.players, pl.last_played_at, vt.vote_count, vt.not_slop_percent,
                 coalesce((select json_agg(json_build_object('id', r.id, 'version', r.version, 'reviewed_at', r.reviewed_at,
+                                                            'published_at', r.published_at,
                                                             'play_address', r.play_address)
-                                          order by r.reviewed_at desc)
-                          from (select id, version, reviewed_at, play_address from releases r
+                                          order by r.published_at desc)
+                          from (select id, version, reviewed_at, published_at, play_address from releases r
                                 where r.app_id = b.id and r.status = 'approved'
-                                order by reviewed_at desc limit 10) r), '[]') as releases
+                                order by published_at desc limit 10) r), '[]') as releases
              from base b
              left join media_sets ms on ms.id = b.media_set_id
              left join lateral (select version, status, status_reason from releases r
@@ -682,7 +703,7 @@ async fn apps(
                                 where r.app_id = b.id and r.status = 'approved'
                                   and (r.signed_manifest is not null or r.play_address is not null)
                                   and (not 'browser' = any(b.platforms) or r.id = pr.id)
-                                order by coalesce(r.id = b.pinned_release_id, false) desc, r.reviewed_at desc
+                                order by coalesce(r.id = b.pinned_release_id, false) desc, r.published_at desc
                                 limit 1) sv on true
              left join lateral (select count(*) filter (where f.rescan_flagged_at is not null) as rescan_flags,
                                        count(*) filter (where f.release_id = sv.id
@@ -777,25 +798,64 @@ struct Reason {
     reason: String,
 }
 
+/// Accepting a held release, clearing a false positive, or keeping a re-scanned release: an
+/// optional note for the maker.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct OptionalReason {
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// An optional note, trimmed (empty is none), of at most 1,000 characters.
+fn optional_note(reason: Option<&str>) -> ApiResult<Option<&str>> {
+    let note = reason.map(str::trim).filter(|r| !r.is_empty());
+    if note.is_some_and(|n| n.chars().count() > 1000) {
+        return Err(ApiError::invalid(
+            "reason",
+            "keep the note to 1,000 characters",
+        ));
+    }
+    Ok(note)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stage {
     stage: AppStage,
 }
 
+/// Accepts a release on hold (admin.rs `accept`), with an optional note for the maker: it's
+/// ready for its maker to publish. A lowered age rating is accepted by a person signed in, never
+/// an AI agent's token (403).
 async fn approve(
     State(state): State<AppState>,
     admin: AdminUser,
     Path(id): Path<Uuid>,
+    body: Option<Json<OptionalReason>>,
 ) -> ApiResult<StatusCode> {
     admin.need(crate::staff::Perm::Review)?;
-    let cfg = &state.config;
-    admin::approve(
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let note = optional_note(body.reason.as_deref())?;
+    if admin.token.is_some() {
+        let rating: bool = sqlx::query_scalar(
+            "select exists (select 1 from release_holds
+                            where release_id = $1 and status = 'open' and 'rating_lowered' = any(kinds))",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+        if rating {
+            return Err(ApiError::Refused(admin::RATING_NEEDS_A_PERSON));
+        }
+    }
+    admin::accept(
         &state.db,
-        cfg.releases.signing_key.as_ref(),
-        ReviewRules::from_config(cfg),
+        ReviewRules::from_config(&state.config),
         id,
         &admin.actor,
+        Some((admin.user_id, admin.token.is_some())),
+        note,
     )
     .await
     .map_err(refused)?;
@@ -815,16 +875,56 @@ async fn reject(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Clears a file's finding as a false positive, with an optional note for the maker; the release
+/// goes on to its maker if nothing else holds it (publish.rs).
 async fn clear_scan(
     State(state): State<AppState>,
     admin: AdminUser,
     Path((id, platform)): Path<(Uuid, String)>,
-    Json(body): Json<Reason>,
+    body: Option<Json<OptionalReason>>,
 ) -> ApiResult<StatusCode> {
     admin.need(crate::staff::Perm::Review)?;
-    admin::clear_scan(&state.db, id, &platform, &admin.actor, &body.reason)
-        .await
-        .map_err(refused)?;
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let note = optional_note(body.reason.as_deref())?;
+    admin::clear_scan(
+        &state.db,
+        ReviewRules::from_config(&state.config),
+        id,
+        &platform,
+        &admin.actor,
+        note,
+    )
+    .await
+    .map_err(refused)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Waives a Windows file's missing Microsoft Defender check (admin.rs `waive_defender`), with an
+/// optional note for the maker: a staff member signed in themselves checked the build by hand,
+/// typically where Slop Check can't run (a repository outside GitHub). Never an AI agent's token.
+async fn waive_defender(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path((id, platform)): Path<(Uuid, String)>,
+    body: Option<Json<OptionalReason>>,
+) -> ApiResult<StatusCode> {
+    admin.need(crate::staff::Perm::Review)?;
+    if admin.token.is_some() {
+        return Err(ApiError::Refused(admin::WAIVER_NEEDS_A_PERSON));
+    }
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let note = optional_note(body.reason.as_deref())?;
+    admin::waive_defender(
+        &state.db,
+        ReviewRules::from_config(&state.config),
+        id,
+        &platform,
+        &admin.actor,
+        Some(admin.user_id),
+        note,
+    )
+    .await
+    .map_err(refused)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -842,29 +942,27 @@ struct FlaggedFile {
     title: String,
 }
 
-/// Keeps a live release a re-scan flagged: the reviewer judged it a false positive (logged).
+/// Keeps a live release a re-scan flagged: the reviewer judged it a false positive (logged), with
+/// an optional note.
 async fn clear_rescan(
     State(state): State<AppState>,
     admin: AdminUser,
     Path((id, platform)): Path<(Uuid, String)>,
-    Json(body): Json<Reason>,
+    body: Option<Json<OptionalReason>>,
 ) -> ApiResult<StatusCode> {
     admin.need(crate::staff::Perm::Review)?;
-    let reason = body.reason.trim();
-    if !(10..=1000).contains(&reason.chars().count()) {
-        return Err(ApiError::invalid(
-            "reason",
-            "say why in 10 to 1000 characters",
-        ));
-    }
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let reason = optional_note(body.reason.as_deref())?;
     let mut tx = state.db.begin().await?;
     let cleared = sqlx::query(
-        "update release_files set rescan_flagged_at = null, rescan_cleared_reason = $3
+        "update release_files set rescan_flagged_at = null, rescan_cleared_reason = $3,
+                rescan_cleared_at = now(), rescan_cleared_by = $4
          where release_id = $1 and platform = $2 and rescan_flagged_at is not null",
     )
     .bind(id)
     .bind(&platform)
     .bind(reason)
+    .bind(&admin.actor)
     .execute(&mut *tx)
     .await?
     .rows_affected();

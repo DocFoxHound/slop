@@ -15,8 +15,10 @@
 //   overdue         Olly Overdue: no passkey, past the deadline publishers had before passkeys
 //                   became optional (2026-10-25); publishing doesn't ask (passkeys.e2e.ts).
 //   teen            Tia Teen (GB): the under-18 view. Friends with Pat, invited to Night Owls.
-//   maker2          Bo Builder: Pocket Golf (pocket-golf: release 1.1.0 and pictures waiting for
-//                   review, a repository move waiting, a re-scan flag), Frozen Fjord (frozen-fjord,
+//   maker2          Bo Builder: Pocket Golf (pocket-golf: release 1.1.0 on hold for SLAPorSLOP staff
+//                   (a scanner flagged it; publishing-holds.e2e.ts writes to staff about it, and it
+//                   stays on hold), pictures waiting for review, a repository move waiting, a re-scan
+//                   flag), Frozen Fjord (frozen-fjord,
 //                   frozen by staff), Delisted Dash (delisted-dash, taken out of the store; Bo
 //                   appealed), the Linux build (lantern-keep-linux) and mod
 //                   (lantern-keep-more-lanterns) of Lantern Keep; claimed the "A Linux build"
@@ -58,7 +60,8 @@
 // Objects (server.ids):
 //   browserApp "orbit-tap": Sam's game that plays in the browser, listed and released, tag
 //     arcade. Its 1.0.0 is a play address, browserPlayAddress (an http page on the fake GitHub,
-//     which only a test server allows), checked and approved by staff. Nobody has played it and
+//     which only a test server allows): it passed the checks, Sam published it and put the game in
+//     the store himself. Nobody has played it and
 //     it's in nobody's library: a test that presses Play on it as someone answers the launch
 //     itself (page.route), so that stays true; tests that need a recorded play make their own
 //     browser game (store-helpers.ts listedApp with platforms ["browser"]).
@@ -86,9 +89,11 @@
 //     devices are removed afterwards, so a test's device is the account's first.
 //   Admin queues: 3 open reports (report is one's reference), 2 appeals (suspensionDecision,
 //     delistDecision), staffAction (an AI agent asked to make Sam support staff: it waits for a
-//     person), a server alert, a possible-abuse signal, and the release, pictures, repository
-//     move, portfolios (Remy's, Ivy's and Pip's newer one), People problem and review dispute
-//     above. No donation pauses and no shelves (admin.e2e.ts expects none), and no AI messages
+//     person), a server alert, a possible-abuse signal, and the release on hold, pictures,
+//     repository move, portfolios (Remy's, Ivy's and Pip's newer one), People problem and review
+//     dispute above. Every other seeded release passed its checks and was published by its maker.
+//     The fake GitHub serves any repository's source (an MIT licence), so releases sent in the
+//     tests get a source check and can be published. No donation pauses and no shelves (admin.e2e.ts expects none), and no AI messages
 //     beyond Mia's four.
 //   Unread notifications: most accounts have some.
 //

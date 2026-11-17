@@ -1037,7 +1037,53 @@ pub async fn approve_set(db: &sqlx::PgPool, id: Uuid, reviewer: &str) -> anyhow:
         json!({ "set": id }),
     )
     .await?;
+    tell_ready_again(&mut tx, app_id).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+/// Pictures were decided (the set waiting is approved or rejected): if none wait any more and the
+/// app's newest release that passed its checks can be published now, its maker hears again that
+/// it's ready (merged with the unread "passed the checks" notice). Nothing when other pictures
+/// still wait or it can't be published yet for another reason (its source check has no result,
+/// a newer release is out, the app is frozen), so a decision sends no notice that says nothing new.
+async fn tell_ready_again(conn: &mut sqlx::PgConnection, app_id: Uuid) -> anyhow::Result<()> {
+    if has_pending(conn, app_id).await? {
+        return Ok(());
+    }
+    let ready: Option<Uuid> = sqlx::query_scalar(
+        "select r.id from releases r
+         where r.app_id = $1 and r.status = 'ready'
+           and r.repo_scan ->> 'status' in ('checked', 'not_checked')
+           and not exists (select 1 from releases n
+                           where n.app_id = r.app_id and n.status in ('approved', 'revoked')
+                             and n.created_at > r.created_at)
+         order by r.created_at desc limit 1",
+    )
+    .bind(app_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(release) = ready else {
+        return Ok(());
+    };
+    if crate::frozen::frozen_reason(&mut *conn, app_id)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let concerns = crate::source_scan::new_concerns(conn, release).await?;
+    let rating = crate::releases::rating_change(conn, release).await?;
+    crate::releases::tell_maker(
+        conn,
+        release,
+        crate::releases::ReleaseEvent::Ready {
+            pictures_pending: false,
+            concerns: concerns.as_deref(),
+            rating: rating.as_ref(),
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -1050,14 +1096,14 @@ pub async fn reject_set(
     let reason = reason.trim();
     anyhow::ensure!(!reason.is_empty(), "say why, for the maker");
     let mut tx = db.begin().await?;
-    let row: Option<(String, String)> = sqlx::query_as(
-        "select ms.status, a.slug from media_sets ms join apps a on a.id = ms.app_id
+    let row: Option<(String, String, Uuid)> = sqlx::query_as(
+        "select ms.status, a.slug, a.id from media_sets ms join apps a on a.id = ms.app_id
          where ms.id = $1 for update of ms",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (status, slug) = row.context("no such set of pictures")?;
+    let (status, slug, app_id) = row.context("no such set of pictures")?;
     anyhow::ensure!(
         status == "pending",
         "these pictures aren't waiting for review ({status})"
@@ -1079,11 +1125,13 @@ pub async fn reject_set(
         json!({ "set": id, "reason": reason }),
     )
     .await?;
+    tell_ready_again(&mut tx, app_id).await?;
     tx.commit().await?;
     Ok(())
 }
 
-/// Whether an app has pictures waiting for review (it can't be listed until they're reviewed).
+/// Whether an app has pictures waiting for review (it can't be listed, nor a release published,
+/// until they're reviewed).
 pub async fn has_pending(conn: &mut sqlx::PgConnection, app_id: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(
         "select exists (select 1 from media_sets where app_id = $1 and status = 'pending')",

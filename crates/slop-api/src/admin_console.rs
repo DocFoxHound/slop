@@ -79,6 +79,9 @@ struct ReleaseRow {
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     reviewed_at: Option<OffsetDateTime>,
+    /// When its maker published it (players get the newest published one); null until then.
+    #[serde(with = "time::serde::rfc3339::option")]
+    published_at: Option<OffsetDateTime>,
     /// A browser game's release: its play address, and what the automatic checks found
     /// (releases.rs `AddressChecks`).
     play_address: Option<String>,
@@ -165,7 +168,8 @@ async fn record(
     .await?
     .ok_or(ApiError::NotFound)?;
     let releases = sqlx::query_as(
-        "select id, version, status::text as status, created_at, reviewed_at, play_address, address_checks
+        "select id, version, status::text as status, created_at, reviewed_at, published_at, play_address,
+                address_checks
          from releases where app_id = $1 order by created_at desc limit 30",
     )
     .bind(app.id)
@@ -303,7 +307,12 @@ async fn edit_listing(
         if v != min_age {
             changed.insert("min_age".into(), json!({ "from": min_age, "to": v }));
             fields.push("age rating");
-            qb.push(", min_age = ").push_bind(v);
+            // Staff set it: the maker can't lower the store page below it, and a release rated
+            // lower doesn't either when published (AGE-7).
+            qb.push(", min_age = ")
+                .push_bind(v)
+                .push(", min_age_floor = ")
+                .push_bind(v);
         }
     }
     if let Some(v) = &b.content_labels {
@@ -311,7 +320,10 @@ async fn edit_listing(
         if v != labels {
             changed.insert("content_labels".into(), json!({ "from": labels, "to": v }));
             fields.push("content labels");
-            qb.push(", content_labels = ").push_bind(v);
+            qb.push(", content_labels = ")
+                .push_bind(v.clone())
+                .push(", content_labels_floor = ")
+                .push_bind(v);
         }
     }
     if fields.is_empty() {

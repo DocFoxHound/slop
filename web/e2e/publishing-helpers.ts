@@ -74,7 +74,8 @@ interface ReleaseRow {
   status: string;
 }
 
-/** Submits a Windows release from the fake host, waits for SLAPorSLOP to fetch it, and returns its ID. */
+/** Submits a Windows release from the fake host, waits for SLAPorSLOP's checks to pass it (ready
+ *  for its maker to publish), and returns its ID. */
 export async function submitRelease(who: Who, slug: string, repo: string, version: string, notes?: string): Promise<string> {
   const release = await call<ReleaseRow>(who, "POST", `/v1/apps/${slug}/releases`, {
     version,
@@ -86,13 +87,14 @@ export async function submitRelease(who: Who, slug: string, repo: string, versio
     .poll(async () => (await call<ReleaseRow[]>(who, "GET", `/v1/apps/${slug}/releases`)).find((r) => r.id === release.id)?.status, {
       timeout: 20_000,
     })
-    .toBe("awaiting_review");
+    .toBe("ready");
   return release.id;
 }
 
-/** Staff approve (and sign) a release, through the review queue's route. */
-export async function approve(releaseId: string): Promise<void> {
-  await call("admin", "POST", `/v1/admin/releases/${releaseId}/approve`, {});
+/** Its maker publishes a release that passed its checks (as the Publish button does): signed,
+ *  and players get it. */
+export async function publish(who: Who, slug: string, releaseId: string): Promise<void> {
+  await call(who, "POST", `/v1/apps/${slug}/releases/${releaseId}/publish`);
 }
 
 /** A seeded account's unread notifications that link to `path`, marked read. */

@@ -983,6 +983,7 @@ async fn people_job(
 async fn seed_waiting(app: &TestApp) -> Waiting {
     let (maker_id, maker) = maker_with_app(app, "beta").await;
     let release = submit_and_fetch(app, &maker, "1.0.0").await;
+    flag_release(app, &release).await;
     let game = app_id(app, "game").await;
     listed_with(app, maker_id, "other", "released", "status = 'draft'").await;
     let other = app_id(app, "other").await;
@@ -1021,8 +1022,16 @@ async fn seed_waiting(app: &TestApp) -> Waiting {
     .execute(&app.db)
     .await
     .unwrap();
-    // Ready to list: a coming-soon draft.
-    listed_with(app, maker_id, "soon", "coming_soon", "status = 'draft'").await;
+    // Ready for staff to list: a coming-soon page reinstated on appeal. (A draft its maker puts in
+    // the store themselves.)
+    listed_with(
+        app,
+        maker_id,
+        "soon",
+        "coming_soon",
+        "status = 'delisted', relist_after_appeal = true",
+    )
+    .await;
     let listing = app_id(app, "soon").await;
     // A creative's portfolio, a problem on a job, and a disputed review.
     let (cora, _) = app.user("Cora Creative", "US").await;
@@ -1137,9 +1146,22 @@ async fn the_review_feed_shows_every_kind_with_the_requests_that_decide_it(db: P
             .clone()
     };
 
-    // A release: its files and checks, approve or reject with a reason.
+    // A release on hold for staff: its files, checks and hold; accept, reject with a reason, or
+    // answer its maker.
     let release = item(&w.release);
-    assert_eq!(release["question"], "Approve version 1.0.0 of Game?");
+    assert!(
+        release["question"]
+            .as_str()
+            .unwrap()
+            .starts_with("Accept version 1.0.0 of Game?"),
+        "{release}"
+    );
+    assert!(release["detail"]["hold"].is_object(), "{release}");
+    assert_eq!(
+        release["answer"]["path"],
+        format!("/v1/admin/releases/{}/hold/messages", w.release)
+    );
+    assert!(release["answer"]["body"]["body"].is_string(), "{release}");
     assert_eq!(release["app"]["slug"], "game");
     assert_eq!(
         release["app"]["store_url"],
@@ -1149,7 +1171,8 @@ async fn the_review_feed_shows_every_kind_with_the_requests_that_decide_it(db: P
     assert_eq!(release["detail"]["files"][0]["platform"], "windows");
     assert_eq!(
         release["approve"],
-        json!({ "method": "POST", "path": format!("/v1/admin/releases/{}/approve", w.release) })
+        json!({ "method": "POST", "path": format!("/v1/admin/releases/{}/approve", w.release),
+                "body": { "reason": "<optional: a note shown to the maker>" } })
     );
     assert_eq!(
         release["reject"]["path"],
@@ -1258,9 +1281,10 @@ async fn the_review_feed_shows_every_kind_with_the_requests_that_decide_it(db: P
     // At most 100 of a kind.
     let (maker_id, _) = app.user("Prolific Maker", "US").await;
     sqlx::query(
-        "insert into apps (id, slug, title, summary, kind, stage, status, maker_id, repo_url, license_spdx)
-         select gen_random_uuid(), 'bulk-' || n, 'Bulk ' || n, 'One of many', 'game', 'coming_soon', 'draft', $1,
-                'https://github.com/x/y', 'MIT'
+        "insert into apps (id, slug, title, summary, kind, stage, status, relist_after_appeal, maker_id, repo_url,
+                           license_spdx)
+         select gen_random_uuid(), 'bulk-' || n, 'Bulk ' || n, 'One of many', 'game', 'coming_soon', 'delisted', true,
+                $1, 'https://github.com/x/y', 'MIT'
          from generate_series(1, 101) n",
     )
     .bind(maker_id)
@@ -1540,7 +1564,7 @@ async fn the_status_counts_what_waits_and_reads_the_ops_folders(db: PgPool) {
             "releases_to_review": 1, "releases_failed_this_week": 0, "changes": 3, "pictures": 1,
             "portfolios": 1, "reports_urgent": 1, "reports_serious": 1, "reports_other": 1,
             "reports_overdue": 1, "appeals": 1, "live_releases_flagged_by_rescan": 0,
-            "abuse_signals": 1, "apps_ready_to_list": 0
+            "abuse_signals": 1, "apps_ready_to_list": 1
         }),
         "{s}"
     );
@@ -1557,20 +1581,13 @@ async fn the_status_counts_what_waits_and_reads_the_ops_folders(db: PgPool) {
         (&json!(false), &json!(true), &json!(false))
     );
     assert_eq!(s["apps_listed"], 1);
-    assert_eq!(s["approved_last_day"], 0);
+    assert_eq!(s["published_last_day"], 0);
     let accounts = s["accounts"].as_i64().unwrap();
 
-    // The release is approved; then a re-scan flags it, and the app is ready to list. A failed
+    // The release is accepted and published; then a re-scan flags it. Its app is a draft its
+    // maker puts in the store, so staff still have only the reinstated one to list. A failed
     // release counts for the week; a closed account doesn't count.
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        w.release.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    accept_and_publish(&app, &w.release).await;
     sqlx::query("update release_files set rescan_flagged_at = now()")
         .execute(&app.db)
         .await
@@ -1593,7 +1610,7 @@ async fn the_status_counts_what_waits_and_reads_the_ops_folders(db: PgPool) {
     assert_eq!(s["waiting"]["releases_failed_this_week"], 1);
     assert_eq!(s["waiting"]["live_releases_flagged_by_rescan"], 1);
     assert_eq!(s["waiting"]["apps_ready_to_list"], 1);
-    assert_eq!(s["approved_last_day"], 1);
+    assert_eq!(s["published_last_day"], 1);
     assert_eq!(s["accounts"].as_i64().unwrap(), accounts - 1);
 
     // Without the ops folders, those are simply unknown.
@@ -2184,7 +2201,7 @@ async fn account_actions_wait_for_a_second_person_and_check_again_when_approved(
 // The admin MCP endpoint
 
 /// Every tool the admin MCP endpoint offers (agent.rs TOOLS).
-const ADMIN_TOOLS: [&str; 66] = [
+const ADMIN_TOOLS: [&str; 68] = [
     "slop_status",
     "review_guide",
     "review_queue",
@@ -2192,6 +2209,8 @@ const ADMIN_TOOLS: [&str; 66] = [
     "add_note",
     "approve_release",
     "reject_release",
+    "release_hold",
+    "answer_release_hold",
     "withdraw_release",
     "clear_scan_finding",
     "keep_rescanned_release",
@@ -2726,9 +2745,12 @@ async fn agents_review_releases_changes_pictures_and_portfolios_through_mcp_tool
         "missing argument: note"
     );
 
-    // Listing needs an approved release first; a read token can't decide anything.
+    // A draft is its maker's to put in the store; a read token can't decide anything.
     let text = tool_refused(&app, &review, "list_app", json!({ "slug": "game" })).await;
-    assert!(text.contains("approve a release"), "{text}");
+    assert!(
+        text.contains("its maker puts a draft in the store themselves"),
+        "{text}"
+    );
     assert!(
         tool_refused(&app, &read, "list_app", json!({ "slug": "soon" }))
             .await
@@ -2743,11 +2765,12 @@ async fn agents_review_releases_changes_pictures_and_portfolios_through_mcp_tool
             .await
             .contains("forbidden")
     );
+    // A note is optional, up to 1,000 characters.
     tool_refused(
         &app,
         &review,
         "clear_scan_finding",
-        clear("windows", "fine"),
+        clear("windows", &"x".repeat(1001)),
     )
     .await;
     let text = tool_refused(&app, &review, "clear_scan_finding", clear("macos", why)).await;
@@ -2764,6 +2787,21 @@ async fn agents_review_releases_changes_pictures_and_portfolios_through_mcp_tool
             .unwrap();
     assert!(cleared.unwrap().starts_with("AI reviewer \"Agent review\""));
     assert_eq!(audit_actors(&app, "release.clear_scan").await.len(), 1);
+    // Nothing else held it: it's ready for its maker. Put back on hold for what follows.
+    assert_eq!(release_status(w.release.clone()).await, "ready");
+    for sql in [
+        "update release_files set cleared_at = null, cleared_by = null, cleared_reason = null
+         where release_id = $1::uuid",
+        "update releases set status = 'awaiting_review' where id = $1::uuid",
+        "update release_holds set status = 'open', closed_at = null, closed_by = null
+         where release_id = $1::uuid",
+    ] {
+        sqlx::query(sql)
+            .bind(&w.release)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
 
     // Rejecting a release: it needs a reason, the maker is told, and it happens once.
     let other = copy_release(&app, &w.release, "1.0.1", "awaiting_review")
@@ -2818,28 +2856,73 @@ async fn agents_review_releases_changes_pictures_and_portfolios_through_mcp_tool
     .await;
     assert!(text.contains("conflict"), "{text}");
 
-    // Approving: a read token can't; a review token approves and signs, once.
+    // Accepting a hold: a read token can't; a review token accepts it, once. It's ready for its
+    // maker, and nothing is signed until they publish it.
     assert!(
         tool_refused(&app, &read, "approve_release", json!({ "id": w.release }))
             .await
             .contains("forbidden")
     );
     assert_eq!(release_status(w.release.clone()).await, "awaiting_review");
-    let (ok, text) = tool(&app, &review, "approve_release", json!({ "id": w.release })).await;
+    // Answering its maker first: a read token can't; a review token's answer is in the hold's
+    // conversation, and the maker is told.
+    let answer = json!({ "id": w.release, "body": "Looking at the UPX finding now." });
+    assert!(
+        tool_refused(&app, &read, "answer_release_hold", answer.clone())
+            .await
+            .contains("forbidden")
+    );
+    tool_ok(&app, &review, "answer_release_hold", answer).await;
+    let hold = tool_ok(&app, &read, "release_hold", json!({ "id": w.release })).await;
+    assert!(
+        hold.to_string().contains("Looking at the UPX finding now."),
+        "{hold}"
+    );
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications
+         where user_id = $1 and title = 'SLAPorSLOP staff answered about Game 1.0.0'",
+    )
+    .bind(maker)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 1);
+    // Accepting, with an optional note for the maker.
+    let (ok, text) = tool(
+        &app,
+        &review,
+        "approve_release",
+        json!({ "id": w.release, "reason": "UPX packing, a false positive." }),
+    )
+    .await;
     assert!(ok, "{text}");
-    assert_eq!(release_status(w.release.clone()).await, "approved");
+    assert_eq!(release_status(w.release.clone()).await, "ready");
     let signed: bool =
         sqlx::query_scalar("select signed_manifest is not null from releases where id = $1::uuid")
             .bind(&w.release)
             .fetch_one(&app.db)
             .await
             .unwrap();
-    assert!(signed);
+    assert!(!signed);
     assert!(
-        audit_actors(&app, "release.approve").await[0].starts_with("AI reviewer \"Agent review\"")
+        audit_actors(&app, "release.ready")
+            .await
+            .last()
+            .unwrap()
+            .starts_with("AI reviewer \"Agent review\"")
     );
     let text = tool_refused(&app, &review, "approve_release", json!({ "id": w.release })).await;
     assert!(text.contains("conflict"), "{text}");
+    approve_release(&app, lax(), w.release.parse().unwrap())
+        .await
+        .unwrap();
+    // Reinstated on appeal: staff's (and their agent's) to put back.
+    sqlx::query(
+        "update apps set status = 'delisted', relist_after_appeal = true where slug = 'game'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
     assert_eq!(
         tool_ok(&app, &review, "list_app", json!({ "slug": "game" })).await,
         Value::Null
@@ -2863,7 +2946,13 @@ async fn agents_review_releases_changes_pictures_and_portfolios_through_mcp_tool
             .await
             .contains("forbidden")
     );
-    let text = tool_refused(&app, &review, "keep_rescanned_release", keep("short")).await;
+    let text = tool_refused(
+        &app,
+        &review,
+        "keep_rescanned_release",
+        keep(&"x".repeat(1001)),
+    )
+    .await;
     assert!(text.contains("\"field\":\"reason\""), "{text}");
     tool_ok(&app, &review, "keep_rescanned_release", keep(why)).await;
     let (flagged, kept): (Option<OffsetDateTime>, Option<String>) = sqlx::query_as(
@@ -3731,15 +3820,9 @@ async fn agents_fix_apps_and_profiles_through_mcp_tools(db: PgPool) {
 
     // Withdrawing a live release: a moderate token's call.
     let release = submit_and_fetch(&app, &maker, "1.0.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        release.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), release.parse().unwrap())
+        .await
+        .unwrap();
     let withdraw = json!({ "id": release, "reason": "Ships a crypto miner." });
     assert!(
         tool_refused(&app, &review, "withdraw_release", withdraw.clone())
@@ -3997,15 +4080,9 @@ async fn an_agents_sensitive_actions_wait_for_a_second_person(db: PgPool) {
     let (maker_id, maker) = maker_with_app(&app, "released").await;
     listed_with(&app, maker_id, "arena", "released", "").await;
     let release = submit_and_fetch(&app, &maker, "1.0.0").await;
-    admin::approve(
-        &app.db,
-        Some(&app.signing_key),
-        lax(),
-        release.parse().unwrap(),
-        "rev",
-    )
-    .await
-    .unwrap();
+    approve_release(&app, lax(), release.parse().unwrap())
+        .await
+        .unwrap();
 
     // Withdrawing, delisting and turning donations off are recorded and wait.
     for (name, args) in [

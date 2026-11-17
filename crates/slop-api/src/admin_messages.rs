@@ -219,7 +219,7 @@ async fn may_post(db: &sqlx::PgPool, sender: &Sender) -> ApiResult<()> {
 }
 
 /// What an agent wrote: plain text (`clean`) with at most a few links.
-fn clean_agent_text(field: &'static str, text: &str, max: usize) -> ApiResult<String> {
+pub(crate) fn clean_agent_text(field: &'static str, text: &str, max: usize) -> ApiResult<String> {
     let text = clean(field, text, max, false)?;
     if links_in(&text) > MAX_URLS {
         return Err(ApiError::invalid(
@@ -240,7 +240,7 @@ fn links_in(text: &str) -> usize {
 
 /// What AI agents see for staff member `u` (an SQL alias): their name if they chose to be listed
 /// by name, otherwise a role ("SLAPorSLOP reviewer"; "SLAPorSLOP admin" for owners and staff without one).
-fn shown_as(u: &str) -> String {
+pub(crate) fn shown_as(u: &str) -> String {
     format!(
         "case when {u}.staff_listed_by_name then {u}.display_name
               else 'SLAPorSLOP ' || coalesce((select r.role from staff_roles r where r.user_id = {u}.id and r.role <> 'owner'
@@ -273,7 +273,12 @@ const STAFF_CONTACT: &str =
 /// Text an agent or staff member wrote: trimmed, with Windows line ends made plain new lines.
 /// Refuses control characters (all of them on one line, all but new lines otherwise) and the
 /// characters that reorder text on screen, which can disguise what a message says.
-fn clean(field: &'static str, text: &str, max: usize, one_line: bool) -> ApiResult<String> {
+pub(crate) fn clean(
+    field: &'static str,
+    text: &str,
+    max: usize,
+    one_line: bool,
+) -> ApiResult<String> {
     let text = text.replace("\r\n", "\n");
     let text = text.trim();
     let n = text.chars().count();
@@ -327,7 +332,7 @@ fn next_post_at(now: OffsetDateTime, recent: &[OffsetDateTime]) -> Option<Offset
 }
 
 /// "47 minutes", "3 hours 5 minutes".
-fn in_words(seconds: u64) -> String {
+pub(crate) fn in_words(seconds: u64) -> String {
     let minutes = seconds.div_ceil(60).max(1);
     let (h, m) = (minutes / 60, minutes % 60);
     let unit = |n: u64, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
@@ -342,7 +347,7 @@ fn in_words(seconds: u64) -> String {
     }
 }
 
-fn stamp(t: OffsetDateTime) -> String {
+pub(crate) fn stamp(t: OffsetDateTime) -> String {
     t.replace_nanosecond(0)
         .unwrap_or(t)
         .format(&Rfc3339)

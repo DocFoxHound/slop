@@ -13,8 +13,9 @@
 //!   token (slop_build.rs). That catches what would stop players' Windows from running the app
 //!   before it's published.
 //!
-//! Findings put a file **on hold** until a person looks: scanners have false positives, so a
-//! reviewer can clear one with a reason (admin.rs), which is audit-logged. With the scanner off
+//! Findings put a file **on hold** (holds.rs): scanners have false positives, so SLAPorSLOP staff
+//! can clear one, with or without a note for the maker (admin.rs), which is audit-logged, and
+//! the maker can have the scans run again with newer signatures. With the scanner off
 //! (test and development servers) files are `skipped`, and nothing in the UI claims a scan.
 
 use std::{path::Path, time::Duration};
@@ -118,7 +119,7 @@ impl Scanner {
                     Verdict {
                         result: ScanResult::OnHold,
                         detail: Some(format!(
-                            "the scanner couldn't finish ({e}); a person checks it, or it's scanned again"
+                            "the scanner couldn't finish ({e}); running the scans again usually fixes this"
                         )),
                         report: None,
                     }
@@ -160,7 +161,8 @@ async fn run_local(command: &str, target: &Target<'_>) -> anyhow::Result<Verdict
     let result = report["result"]
         .as_str()
         .and_then(ScanResult::parse)
-        // The scanner never decides on its own that something is malicious: a person does.
+        // The scanner never decides on its own that something is malicious: it holds the file,
+        // and SLAPorSLOP staff judge it.
         .map(|r| match r {
             ScanResult::Passed | ScanResult::Note => r,
             _ => ScanResult::OnHold,

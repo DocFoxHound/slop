@@ -304,7 +304,7 @@ export function ReleaseFeedbackPanel({ slug }: { slug: string }) {
       <ul className="offer-list">
         {rows.map((f) => (
           <li key={f.version}>
-            <b>{f.version}</b> <span className="faint small">approved {formatDate(f.approved_at)}</span>
+            <b>{f.version}</b> <span className="faint small">published {formatDate(f.approved_at)}</span>
             <div className="small">
               {f.not_slop_percent !== null ? `${f.not_slop_percent}% Slaps from ${f.votes} votes` : "No votes on it yet"} ·{" "}
               {f.reviews_up} Slaps and {f.reviews_down} Slop reviews · {f.bug_reports} bug report{f.bug_reports === 1 ? "" : "s"}

@@ -840,8 +840,8 @@ function Activity({
             <b>Version {pending.version}</b> <span className="badge soon">BEING CHECKED</span>
           </div>
           <p className="muted small">
-            {pending.status === "fetching" ? "SLAPorSLOP is downloading and scanning it." : "Scanned, waiting for a person to review it."}{" "}
-            It installs once it's approved.
+            {pending.status === "fetching" ? "SLAPorSLOP is downloading and scanning it." : "It's being checked by SLAPorSLOP."}{" "}
+            It installs once its maker publishes it.
           </p>
         </div>
       )}
@@ -1108,7 +1108,7 @@ function OtherBuilds({
           <p>
             Install <b>{chosen.title}</b> beside <b>{current.title}</b>?{" "}
             {!chosen.official &&
-              "Community builds are made by other people from the original's code, and checked and reviewed like any app."}{" "}
+              "Community builds are made by other people from the original's code, and checked like any app."}{" "}
             Each build has its own saves.
           </p>
           <label className="check">

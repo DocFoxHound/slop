@@ -305,7 +305,7 @@ async fn a_ready_repository_passes_and_nothing_is_saved(db: PgPool) {
     assert_eq!(report["findings"], json!([]));
     assert_eq!(
         report["summary"],
-        "octo/good at commit ccccccc passed what this checks (licence, pictures and builds). SLAPorSLOP's source check and a person's review still run on the first release."
+        "octo/good at commit ccccccc passed what this checks (licence, pictures and builds). SLAPorSLOP's source check and the scan of its files still run on every release."
     );
     assert_eq!(
         report["licence"],

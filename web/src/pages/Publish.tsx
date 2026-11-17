@@ -80,9 +80,10 @@ export function Publish() {
   const mine = useLoad(() => (me ? loadStatuses() : Promise.resolve([])), [me?.id]);
 
   // While something is moving, check again now and then: often while files are being checked,
-  // every minute while a review or staff are awaited; never once nothing is under way.
+  // every minute while something else is under way or a release is on hold (staff, a re-scan or
+  // Defender's check may move it on); never once nothing is under way.
   const checking = mine.data?.some((a) => a.latest?.status === "fetching") ?? false;
-  const moving = mine.data?.some((a) => a.current.state === "active") ?? false;
+  const moving = mine.data?.some((a) => a.current.state === "active" || a.latest?.status === "awaiting_review") ?? false;
   useInterval(mine.reload, checking ? 15_000 : moving ? 60_000 : null);
   // Released and beta apps without donations get a pointer to where they're turned on (the
   // Get paid section of the app's Edit store page).
@@ -108,7 +109,7 @@ export function Publish() {
       </div>
       <p className="muted">
         Each app goes through the same steps: a store page, a release (for a browser game, its play address), SLAPorSLOP's
-        checks, a review by a person, then the store. This is where each one is.
+        checks, then you publish it and put the app in the store. This is where each one is.
       </p>
       {mine.error && <ErrorState error={mine.error} onRetry={mine.reload} />}
       {mine.data && mine.data.length === 0 && (
@@ -225,6 +226,8 @@ function statusHeadline(step: Step): string {
   if (step.state === "done") return "In the store";
   if (step.title === "Release") return "Next: submit a release";
   if (step.title === "Play address") return "Next: add the play address";
+  if (step.title === "Publish" && step.state === "active") return "Next: publish it";
+  if (step.title === "In the store" && step.action === "list") return "Next: put it in the store";
   return `Waiting on: ${step.title}`;
 }
 
@@ -669,7 +672,7 @@ function EditorForm({
                 />,
                 repoLocked && existing ? (
                   <>
-                    Players already have this app, so moving it is checked by a person first.{" "}
+                    Players already have this app, so moving it is checked by SLAPorSLOP staff first.{" "}
                     <Link to={`/publish/${existing.slug}/manage`}>Request a move from Manage</Link>.
                   </>
                 ) : (
@@ -1377,7 +1380,7 @@ export function ServersPanel({ game }: { game: AppDetail }) {
       <h2 id="servers-panel-title">Dedicated server (optional)</h2>
       <p className="muted small">
         A program players run on their own computer or a host so others can play your game. It lives in its own repository and is
-        built, checked and reviewed like any release. Not for servers only you run: for those, pick{" "}
+        built and checked like any release. Not for servers only you run: for those, pick{" "}
         <b>{ONLINE_LABEL.own_servers}</b> under Online instead.
       </p>
       {servers.length > 0 && (

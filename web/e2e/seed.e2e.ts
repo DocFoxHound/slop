@@ -97,16 +97,15 @@ test("staff see each queue the seed filled", async ({ page }) => {
   for (const queue of [
     /Reports$/,
     /Appeals$/,
-    /New releases$/,
+    /Releases on hold$/,
     /Store pictures$/,
-    /Release holds & moves$/,
+    /Repository moves$/,
     /People pages$/,
     /People problems$/,
     /Review disputes$/,
     /Second approvals$/,
     /Server alerts$/,
     /Abuse alerts$/,
-    /Apps to list$/,
     /Re-scan flags$/,
   ]) {
     await expect(page.getByRole("link", { name: queue }).first()).toBeVisible();

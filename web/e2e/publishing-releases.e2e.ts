@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Publishing, part 2: the Releases page. Submitting by hand (field errors, the rating, runtimes,
 // notes), the history (badges, checks, notes, failures, withdrawal), picking a GitHub release, the
-// update settings, fixes and Slop Build panels. Then "Check a file" finds the builds.
+// update settings, fixes and Slop Build panels. Then its maker publishes it, and "Check a file"
+// finds the builds.
 import { createHash } from "node:crypto";
 
 import { expect, ids, signIn, test } from "./fixtures";
-import { answer, apiError, approve, call, createApp, fakeRepo, fakeZip, readNotices, uniq } from "./publishing-helpers";
+import { answer, apiError, call, createApp, fakeRepo, fakeZip, readNotices, uniq } from "./publishing-helpers";
 
 test.describe.configure({ mode: "serial" });
 
@@ -98,14 +99,16 @@ test("a release with its rating, runtimes and notes goes through, after the agre
   await form.getByRole("textbox", { name: /^Program to start/ }).fill("pong.exe");
   await form.getByRole("textbox", { name: /^Arguments/ }).fill("--windowed --fast");
 
-  // The rating starts from the store page's; lowering it means a person looks first.
+  // The rating starts from the store page's; lowering it means SLAPorSLOP staff check it first.
   const rating = form.locator("details.release-rating").filter({ hasText: "Rating for this release" });
   await rating.locator("summary").click();
   await expect(rating.locator("summary")).toContainText("12+ · Violence");
   await rating.getByLabel("Age rating").selectOption("7");
-  await expect(rating.getByText(/Lower than the store page now: a person reviews this release/)).toBeVisible();
+  await expect(
+    rating.getByText("Lower than the store page now: a SLAPorSLOP staff member checks a lowered rating before you can publish this release."),
+  ).toBeVisible();
   await rating.getByLabel("Age rating").selectOption("16");
-  await expect(rating.getByText("When this release is approved, the store page shows its rating.")).toBeVisible();
+  await expect(rating.getByText("When you publish this release, the store page shows its rating.")).toBeVisible();
 
   const runtimes = form.locator("details.release-rating").filter({ hasText: "Shared runtimes" });
   await expect(runtimes.locator("summary")).toContainText("Shared runtimes (Windows): none");
@@ -123,19 +126,19 @@ test("a release with its rating, runtimes and notes goes through, after the agre
   await expect(form.getByRole("textbox", { name: /^Version/ })).toHaveValue("");
 
   const release = page.locator("ul.release-list > li").filter({ hasText: "1.0.0" });
-  await expect(release.getByText("IN REVIEW", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(release.getByText("PASSED, NOT PUBLISHED", { exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(release).toContainText("16+ · Violence");
-  await expect(release.getByText("Waiting for a person at SLAPorSLOP to review it.")).toBeVisible();
+  await expect(release.getByText("It passed every check. Players get it once you publish it.")).toBeVisible();
+  // Its maker publishes it, from the release itself (a later test does).
+  await expect(release.getByRole("button", { name: "Publish version 1.0.0…" })).toBeVisible();
   await expect(release.locator(".release-notes strong")).toHaveText("Tides");
   await expect(release.locator(".release-notes li")).toHaveText(["Crabs", "Shells"]);
   await expect(release).toContainText("starts pong.exe");
   await expect(release).toContainText(/SHA-256 [0-9a-f]{16}…/);
-  // This server doesn't scan files, and its fake host has no source to read. The source check
-  // runs just after the release turns In review (releases.rs): on a busy server the page's first
-  // In review answer can come before the check is stored, and it looks again every 10 seconds
-  // until the check shows (refreshEvery), with no reload.
+  // This server doesn't scan files; its fake host's source is just an MIT licence (e2e_server).
+  // The source check runs before the checks end (releases.rs), so it's there once it passed.
   await expect(release.getByText("NOT SCANNED", { exact: true })).toBeVisible();
-  await expect(release.getByText("SOURCE NOT CHECKED")).toBeVisible({ timeout: 20_000 });
+  await expect(release.getByText("LICENCE FILE MATCHES")).toBeVisible();
   const saved = await call<Array<{ version: string; runtimes: string[]; files: Array<{ args: string[] }> }>>(
     "maker",
     "GET",
@@ -157,7 +160,9 @@ test("a file SLAPorSLOP can't download fails, with the reason", async ({ page })
   const release = page.locator("ul.release-list > li").filter({ hasText: "1.0.1-missing" });
   await expect(release.getByText("FAILED", { exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(release.locator(".notice")).toContainText("download failed: HTTP 404");
-  await expect(release.getByText("SLAPorSLOP couldn't check the files. See the reason below.")).toBeVisible();
+  await expect(release.getByText("It didn't pass SLAPorSLOP's checks. See the reason below.")).toBeVisible();
+  // A person looks at an automated refusal on request: asking is right there.
+  await expect(release.getByRole("button", { name: "Ask SLAPorSLOP staff" })).toBeVisible();
 });
 
 test("while files are being fetched, the page checks again every 10 seconds", async ({ page }) => {
@@ -233,41 +238,39 @@ test("the history shows what SLAPorSLOP's checks found", async ({ page }) => {
     "tidal 0.3.1 (crates.io): GHSA-tide-0001 Tidal reads past the end of a buffer Fixed in 0.3.2.",
   );
 
-  // Seeded: Bo's releases were scanned, and one waits for review.
+  // Seeded: Bo's releases were scanned, and a scanner flagged one, which is on hold; its findings
+  // show to Bo, so he can fix it (or say why it's fine).
   await page.context().clearCookies();
   await signIn(page, "maker2");
   await page.goto(`/publish/${ids.releaseInReviewApp}/releases`);
   const waiting = page.locator("ul.release-list > li").filter({ hasText: "1.1.0" });
-  await expect(waiting.getByText("IN REVIEW", { exact: true })).toBeVisible();
-  await expect(waiting.getByText("SCAN PASSED", { exact: true })).toBeVisible();
-  await expect(page.locator("ul.release-list > li").filter({ hasText: "1.0.0" }).getByText("APPROVED", { exact: true })).toBeVisible();
+  await expect(waiting.getByText("ON HOLD", { exact: true })).toBeVisible();
+  await expect(waiting.getByText("SCAN: ON HOLD", { exact: true })).toBeVisible();
+  await expect(waiting.locator("ul.findings")).toContainText("ClamAV: Win.Test.Seed in pong.exe");
+  await expect(page.locator("ul.release-list > li").filter({ hasText: "1.0.0" }).getByText("PUBLISHED", { exact: true })).toBeVisible();
 });
 
-test("update settings: pick up GitHub releases, approve updates automatically", async ({ page }) => {
+test("update settings: pick up GitHub releases; nothing is published automatically", async ({ page }) => {
   await signIn(page, "maker");
   await page.goto(page_);
   const panel = page.locator("section.updates-panel");
   const watch = panel.getByRole("checkbox", { name: /Pick up new GitHub releases/ });
-  const auto = panel.getByRole("checkbox", { name: /Approve updates automatically/ });
   await expect(watch).toBeChecked();
   await expect(panel.getByText("Only GitHub repositories can be watched so far.")).toBeVisible();
-  await expect(auto).toBeChecked();
-  await expect(panel.getByText(/Your next release waits for a person: an app's first release is always reviewed by a person\./)).toBeVisible();
-  // Each switch saves as it's clicked.
+  // Every release is published by its maker: there's no switch to approve updates automatically.
+  await expect(panel.getByRole("checkbox")).toHaveCount(1);
+  await expect(panel).toContainText("Once it passes the checks, you publish it here.");
+  // The switch saves as it's clicked.
   await watch.click();
   await expect(watch).not.toBeChecked();
   await expect(panel.getByText("Only GitHub repositories can be watched so far.")).toBeHidden();
-  await auto.click();
-  await expect(auto).not.toBeChecked();
-  await expect(panel.getByText(/Your next release waits for a person/)).toBeHidden();
   await page.reload();
   await expect(watch).not.toBeChecked();
-  await expect(auto).not.toBeChecked();
   await watch.click();
   await expect(watch).toBeChecked();
-  await auto.click();
-  await expect(auto).toBeChecked();
-  expect(await call("maker", "GET", `/v1/apps/${slug}/update-settings`)).toMatchObject({ watch_releases: true, auto_update: true });
+  const saved = await call<Record<string, unknown>>("maker", "GET", `/v1/apps/${slug}/update-settings`);
+  expect(saved).toMatchObject({ watch_releases: true });
+  expect(saved).not.toHaveProperty("auto_update");
 
   // Refused: the reason shows, and nothing changes.
   await answer(
@@ -277,9 +280,9 @@ test("update settings: pick up GitHub releases, approve updates automatically", 
     503,
     "PUT",
   );
-  await auto.click();
+  await watch.click();
   await expect(panel.locator(".form-error")).toHaveText("SLAPorSLOP is busy: try again in a minute");
-  await expect(auto).toBeChecked();
+  await expect(watch).toBeChecked();
   await page.unroute(`**/v1/apps/${slug}/update-settings`);
 
   // A watched GitHub repository: when SLAPorSLOP last looked, and the faster GitHub App.
@@ -519,15 +522,38 @@ test("a GitHub app picks a release from GitHub instead of typing it", async ({ p
   await expect(form.getByRole("alert")).toHaveText("files must be on this repository's GitHub releases page");
 });
 
-test("staff approve the release, then withdraw it; Check a file says which", async ({ page }) => {
+test("its maker publishes the release, then staff withdraw it; Check a file says which", async ({ page }) => {
   const releases = await call<Array<{ id: string; version: string; files: Array<{ sha256: string }> }>>("maker", "GET", `/v1/apps/${slug}/releases`);
   const release = releases.find((r) => r.version === "1.0.0")!;
-  await approve(release.id);
   await signIn(page, "maker");
   await page.goto(page_);
   const row = page.locator("ul.release-list > li").filter({ hasText: "16+ · Violence" });
-  await expect(row.getByText("APPROVED", { exact: true })).toBeVisible();
-  await expect(row.getByText("Signed by SLAPorSLOP. Players can install it, and get it as an update.")).toBeVisible();
+  // Publish: one confirm, with the keyboard, and no checkbox or signing in again.
+  const panel = row.getByRole("region", { name: "Publish version 1.0.0" });
+  // A draft: players get nothing until its maker puts it in the store.
+  await expect(panel).toContainText(
+    "It passed SLAPorSLOP's checks. Once you publish it, SLAPorSLOP signs it. Players can get it once you put the app in the store.",
+  );
+  await panel.getByRole("button", { name: "Publish version 1.0.0…" }).click();
+  const confirm = panel.getByRole("group", { name: "Publish version 1.0.0" });
+  await expect(confirm).toContainText("Publish version 1.0.0 now?");
+  await expect(confirm).toContainText("Players can get it once you put the app in the store.");
+  await expect(panel.locator("input")).toHaveCount(0);
+  await expect(confirm.getByRole("button", { name: "Yes, publish it" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("status").filter({ hasText: "Version 1.0.0 is published." })).toHaveText(
+    "Version 1.0.0 is published. Players can get it once you put the app in the store.",
+  );
+  await expect(row.getByText("PUBLISHED", { exact: true })).toBeVisible();
+  await expect(row.getByText("Signed by SLAPorSLOP when you published it. Players can install it, and get it as an update.")).toBeVisible();
+  await expect(row.getByRole("region", { name: "Publish version 1.0.0" })).toHaveCount(0);
+  // The progress moves on: 1.0.0 is published (the newer 1.0.1-missing failed), and the draft is
+  // the maker's to put in the store.
+  const progress = page.getByRole("region", { name: "Publishing progress" });
+  await expect(progress.locator("li.step").filter({ has: page.locator("b", { hasText: /^Publish$/ }) })).toContainText(
+    "Version 1.0.0 is published: players can get it once you put the app in the store.",
+  );
+  await expect(progress.getByRole("button", { name: "Put it in the store…" })).toBeVisible();
 
   // Anyone can check a copy they got elsewhere: the fake GitHub's build is the one SLAPorSLOP approved.
   const zip = Buffer.from(await (await fetch(fakeZip(repo, "1.0.0"))).arrayBuffer());

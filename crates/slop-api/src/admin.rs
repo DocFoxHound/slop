@@ -6,11 +6,8 @@
 
 use anyhow::{Context, bail, ensure};
 use serde_json::json;
-use slop_manifest::{
-    FileKind, Launch, MANIFEST_SCHEMA, ManifestFile, Platform, Purpose, ReleaseManifest,
-};
 use sqlx::PgPool;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::catalog::AppStage;
@@ -49,72 +46,31 @@ pub struct PendingRelease {
     pub commit_verified: bool,
     pub repo_url: String,
     pub created_at: OffsetDateTime,
-    /// A browser game's release: the address to open and play before approving it.
+    /// A browser game's release: its play address.
     pub play_address: Option<String>,
+    /// What holds it (holds.rs): scan, defender, defender_missing, rating_lowered, or question
+    /// (its maker asks about a failed release).
+    pub kinds: Vec<String>,
+    /// Its maker wrote to staff and nobody has answered yet.
+    pub unanswered: bool,
 }
 
-/// Releases waiting for a reviewer, oldest first.
+/// The holds that need SLAPorSLOP staff (holds.rs): releases on hold for a finding or a lowered
+/// rating, or whose maker wrote to staff, and questions about failed releases. Makers waiting
+/// for an answer first, then the oldest.
 pub async fn pending(db: &PgPool) -> anyhow::Result<Vec<PendingRelease>> {
-    Ok(sqlx::query_as(
+    Ok(sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select r.id, a.slug as app_slug, r.version, r.commit_sha, r.commit_verified, a.repo_url, r.created_at,
-                r.play_address
-         from releases r join apps a on a.id = r.app_id
-         where r.status = 'awaiting_review' order by r.created_at",
-    )
+                r.play_address, h.kinds, {unanswered} as unanswered
+         from release_holds h join releases r on r.id = h.release_id join apps a on a.id = r.app_id
+         where {needs}
+         order by {order}",
+        unanswered = crate::holds::UNANSWERED,
+        needs = crate::holds::NEEDS_STAFF,
+        order = crate::holds::QUEUE_ORDER,
+    )))
     .fetch_all(db)
     .await?)
-}
-
-#[derive(sqlx::FromRow)]
-struct ReleaseRow {
-    status: String,
-    app_id: Uuid,
-    slug: String,
-    title: String,
-    maker: String,
-    repo_url: String,
-    version: String,
-    commit_sha: String,
-    /// A mod or community build: the original's ID, address and name.
-    branch_kind: Option<String>,
-    mods_folder: Option<serde_json::Value>,
-    runtimes: Vec<String>,
-    game_id: Option<Uuid>,
-    game_slug: Option<String>,
-    game_title: Option<String>,
-    /// A browser game's release: its address and what the automatic checks found.
-    play_address: Option<String>,
-    /// What the automatic checks found (releases.rs `AddressChecks`).
-    address_checks: Option<serde_json::Value>,
-}
-
-#[derive(sqlx::FromRow)]
-struct FileRow {
-    platform: String,
-    kind: String,
-    url: String,
-    file_name: String,
-    exec: Option<String>,
-    args: Vec<String>,
-    size_bytes: Option<i64>,
-    sha256: Option<String>,
-    attestation: Option<String>,
-    provenance_problem: Option<String>,
-    maker_signature: Option<sqlx::types::Json<slop_manifest::MakerSignature>>,
-    /// In parts (releases.rs `download_parts`): each with its URL, size, hash and attestation.
-    parts: Option<sqlx::types::Json<Vec<PartRow>>>,
-    scan_result: Option<String>,
-    scan_detail: Option<String>,
-    defender: Option<sqlx::types::Json<crate::scan::DefenderCheck>>,
-    cleared_reason: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-struct PartRow {
-    url: String,
-    size: Option<u64>,
-    sha256: Option<String>,
-    attestation: Option<String>,
 }
 
 /// What approval requires, from the server's configuration.
@@ -134,337 +90,325 @@ impl ReviewRules {
     }
 }
 
-/// What approving a release did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Approval {
-    /// Its manifest is signed: players can install it.
-    Signed,
-    /// A browser game's play address: nothing is signed, and Play opens it.
-    PlayAddress,
-}
-
-/// Approves a release and signs its manifest, if every file meets `rules`. A browser game's
-/// release is its play address instead: approved once its automatic checks passed and no
-/// bad-link list names it, with nothing to sign.
+/// Accepts a release on hold (`POST /admin/releases/{id}/approve`, `slop-api review approve`):
+/// SLAPorSLOP staff judged what held it a false positive, or a lowered rating right. Only what
+/// its hold showed them (`release_holds.kinds`) is accepted: each file a scanner or Microsoft
+/// Defender flagged is cleared (logged, as `clear_scan` does), and a lowered rating is recorded
+/// as accepted (`releases.rating_accepted_*`, audited `release.rating_lowered_accepted`). A
+/// missing Defender check is never accepted this way: staff waive it on its own, signed in
+/// themselves (`waive_defender`). Then its checks end again (`publish::finish_checks`) with the
+/// reviewer as the actor: it's ready for its maker to publish, or held again for what's left or
+/// what's new (the maker and staff are told). Refused when a check fails that staff can't accept
+/// (a frozen app, a file never hashed). Nothing is signed and players get nothing until the maker
+/// presses Publish (publish.rs).
 pub async fn approve(
     db: &PgPool,
-    key: Option<&slop_manifest::ed25519_dalek::SigningKey>,
     rules: ReviewRules,
     release_id: Uuid,
     reviewer: &str,
-) -> anyhow::Result<Approval> {
+) -> anyhow::Result<crate::publish::Outcome> {
+    accept(db, rules, release_id, reviewer, None, None).await
+}
+
+/// Accepting a lowered age rating: for a SLAPorSLOP staff member signed in themselves, never an
+/// AI agent's token (AGE-7: a lowered rating waits for a person).
+pub(crate) const RATING_NEEDS_A_PERSON: &str = "A lowered age rating is accepted by a SLAPorSLOP staff member signed in themselves, not by an AI agent's token. Leave a note for staff instead.";
+
+/// `approve`, with an optional note for the maker (plain text, up to 1,000 characters): kept on
+/// each file it clears, and added to the hold's conversation from `staff` (the staff member's
+/// account, and whether their AI agent wrote it; none from the command line). An AI agent can't
+/// accept a lowered rating (`RATING_NEEDS_A_PERSON`).
+pub async fn accept(
+    db: &PgPool,
+    rules: ReviewRules,
+    release_id: Uuid,
+    reviewer: &str,
+    staff: Option<(Uuid, bool)>,
+    note: Option<&str>,
+) -> anyhow::Result<crate::publish::Outcome> {
+    use crate::publish::HoldKind;
+    let note = clean_note(note)?;
     check_reviewer(reviewer)?;
+    let by_agent = staff.is_some_and(|(_, agent)| agent);
     let mut tx = db.begin().await?;
-    let release: ReleaseRow = sqlx::query_as(
-        "select r.status::text as status, a.id as app_id, a.slug, a.title, u.display_name as maker,
-                a.repo_url, r.version, r.commit_sha, a.branch_kind, a.mods_folder, r.runtimes, g.id as game_id, g.slug as game_slug,
-                g.title as game_title, r.play_address, r.address_checks
-         from releases r join apps a on a.id = r.app_id join users u on u.id = a.maker_id
-              left join apps g on g.id = a.parent_app_id
-         where r.id = $1 for update of r",
+    let status: Option<String> =
+        sqlx::query_scalar("select status::text from releases where id = $1 for update")
+            .bind(release_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let status = status.context("no such release")?;
+    ensure!(
+        status == "awaiting_review",
+        "release is {status}, not on hold"
+    );
+    // What staff were shown: the open hold's kinds.
+    let shown: Vec<String> = sqlx::query_scalar(
+        "select kinds from release_holds where release_id = $1 and status = 'open' for update",
     )
     .bind(release_id)
     .fetch_optional(&mut *tx)
     .await?
-    .context("no such release")?;
-    let status = &release.status;
-    ensure!(
-        status == "awaiting_review",
-        "release is {status}, not awaiting review"
-    );
-    if let Some(reason) = crate::frozen::frozen_reason(&mut *tx, release.app_id).await? {
-        bail!("the app is frozen ({reason}), so its releases can't be checked or approved");
+    .unwrap_or_default();
+    let saw = |k: HoldKind| shown.iter().any(|s| s == k.as_str());
+    let verdict = crate::publish::evaluate(&mut tx, rules, release_id).await?;
+    // Something the maker has to change (a frozen app, a file never hashed) isn't staff's to
+    // accept: the release stays as it is.
+    if let crate::publish::Verdict::Failed(reason) = &verdict {
+        bail!("{reason}");
     }
-    if let Some(address) = &release.play_address {
-        approve_address(db, &mut tx, &release, address, release_id, reviewer).await?;
-        tx.commit().await?;
-        return Ok(Approval::PlayAddress);
-    }
-    let key = key.context("SLOP_SIGNING_KEY isn't set, so nothing can be signed")?;
-
-    let rows: Vec<FileRow> = sqlx::query_as(
-        "select platform, kind, url, file_name, exec, args, size_bytes, sha256, attestation, provenance_problem,
-                (maker_signature - 'fingerprint' - 'key_name') as maker_signature, parts,
-                scan_result, scan_detail, defender, cleared_reason
-         from release_files where release_id = $1 order by platform",
-    )
-    .bind(release_id)
-    .fetch_all(&mut *tx)
-    .await?;
-    let mut files = Vec::new();
-    for f in rows {
-        let (Some(size), Some(sha256)) = (f.size_bytes, f.sha256) else {
-            bail!("the {} build hasn't been hashed", f.platform);
-        };
-        let scan = f
-            .scan_result
-            .as_deref()
-            .and_then(crate::scan::ScanResult::parse);
-        let cleared = f.cleared_reason.is_some();
-        match scan {
-            Some(_) if cleared => {}
-            Some(result) if rules.scanner.approvable(result) => {}
-            Some(result) => bail!(
-                "the {} build's scan result is {}: {}. If it's a false positive, clear it with a reason",
-                f.platform,
-                result.as_str(),
-                f.scan_detail.as_deref().unwrap_or("no details")
-            ),
-            None => bail!("the {} build hasn't been through the scan step", f.platform),
+    if let crate::publish::Verdict::Held(holds) = verdict {
+        // A lowered rating staff were shown: accepting it is recorded on the release, with the
+        // change itself, so a worse one later is held again (AGE-7). One they weren't shown
+        // (the published rating rose meanwhile) stays: the checks hold it again, for them to see.
+        if saw(HoldKind::RatingLowered)
+            && holds.iter().any(|h| h.kind == HoldKind::RatingLowered)
+            && let Some(r) = crate::releases::rating_change(&mut tx, release_id).await?
+        {
+            ensure!(!by_agent, "{RATING_NEEDS_A_PERSON}");
+            sqlx::query(
+                "update releases set rating_accepted_at = now(), rating_accepted_by = $2,
+                        rating_accepted_from = $3, rating_accepted_to = $4, rating_accepted_labels = $5
+                 where id = $1",
+            )
+            .bind(release_id)
+            .bind(reviewer)
+            .bind(r.from_age)
+            .bind(r.to_age)
+            .bind(&r.dropped_labels)
+            .execute(&mut *tx)
+            .await?;
+            audit(
+                &mut tx,
+                reviewer,
+                "release.rating_lowered_accepted",
+                &release_id.to_string(),
+                json!({ "release": release_id, "from": r.from_age, "to": r.to_age, "dropped": r.dropped_labels }),
+            )
+            .await?;
         }
-        // Windows builds need Microsoft Defender's all-clear, so players' Windows runs them.
-        if rules.scanner.is_on() && f.platform == "windows" && !cleared {
-            match &f.defender {
-                Some(d) if !d.sha256.eq_ignore_ascii_case(&sha256) => bail!(
-                    "the Windows build's Defender check was for a different file; run Slop Check again"
-                ),
-                Some(d) if !d.detections.is_empty() => bail!(
-                    "Microsoft Defender flags the Windows build ({}). If it's a false positive, the maker submits it to Microsoft, or a reviewer clears it with a reason",
-                    d.detections
-                        .iter()
-                        .map(|x| x.threat.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                Some(_) => {}
-                None => bail!(
-                    "the Windows build hasn't been checked with Microsoft Defender: Slop Build does it, and builds made elsewhere run Slop Check"
-                ),
+        // Findings staff were shown: the scanner's, and Microsoft Defender's detections.
+        let mut cleared: Vec<(&str, bool)> = Vec::new();
+        for h in &holds {
+            let defender = match h.kind {
+                HoldKind::Scan if saw(HoldKind::Scan) => false,
+                HoldKind::Defender if saw(HoldKind::Defender) => true,
+                _ => continue,
+            };
+            match cleared.iter_mut().find(|(p, _)| *p == h.platform) {
+                Some((_, d)) => *d |= defender,
+                None => cleared.push((&h.platform, defender)),
             }
         }
-        let parts: Vec<slop_manifest::FilePart> = f
-            .parts
-            .map(|p| p.0)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|p| {
-                Ok(slop_manifest::FilePart {
-                    url: p.url,
-                    size: p.size.context("a part wasn't fetched")?,
-                    sha256: p.sha256.context("a part wasn't hashed")?,
-                    attestation: p.attestation,
-                })
-            })
-            .collect::<anyhow::Result<_>>()?;
-        let parts_signed = !parts.is_empty() && parts.iter().all(|p| p.attestation.is_some());
-        if rules.require_maker_signature
-            && f.attestation.is_none()
-            && f.maker_signature.is_none()
-            && !parts_signed
-        {
-            bail!(
-                "the {} build has no verified maker signature: {}",
-                f.platform,
-                f.provenance_problem.as_deref().unwrap_or("not checked")
-            );
+        for (platform, defender) in cleared {
+            sqlx::query(
+                "update release_files set cleared_by = coalesce(cleared_by, $3),
+                        cleared_at = coalesce(cleared_at, now()),
+                        cleared_reason = coalesce(cleared_reason, $4),
+                        defender_cleared_at = case when $5 then coalesce(defender_cleared_at, now())
+                                                   else defender_cleared_at end
+                 where release_id = $1 and platform = $2",
+            )
+            .bind(release_id)
+            .bind(platform)
+            .bind(reviewer)
+            .bind(note.as_deref())
+            .bind(defender)
+            .execute(&mut *tx)
+            .await?;
+            audit(
+                &mut tx,
+                reviewer,
+                "release.clear_scan",
+                &release_id.to_string(),
+                json!({ "release": release_id, "platform": platform, "reason": note, "defender": defender }),
+            )
+            .await?;
         }
-        files.push(ManifestFile {
-            platform: Platform::parse(&f.platform).context("bad platform")?,
-            kind: FileKind::parse(&f.kind).context("bad kind")?,
-            url: f.url,
-            file_name: f.file_name,
-            size: size as u64,
-            sha256,
-            launch: f.exec.map(|exec| Launch { exec, args: f.args }),
-            maker_signature: if f.attestation.is_none() {
-                f.maker_signature.map(|s| s.0)
-            } else {
-                None
-            },
-            attestation: f.attestation,
-            parts,
-        });
     }
-    ensure!(!files.is_empty(), "release has no files");
-
-    let now = OffsetDateTime::now_utc().replace_nanosecond(0)?;
-    let is_mod = release.branch_kind.as_deref() == Some("addon");
-    // A dedicated server installs and runs as an app of its own: neither a mod of its game nor
-    // a build of it to play instead (docs/DEDICATED-SERVERS.md §7: the link stays out of the
-    // manifest, which installed desktop apps couldn't read yet).
-    let is_server = release.branch_kind.as_deref() == Some("server");
-    let original = match (release.game_id, release.game_slug, release.game_title) {
-        (Some(id), Some(slug), Some(title)) => Some(slop_manifest::ModFor {
-            app_id: id.to_string(),
-            app_slug: slug,
-            app_title: title,
-        }),
-        _ => None,
-    };
-    let manifest = ReleaseManifest {
-        schema: MANIFEST_SCHEMA,
-        app_id: release.app_id.to_string(),
-        app_slug: release.slug.clone(),
-        app_title: release.title,
-        maker: release.maker,
-        repo_url: release.repo_url,
-        release_id: release_id.to_string(),
-        version: release.version.clone(),
-        commit: release.commit_sha,
-        files,
-        approved_at: now.format(&Rfc3339)?,
-        mod_for: original.clone().filter(|_| is_mod),
-        build_of: original.filter(|_| !is_mod && !is_server),
-        mods_folder: release
-            .mods_folder
-            .and_then(|f| serde_json::from_value(f).ok())
-            .filter(|f: &slop_manifest::ModsFolder| !is_mod && f.is_valid()),
-        runtimes: release.runtimes,
-    };
-    let signed = slop_manifest::sign(&manifest, Purpose::ReleaseManifest, key);
-    sqlx::query(
-        "update releases set status = 'approved', reviewed_at = now(), signed_manifest = $2, status_reason = null,
-                reviewed_by = $3
-         where id = $1",
-    )
-    .bind(release_id)
-    .bind(sqlx::types::Json(&signed))
-    .bind(reviewer)
-    .execute(&mut *tx)
-    .await?;
-    approved(
-        &mut tx,
-        release_id,
-        reviewer,
-        json!({ "app": release.slug, "version": release.version, "key_id": signed.key_id }),
-    )
-    .await?;
+    if let Some(note) = &note {
+        let author = staff.map(|(id, _)| id);
+        crate::holds::add_message(&mut tx, release_id, author, true, by_agent, note).await?;
+    }
+    let outcome = crate::publish::finish_checks_in(&mut tx, rules, release_id, reviewer).await?;
     tx.commit().await?;
-    Ok(Approval::Signed)
+    Ok(outcome)
 }
 
-/// A browser game's release (its play address), in `approve`'s transaction: its automatic checks
-/// passed, and no bad-link list names the address, any address it redirected through or where it
-/// ended up, checked again now since days may have passed. Nothing is signed (signed_manifest
-/// stays null).
-async fn approve_address(
-    db: &PgPool,
-    tx: &mut sqlx::PgConnection,
-    release: &ReleaseRow,
-    address: &str,
-    release_id: Uuid,
-    reviewer: &str,
-) -> anyhow::Result<()> {
-    let Some(checks) = &release.address_checks else {
-        bail!("the play address hasn't been checked yet");
-    };
-    ensure!(
-        checks["ok"].as_bool() == Some(true),
-        "the play address didn't pass its checks: {}",
-        checks["problem"].as_str().unwrap_or("no details")
-    );
-    let mut addresses = vec![address.to_string()];
-    let hops = checks["hops"].as_array().into_iter().flatten();
-    for hop in hops
-        .chain([&checks["final_address"]])
-        .filter_map(|h| h.as_str())
-    {
-        if !addresses.iter().any(|a| a == hop) {
-            addresses.push(hop.to_string());
-        }
+/// A note for the maker: plain text as staff write it (admin_messages.rs `clean`), trimmed,
+/// empty for none, at most 1,000 characters.
+fn clean_note(note: Option<&str>) -> anyhow::Result<Option<String>> {
+    match note.map(str::trim).filter(|n| !n.is_empty()) {
+        None => Ok(None),
+        Some(n) => crate::admin_messages::clean("reason", n, 1000, false)
+            .map(Some)
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "keep the note to 1,000 characters of plain text, without control characters other than new lines"
+                )
+            }),
     }
-    if let Some((on, list)) = crate::bad_links::find(db, &addresses)
-        .await?
-        .into_iter()
-        .next()
-    {
-        bail!("{on} is on {list}, a list of known-bad links, since it was checked");
-    }
-    sqlx::query(
-        "update releases set status = 'approved', reviewed_at = now(), status_reason = null, reviewed_by = $2
-         where id = $1",
-    )
-    .bind(release_id)
-    .bind(reviewer)
-    .execute(&mut *tx)
-    .await?;
-    approved(
-        tx,
-        release_id,
-        reviewer,
-        json!({ "app": release.slug, "version": release.version, "play_address": address }),
-    )
-    .await
 }
 
-/// What every approval does once the release is approved: the store page takes its rating, the
-/// audit log and the maker hear of it.
-async fn approved(
-    tx: &mut sqlx::PgConnection,
-    release_id: Uuid,
-    reviewer: &str,
-    detail: serde_json::Value,
-) -> anyhow::Result<()> {
-    // The store page shows the rating of the release players get (AGE-7).
-    sqlx::query(
-        "update apps a set min_age = r.min_age, content_labels = r.content_labels, updated_at = now()
-         from releases r where r.id = $1 and a.id = r.app_id and r.min_age is not null",
-    )
-    .bind(release_id)
-    .execute(&mut *tx)
-    .await?;
-    audit(
-        &mut *tx,
-        reviewer,
-        "release.approve",
-        &release_id.to_string(),
-        detail,
-    )
-    .await?;
-    crate::releases::tell_maker(
-        &mut *tx,
-        release_id,
-        crate::releases::ReleaseEvent::Approved {
-            automatically: reviewer == crate::updates::AUTO_REVIEWER,
-        },
-    )
-    .await?;
-    Ok(())
-}
-
-/// Clears a scan finding (or a missing or flagging Defender check) a reviewer judged a false
-/// positive, with the reason, so the release can be approved. Audit-logged.
+/// Clears a file's scan finding a reviewer judged a false positive, and Microsoft Defender's
+/// detections in it when Defender flagged it, with an optional note for the maker (plain text,
+/// up to 1,000 characters), then ends the release's checks again (`publish::finish_checks`): if
+/// nothing holds it any more, it's ready for its maker to publish and they're told. A missing
+/// Defender check isn't a finding and isn't cleared (`waive_defender`). Audit-logged.
 pub async fn clear_scan(
     db: &PgPool,
+    rules: ReviewRules,
     release_id: Uuid,
     platform: &str,
     reviewer: &str,
-    reason: &str,
-) -> anyhow::Result<()> {
+    reason: Option<&str>,
+) -> anyhow::Result<crate::publish::Outcome> {
     check_reviewer(reviewer)?;
-    let reason = reason.trim();
-    ensure!(
-        (10..=1000).contains(&reason.chars().count()),
-        "say why it's a false positive (10 to 1,000 characters)"
-    );
+    let reason = clean_note(reason)?;
     let mut tx = db.begin().await?;
+    // The release first, then its files and hold, as finish_checks and `accept` lock them.
     let slug: Option<String> = sqlx::query_scalar(
-        "update release_files f set cleared_by = $3, cleared_reason = $4, cleared_at = now()
-         from releases r join apps a on a.id = r.app_id
-         where f.release_id = $1 and f.platform = $2 and r.id = f.release_id and r.status = 'awaiting_review'
-         returning a.slug",
+        "select a.slug from releases r join apps a on a.id = r.app_id
+         where r.id = $1 and r.status = 'awaiting_review' for update of r",
+    )
+    .bind(release_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let slug = slug.context("no such file on hold")?;
+    let file: Option<(bool, bool)> = sqlx::query_as(
+        "select coalesce(scan_result in ('on_hold', 'rejected', 'blocked'), false) and cleared_at is null,
+                platform = 'windows' and lower(defender ->> 'sha256') = lower(sha256)
+                    and jsonb_array_length(coalesce(defender -> 'detections', '[]')) > 0
+                    and defender_cleared_at is null
+         from release_files where release_id = $1 and platform = $2 for update",
+    )
+    .bind(release_id)
+    .bind(platform)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (scan_flagged, defender_flagged) = file.context("no such file on hold")?;
+    ensure!(
+        scan_flagged || defender_flagged,
+        "nothing on this file is flagged to clear; a missing Microsoft Defender check is waived on its own, or the release rejected"
+    );
+    sqlx::query(
+        "update release_files set cleared_by = $3, cleared_reason = $4, cleared_at = now(),
+                defender_cleared_at = case when $5 then now() else defender_cleared_at end
+         where release_id = $1 and platform = $2",
     )
     .bind(release_id)
     .bind(platform)
     .bind(reviewer)
-    .bind(reason)
-    .fetch_optional(&mut *tx)
+    .bind(reason.as_deref())
+    .bind(defender_flagged)
+    .execute(&mut *tx)
     .await?;
-    let slug = slug.context("no such file waiting for review")?;
     audit(
         &mut tx,
         reviewer,
         "release.clear_scan",
         &slug,
-        json!({ "release": release_id, "platform": platform, "reason": reason }),
+        json!({ "release": release_id, "platform": platform, "reason": reason, "defender": defender_flagged }),
     )
     .await?;
+    let outcome = crate::publish::finish_checks_in(&mut tx, rules, release_id, reviewer).await?;
     tx.commit().await?;
-    Ok(())
+    Ok(outcome)
 }
 
-/// Rejects a release that's waiting for review, being fetched, or whose checks failed. The reason
-/// is shown to the maker.
+/// Waiving Microsoft Defender's check: for a SLAPorSLOP staff member signed in themselves, never
+/// an AI agent's token.
+pub(crate) const WAIVER_NEEDS_A_PERSON: &str = "Waiving Microsoft Defender's check is for a SLAPorSLOP staff member signed in themselves, not an AI agent's token.";
+
+/// Waives the missing Microsoft Defender check of release `release_id`'s Windows file
+/// (`POST /admin/releases/{id}/files/{platform}/waive-defender`): a staff member signed in
+/// themselves checked the build by hand, typically for a repository outside GitHub, where Slop
+/// Check can't run. Recorded on the file (`defender_waived_at`/`_by`), audited
+/// `release.waive_defender`, said in the hold's log with the optional note (plain text, up to
+/// 1,000 characters) from `staff`; then the release's checks end again. A Defender report that
+/// flags the file later still holds it.
+pub async fn waive_defender(
+    db: &PgPool,
+    rules: ReviewRules,
+    release_id: Uuid,
+    platform: &str,
+    reviewer: &str,
+    staff: Option<Uuid>,
+    note: Option<&str>,
+) -> anyhow::Result<crate::publish::Outcome> {
+    check_reviewer(reviewer)?;
+    let note = clean_note(note)?;
+    let mut tx = db.begin().await?;
+    let status: Option<String> =
+        sqlx::query_scalar("select status::text from releases where id = $1 for update")
+            .bind(release_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let status = status.context("no such release")?;
+    ensure!(
+        status == "awaiting_review",
+        "release is {status}, not on hold"
+    );
+    let file: Option<(String, bool)> = sqlx::query_as(
+        "select file_name, defender is not null and lower(defender ->> 'sha256') = lower(sha256)
+         from release_files where release_id = $1 and platform = $2 for update",
+    )
+    .bind(release_id)
+    .bind(platform)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (file_name, checked) = file.context("no such file on hold")?;
+    ensure!(
+        platform == "windows",
+        "only a Windows build needs Microsoft Defender's check"
+    );
+    ensure!(
+        !checked,
+        "Microsoft Defender has checked this file, so there's nothing to waive"
+    );
+    sqlx::query(
+        "update release_files set defender_waived_at = now(), defender_waived_by = $3
+         where release_id = $1 and platform = $2",
+    )
+    .bind(release_id)
+    .bind(platform)
+    .bind(reviewer)
+    .execute(&mut *tx)
+    .await?;
+    audit(
+        &mut tx,
+        reviewer,
+        "release.waive_defender",
+        &release_id.to_string(),
+        json!({ "release": release_id, "platform": platform, "reason": note }),
+    )
+    .await?;
+    let has_hold: bool =
+        sqlx::query_scalar("select exists (select 1 from release_holds where release_id = $1)")
+            .bind(release_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if has_hold {
+        crate::publish::system_line(
+            &mut tx,
+            release_id,
+            &format!(
+                "SLAPorSLOP staff checked the {} build by hand and waived Microsoft Defender's check.",
+                crate::release_progress::file_label(platform, &file_name)
+            ),
+            None,
+        )
+        .await?;
+    }
+    if let Some(note) = &note {
+        crate::holds::add_message(&mut tx, release_id, staff, true, false, note).await?;
+    }
+    let outcome = crate::publish::finish_checks_in(&mut tx, rules, release_id, reviewer).await?;
+    tx.commit().await?;
+    Ok(outcome)
+}
+
+/// Rejects a release that's on hold, being checked, ready for its maker to publish (it never
+/// reached players), or whose checks failed. The reason is shown to the maker.
 pub async fn reject(
     db: &PgPool,
     release_id: Uuid,
@@ -477,7 +421,7 @@ pub async fn reject(
     let mut tx = db.begin().await?;
     let updated = sqlx::query(
         "update releases set status = 'rejected', status_reason = $2, reviewed_at = now(), reviewed_by = $3
-         where id = $1 and status in ('awaiting_review', 'fetching', 'failed')",
+         where id = $1 and status in ('awaiting_review', 'fetching', 'ready', 'failed')",
     )
     .bind(release_id)
     .bind(reason)
@@ -485,7 +429,16 @@ pub async fn reject(
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    ensure!(updated == 1, "no release waiting for review with that ID");
+    ensure!(updated == 1, "no unpublished release with that ID");
+    if crate::publish::close_hold(&mut tx, release_id, "rejected", reviewer).await? {
+        crate::publish::system_line(
+            &mut tx,
+            release_id,
+            &format!("Not accepted by SLAPorSLOP staff: {reason}"),
+            None,
+        )
+        .await?;
+    }
     audit(
         &mut tx,
         reviewer,
@@ -505,8 +458,8 @@ pub async fn reject(
 }
 
 /// The kill switch (SECURITY §5.5): a revoked release stops launching on every client. For a
-/// browser game, Play stops opening the address: its review time is kept, so if it was the
-/// newest reviewed address, Play opens none until a person approves a new one
+/// browser game, Play stops opening the address: its publish time is kept, so if it was the
+/// newest published address, Play opens none until its maker publishes a new one
 /// (`catalog::PLAY_ADDRESS`), rather than an older address that may be the same site.
 pub async fn revoke(
     db: &PgPool,
@@ -559,9 +512,10 @@ pub async fn revoke(
     Ok(())
 }
 
-/// Whether app `a` (`apps`) has something to play, as SQL: an approved release, and for a browser
-/// game an address Play opens (`catalog::PLAY_RELEASE`). With its newest address withdrawn, a
-/// browser game has none, even with older ones approved. What Beta, Released and listing need.
+/// Whether app `a` (`apps`) has something to play, as SQL: a published (approved) release, and for
+/// a browser game an address Play opens (`catalog::PLAY_RELEASE`). With its newest address
+/// withdrawn, a browser game has none, even with older ones published. What Beta, Released and
+/// listing need.
 pub(crate) fn playable_sql() -> String {
     format!(
         "(case when 'browser' = any(a.platforms) then {} is not null
@@ -595,6 +549,15 @@ pub(crate) enum NotListable {
     PicturesWaiting,
 }
 
+/// "a Beta", "a Released", for "… app needs …".
+fn stage_words(stage: AppStage) -> &'static str {
+    match stage {
+        AppStage::ComingSoon => "a Coming soon",
+        AppStage::Beta => "a Beta",
+        AppStage::Released => "a Released",
+    }
+}
+
 impl NotListable {
     fn for_reviewer(&self) -> String {
         match self {
@@ -609,14 +572,16 @@ impl NotListable {
                               author launches it through SLAPorSLOP once and the handshake is recorded."
                 .into(),
             Self::NoRelease(stage) => format!(
-                "approve a release before listing a {stage:?} app: it has no approved release \
-                 yet. The maker submits one from Releases & progress, then it waits under \
-                 Releases for review. A Coming soon page can be listed without one."
+                "{} app needs a published release before it's listed, and it has none yet: its \
+                 maker submits one from Releases & progress and publishes it once it passes the \
+                 checks. A Coming soon page can be listed without one.",
+                capitalized(stage_words(*stage))
             ),
             Self::NoAddress(stage) => format!(
-                "approve its play address before listing a {stage:?} browser game: it has no \
-                 approved address yet. The maker gives one on Releases & progress, then it waits \
-                 under Releases for review. A Coming soon page can be listed without one."
+                "{} browser game needs a published play address before it's listed, and it has \
+                 none yet: its maker gives one on Releases & progress and publishes it once it \
+                 passes the checks. A Coming soon page can be listed without one.",
+                capitalized(stage_words(*stage))
             ),
             Self::PicturesWaiting => {
                 "review the app's pictures first: a new set is waiting under Pictures to review"
@@ -636,18 +601,70 @@ impl NotListable {
             Self::NoPulse => "It stays out of the store until SLAPorSLOP records a Pulse handshake \
                               from it: launch it through SLAPorSLOP once. A reviewer then puts it back."
                 .into(),
-            Self::NoRelease(_) => "It stays out of the store until a release is approved: submit \
-                                   one from Releases & progress. A reviewer then puts it back."
+            Self::NoRelease(_) => "It stays out of the store until a release is published: submit \
+                                   one from Releases & progress and publish it once it passes the \
+                                   checks. A reviewer then puts it back."
                 .into(),
-            Self::NoAddress(_) => "It stays out of the store until its play address is approved: \
-                                   give it on Releases & progress. A reviewer then puts it back."
+            Self::NoAddress(_) => "It stays out of the store until a play address is published: \
+                                   give it on Releases & progress and publish it once it passes \
+                                   the checks. A reviewer then puts it back."
                 .into(),
             Self::PicturesWaiting => "It stays out of the store until its new pictures are \
                                       reviewed. A reviewer then puts it back."
                 .into(),
         }
     }
+
+    /// For the maker putting their app in the store the first time (manage.rs `list_app`): what
+    /// to do first, on the page they're on or the one named.
+    pub(crate) fn for_first_listing(&self) -> String {
+        match self {
+            Self::Private => "It's private, so it can't go in the store. To list it, ask to make \
+                              it public on this page: SLAPorSLOP staff check the repository is \
+                              public, then put it in the store."
+                .into(),
+            Self::Frozen(reason) => format!(
+                "It can't go in the store while it's frozen ({reason}). It can once SLAPorSLOP \
+                 can read its repository again."
+            ),
+            Self::NoPulse => {
+                "Its original counts players with Slop Pulse, so this build must too: \
+                              launch it through SLAPorSLOP once, then put it in the store."
+                    .into()
+            }
+            Self::NoRelease(stage) => format!(
+                "{} app needs a published release first: submit one on the Releases page and \
+                 publish it once it passes the checks. A Coming soon page can go in without one.",
+                capitalized(stage_words(*stage))
+            ),
+            Self::NoAddress(stage) => format!(
+                "{} browser game needs a published play address first: give it on the Releases \
+                 page and publish it once it passes the checks. A Coming soon page can go in \
+                 without one.",
+                capitalized(stage_words(*stage))
+            ),
+            Self::PicturesWaiting => "Its new pictures are waiting for review: you can put it in \
+                                      the store once they're reviewed."
+                .into(),
+        }
+    }
 }
+
+/// `s` with its first letter in capitals.
+fn capitalized(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// The apps SLAPorSLOP staff put in the store, as SQL on `apps a`: one reinstated on appeal that
+/// waits to go back, and a private app whose owner asked to make it public (SECURITY §12.3).
+/// Makers put a draft in the store themselves the first time (`POST /v1/apps/{slug}/list`,
+/// manage.rs). With `playable_sql`, what the staff queue's "ready to list" holds.
+pub(crate) const STAFF_LISTS: &str = "((a.status = 'delisted' and a.relist_after_appeal)
+      or (a.status = 'draft' and a.visibility = 'private' and a.public_requested_at is not null))";
 
 /// What stops the app going in the store, if anything.
 pub(crate) async fn not_listable(
@@ -679,8 +696,10 @@ pub(crate) async fn not_listable(
     Ok(None)
 }
 
-/// Puts a reviewed draft in the store. Beta and Released apps need an approved release first;
-/// Coming soon pages have no build (DESIGN §8).
+/// Puts an app in the store, from staff (`slop-api review list`, the admin panel): only one
+/// reinstated on appeal (`STAFF_LISTS`). Makers put their own drafts in the store (manage.rs
+/// `list_app`), and a private app goes public with `make_public`. Beta and Released apps need a
+/// published release first; Coming soon pages have no build (DESIGN §8).
 pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result<()> {
     list_app_as(db, slug, reviewer, false).await
 }
@@ -707,6 +726,16 @@ async fn list_app_as(
             .await?;
     let (id, stage, status) = row.context("no such app")?;
     ensure!(status != "listed", "already listed");
+    let staffs: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {STAFF_LISTS} from apps a where a.id = $1"
+    )))
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        staffs,
+        "staff list an app reinstated on appeal, or a private one whose owner asked to make it public; its maker puts a draft in the store themselves, from its Manage page"
+    );
     if going_public {
         let requested: bool = sqlx::query_scalar(
             "select visibility = 'private' and public_requested_at is not null from apps where id = $1",
@@ -737,12 +766,7 @@ async fn list_app_as(
     if let Some(why) = not_listable(&mut tx, id, stage).await? {
         bail!("{}", why.for_reviewer());
     }
-    sqlx::query(
-        "update apps set status = 'listed', relist_after_appeal = false, updated_at = now() where id = $1",
-    )
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    put_in_store(&mut tx, id).await?;
     audit(
         &mut tx,
         reviewer,
@@ -810,6 +834,18 @@ async fn list_app_as(
     Ok(())
 }
 
+/// Puts app `id` (locked by the caller, `not_listable` found nothing) in the store; an appeal's
+/// relist is done with it. The caller writes the audit entry.
+pub(crate) async fn put_in_store(tx: &mut sqlx::PgConnection, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query(
+        "update apps set status = 'listed', relist_after_appeal = false, updated_at = now() where id = $1",
+    )
+    .bind(id)
+    .execute(tx)
+    .await?;
+    Ok(())
+}
+
 /// Takes an app out of the store (moderation). Installs keep working unless a release is revoked.
 /// The maker gets a statement of reasons and can appeal (moderation.rs).
 pub async fn delist_app(
@@ -856,7 +892,7 @@ pub async fn delist_app(
     Ok(())
 }
 
-/// Moves an app to a new stage. Beta and Released need an approved release.
+/// Moves an app to a new stage. Beta and Released need a published release.
 pub async fn set_stage(
     db: &PgPool,
     slug: &str,
@@ -876,9 +912,9 @@ pub async fn set_stage(
         bail!(
             "{}",
             if crate::catalog::plays_in_browser(&mut *tx, id).await? {
-                "approve a play address first: a Beta or Released browser game needs an address Play opens"
+                "its maker publishes a play address first: a Beta or Released browser game needs an address Play opens"
             } else {
-                "approve a release first: Beta and Released apps need an approved release"
+                "its maker publishes a release first: Beta and Released apps need a published release"
             }
         );
     }
