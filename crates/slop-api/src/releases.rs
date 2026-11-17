@@ -2502,7 +2502,9 @@ async fn fetch_release(
 ) -> anyhow::Result<Fetched> {
     let commit_verified = check_commit(state, repo_url, commit).await?;
     let (app_id, source, scanned_on_github_before): (Uuid, String, bool) = sqlx::query_as(
-        "select r.app_id, r.source, exists (select 1 from ci_scans c where c.app_id = r.app_id)
+        "select r.app_id, r.source,
+                exists (select 1 from ci_scans c where c.app_id = r.app_id
+                          and c.received_at > now() - interval '60 days')
          from releases r where r.id = $1",
     )
     .bind(id)
@@ -2517,7 +2519,7 @@ async fn fetch_release(
     let scanner = state.config.releases.scanner;
     // Scans from the maker's GitHub runner (slop_build.rs). Slop Build sends them with the
     // release; Slop Check after the release is published on GitHub, often after SLAPorSLOP fetched
-    // it. So a release from a GitHub repository that has sent scans before waits for them: the
+    // it. So a release from a GitHub repository that has sent scans lately waits for them: the
     // fetcher goes on when they've come, or scans the files itself after a while (`resume`).
     let may_wait = scanner.is_on()
         && source != "slop_build"

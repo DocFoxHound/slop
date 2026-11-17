@@ -712,62 +712,68 @@ function SlopBuildSetup({ slug }: { slug: string }) {
               project.
             </p>
           )}
-          <p className="muted small">
-            <code>{setup.data.file_path}</code>
-          </p>
-          <pre>
-            <code>{setup.data.workflow}</code>
-          </pre>
-          {setup.data.create_url && (
-            <p>
-              <ExternalLink href={setup.data.create_url}>
-                <span className="btn slime">
-                  Add to my repository on GitHub
-                </span>
-              </ExternalLink>{" "}
-              <span className="muted small">
-                Opens GitHub with the file filled in; you just commit it.
-              </span>
-            </p>
-          )}
-          {setup.data.build_now_url && (
-            <p>
-              <ExternalLink href={setup.data.build_now_url}>
-                <span className="btn">Build now</span>
-              </ExternalLink>{" "}
-              <span className="muted small">
-                Once the file is in your repository: opens it on GitHub, where
-                Run workflow builds your main branch straight away.
-              </span>
-            </p>
-          )}
-          <details id="slop-check">
-            <summary>
-              <b>Building somewhere else?</b>{" "}
-              <span className="muted">
-                Add Slop Check so Windows builds get Microsoft Defender's check
-              </span>
-            </summary>
+          {setup.data.supported && (
+            <>
             <p className="muted small">
-              Windows builds need a clean Microsoft Defender check before
-              they're published (Slop Build does it for you). Slop Check runs it
-              on GitHub's Windows runner whenever you publish a release.{" "}
-              <Link to="/publish/guide#slop-check">More about it</Link>.
-            </p>
-            <p className="muted small">
-              <code>{setup.data.check_file_path}</code>
+              <code>{setup.data.file_path}</code>
             </p>
             <pre>
-              <code>{setup.data.check_workflow}</code>
+              <code>{setup.data.workflow}</code>
             </pre>
-            {setup.data.check_create_url && (
+            {setup.data.create_url && (
               <p>
-                <ExternalLink href={setup.data.check_create_url}>
-                  <span className="btn">Add Slop Check to my repository</span>
-                </ExternalLink>
+                <ExternalLink href={setup.data.create_url}>
+                  <span className="btn slime">
+                    Add to my repository on GitHub
+                  </span>
+                </ExternalLink>{" "}
+                <span className="muted small">
+                  Opens GitHub with the file filled in; you just commit it.
+                </span>
               </p>
             )}
-          </details>
+            {setup.data.build_now_url && (
+              <p>
+                <ExternalLink href={setup.data.build_now_url}>
+                  <span className="btn">Build now</span>
+                </ExternalLink>{" "}
+                <span className="muted small">
+                  Once the file is in your repository: opens it on GitHub, where
+                  Run workflow builds your main branch straight away.
+                </span>
+              </p>
+            )}
+            <details id="slop-check">
+              <summary>
+                <b>Building somewhere else?</b>{" "}
+                <span className="muted">
+                  Add Slop Check so SLAPorSLOP's checks run on your GitHub Actions
+                </span>
+              </summary>
+              <p className="muted small">
+                Whenever you publish a release, Slop Check runs SLAPorSLOP's
+                malware scan of every file, its source check and (for Windows
+                builds) Microsoft Defender on your repository's own GitHub Actions,
+                so your release isn't waiting for SLAPorSLOP's servers. Slop Build
+                does all of this for you.{" "}
+                <Link to="/publish/guide#slop-check">More about it</Link>.
+              </p>
+              <p className="muted small">
+                <code>{setup.data.check_file_path}</code>
+              </p>
+              <pre>
+                <code>{setup.data.check_workflow}</code>
+              </pre>
+              {setup.data.check_create_url && (
+                <p>
+                  <ExternalLink href={setup.data.check_create_url}>
+                    <span className="btn">Add Slop Check to my repository</span>
+                  </ExternalLink>
+                </p>
+              )}
+            </details>
+            </>
+          )}
         </>
       )}
     </section>

@@ -315,3 +315,63 @@ async fn a_source_check_from_github_is_used_instead_of_downloading(db: PgPool) {
     assert_eq!(scan["licence"]["declared"], "MIT");
     assert_eq!(scan["monetization"][0]["rule"], "unity_iap");
 }
+
+/// What a maker's agent is told depends on where the repository lives: off GitHub, Slop Build and
+/// Slop Check can't run and SLAPorSLOP checks releases itself; on GitHub without either, get_fixes
+/// recommends Slop Check until the repository sends scans.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_are_told_where_checks_run(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let setup = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/slop-build").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (&setup["host"], &setup["checks_run_on"], &setup["supported"]),
+        (&json!("other"), &json!("slaporslop"), &json!(false)),
+        "{setup}"
+    );
+    assert!(
+        setup["note"]
+            .as_str()
+            .unwrap()
+            .contains("sign each with your registered signing key"),
+        "{setup}"
+    );
+
+    // A GitHub app whose releases come from elsewhere and that never sent a scan.
+    sqlx::query("update apps set platforms = '{linux}'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    send_release(&app, &maker, "1.0.0").await;
+    sqlx::query("update apps set repo_url = 'https://github.com/octo/game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let recommended = |fixes: Value| {
+        fixes["recommendations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["kind"] == "checks:slop_check")
+    };
+    let fixes = || async {
+        body_json(
+            app.send(req(Method::GET, "/v1/apps/game/fixes").cookie(&maker))
+                .await,
+        )
+        .await
+    };
+    assert!(recommended(fixes().await));
+    // Once its runner sends scans, Slop Check is evidently there.
+    sqlx::query(
+        "insert into ci_scans (app_id, sha256, report) select id, repeat('a', 64), '{}' from apps",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert!(!recommended(fixes().await));
+}

@@ -49,6 +49,30 @@ and links, in plain words.
 5. Before the first release, `check_source`: SLAPorSLOP's source check on what's pushed, without submitting anything. Fix the `must` items it lists (a missing licence file, purchases, code loaded from outside SLAPorSLOP, going online without the store page saying so), push, and check the new commit.
 6. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs, scans and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`; on GitHub, also commit the Slop Check workflow `slop_build_setup` gives (`check_workflow`, at `.github/workflows/slop-check.yml`): when a release is published it runs SLAPorSLOP's malware scan, source check and Microsoft Defender on the repository's own GitHub Actions, and the release isn't left waiting for SLAPorSLOP's servers. Committing it is all it takes; nobody needs to click anything. A game that plays on the maker's own website works differently: see the next section.
 
+**Where the repository lives decides the setup** (`git remote get-url origin`; `slop_build_setup`
+answers `host` and `checks_run_on`):
+
+- **GitHub:** SLAPorSLOP's malware scan, source check and Microsoft Defender run on the
+  repository's own GitHub Actions, so releases don't wait for SLAPorSLOP's servers. Commit
+  `.github/workflows/slop.yml` (Slop Build: it builds, signs, scans and submits; nothing else
+  needed), **or**, if the app is built some other way, `.github/workflows/slop-check.yml` (Slop
+  Check, `check_workflow` from `slop_build_setup`: it runs the checks when a release is published).
+  Committing the file is all; no secrets or settings. Why: GitHub's token proves SLAPorSLOP's
+  own unchanged workflow ran in this repository, so SLAPorSLOP can use the result. Until one is
+  there, `get_fixes` recommends Slop Check (`checks:slop_check`); `list_releases` may show a file
+  "Waiting for its scan from GitHub" (it goes on by itself, or SLAPorSLOP scans it itself after
+  half an hour).
+- **GitLab, Bitbucket, Codeberg, self-hosted:** no Slop Build or Slop Check (their pipelines can't
+  prove which code ran, and inject the project's own variables into every job, so their results
+  can't be trusted). Build with the project's own pipeline, have your maker register a signing key
+  early (guide section "Signing builds you make yourself"; it only counts 72 hours after it's
+  added, and only your maker can add it) and sign each file (a `.sig` beside it), attach
+  them to a release on the repository, and `submit_release` each time. Commit nothing for
+  SLAPorSLOP. Its servers do the checks, so each release takes longer, and SLAPorSLOP staff check
+  a Windows build instead of Microsoft Defender (`defender_missing` goes to them). Store pictures
+  from `.slop/media.json` are read on GitHub only so far. A private repository needs a read-only
+  token your maker gives SLAPorSLOP.
+
 A **dedicated server** is a program players run on their own computer or a host so others can play your game. Add it to the game with `add_dedicated_server` (or **Add a dedicated server** on the game's Edit store page): it needs its own repository, never the game's (split a repository that holds both first), and Windows and/or Linux like any download. It's an app of its own with its own releases (submit them as for any app; Slop Build works as usual), checked the same way and published by your maker, who puts it in the store once one is published. It has no store page of its own: it shows on the game's, players get the game without it unless they tick it, and it goes out of the store whenever the game does. A game can have several (a world server and a lobby server). Its versions are its own: SLAPorSLOP doesn't check which work with which game versions. Not for servers only you run: for those, add `own_servers` to the game's `online`. A server-like program with no game on SLAPorSLOP (a tool) is published as an ordinary app. Guide section "Dedicated servers".
 
 ## A game that plays in the browser

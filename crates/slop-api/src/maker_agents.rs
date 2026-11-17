@@ -1294,7 +1294,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "slop_build_setup",
-        description: "How to add Slop Build to the app's repository: the workflow file to commit, with the detected project type. With it, every push builds, signs and submits a release by itself. Not for browser games: Slop Build makes downloads (give a browser game's address with submit_play_address).",
+        description: "How releases get built and checked for this app's repository. `host` says where it lives (github, gitlab, bitbucket, other) and `checks_run_on` where SLAPorSLOP's malware scan and source check of its releases run (github_actions: the repository's own; slaporslop: SLAPorSLOP's servers, slower). On GitHub: `workflow` is Slop Build's file to commit at `file_path` (every push then builds, signs, scans and submits a release), with the detected project type; if the maker builds some other way, commit `check_workflow` at `check_file_path` instead (Slop Check: when a release is published it runs SLAPorSLOP's scan, source check and Microsoft Defender on the repository's Actions). Committing the file is all it takes. Off GitHub, `note` says what to do instead (your own pipeline, signing key, submit_release). Not for browser games: Slop Build makes downloads (give a browser game's address with submit_play_address).",
         method: Method::GET,
         path: "/v1/apps/{slug}/slop-build",
         properties: slug_only,

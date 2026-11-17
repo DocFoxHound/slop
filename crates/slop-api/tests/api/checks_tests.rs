@@ -432,11 +432,13 @@ async fn every_problem_in_a_repository_comes_with_its_fix(db: PgPool) {
             "pictures:problem",
             "pictures:problem",
             "builds:linux_package",
+            // Releases made outside Slop Build, and no Slop Check to scan them on GitHub.
+            "builds:slop_check",
         ]
     );
     assert_eq!(
         report["summary"],
-        "octo/broken at commit eeeeeee: 1 thing must be fixed before SLAPorSLOP can publish it, and 5 things should be. Each finding says what's wrong and how to fix it."
+        "octo/broken at commit eeeeeee: 1 thing must be fixed before SLAPorSLOP can publish it, and 5 things should be. 1 more thing is recommended. Each finding says what's wrong and how to fix it."
     );
     let problems: Vec<&str> = report["findings"]
         .as_array()
@@ -920,4 +922,42 @@ async fn a_report_says_what_it_couldnt_check(db: PgPool) {
     assert!(not_checked[1].as_str().unwrap().starts_with("Builds:"));
     assert_eq!(hub.hits("/repos/octo/half/license"), 0);
     assert_eq!(hub.hits("/repos/octo/half/releases/latest"), 0);
+}
+
+/// A repository whose releases are made outside Slop Build, with Slop Check in it: its checks run
+/// on its own GitHub Actions, so there's nothing to recommend about them.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_check_in_the_repository_is_noticed(db: PgPool) {
+    let (base, hub) = hub().await;
+    let app = checks_app(db, &base, |_| {}).await;
+    let commit = "f".repeat(40);
+    hub.head("octo/checked", &commit);
+    hub.file(
+        "octo/checked",
+        &commit,
+        ".github/workflows/slop-check.yml",
+        b"jobs:\n  check:\n    uses: DocFoxHound/slop-build/.github/workflows/check.yml@v1\n"
+            .to_vec(),
+    );
+    hub.api(
+        "/repos/octo/checked/releases/latest",
+        200,
+        json!({ "tag_name": "v1.0.0", "assets": [{ "name": "checked-1.0.0-windows.zip" }] }),
+    );
+    let (_, report) = get_json(
+        &app,
+        "/v1/check/repository?url=https://github.com/octo/checked",
+    )
+    .await;
+    assert!(
+        !kinds(&report).iter().any(|k| k == "builds:slop_check"),
+        "{report}"
+    );
+    assert!(
+        report["passed"].as_array().unwrap().iter().any(|p| p
+            .as_str()
+            .unwrap()
+            .starts_with("Checks: .github/workflows/slop-check.yml is there")),
+        "{report}"
+    );
 }

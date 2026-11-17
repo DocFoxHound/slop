@@ -3374,6 +3374,9 @@ export const api = {
       check_file_path: string;
       check_workflow: string;
       check_create_url: string | null;
+      /** Where the repository lives, and where SLAPorSLOP's checks of its releases run. */
+      host: "github" | "gitlab" | "bitbucket" | "other";
+      checks_run_on: "github_actions" | "slaporslop";
       build_now_url: string | null;
     }>("GET", `/v1/apps/${encodeURIComponent(slug)}/slop-build`),
   manage: (slug: string) =>

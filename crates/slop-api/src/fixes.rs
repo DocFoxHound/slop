@@ -133,6 +133,7 @@ async fn fixes(
     let in_browser = app_type == AppType::BrowserGame;
     let mut recommendations = crate::media::recommendations(&state.db, app_id).await?;
     recommendations.extend(crate::catalog::tag_recommendations(&state.db, app_id).await?);
+    recommendations.extend(crate::slop_build::slop_check_recommendation(&state.db, app_id).await?);
     let row: Option<Row> = sqlx::query_as(
         "select id, version, status::text, status_reason, repo_scan, source_checks
          from releases where app_id = $1 order by created_at desc limit 1",

@@ -231,6 +231,37 @@ Rules:
 - Players can press the big picture on your store page to see it full size, and step through the
   whole gallery there.
 
+### Where your repository lives: GitHub, GitLab or Bitbucket
+
+What SLAPorSLOP can do for you depends on where the repository is. Find out first (for an agent:
+`git remote get-url origin`, or the store page's repository address; `slop_build_setup` answers
+`host` and `checks_run_on`).
+
+| | **GitHub** | **GitLab, Bitbucket, Codeberg or self-hosted** |
+|---|---|---|
+| Building | [Slop Build](#option-b-slop-build) (one workflow file), or your own CI | Your own pipeline |
+| Maker signature | A GitHub artifact attestation (Slop Build makes it) | Your [registered signing key](#signing-builds-you-make-yourself): a `.sig` beside each file |
+| Submitting a release | Slop Build sends it; or pick a GitHub release, and later ones are picked up by themselves | **Enter a release by hand** (`submit_release`) each time |
+| Malware scan, source check, Microsoft Defender | On **your repository's own GitHub Actions**: Slop Build, or [Slop Check](#slop-check) for releases made any other way | On **SLAPorSLOP's servers**: slower, and SLAPorSLOP staff check a Windows build in place of Defender |
+| What to commit for SLAPorSLOP | `.github/workflows/slop.yml` (Slop Build) **or** `.github/workflows/slop-check.yml` (Slop Check) | Nothing |
+| Store pictures from `.slop/media.json` | Yes | Not yet |
+| A private repository | SLAPorSLOP's GitHub App, installed on it | A read-only access token you give SLAPorSLOP |
+
+**Why the difference:** SLAPorSLOP only trusts a result it can prove came from its own, unchanged
+checks. On GitHub, each run carries a token signed by GitHub that names the exact SLAPorSLOP
+workflow and version that ran, in your repository, at your commit, and your own code never runs in
+the jobs that check; so SLAPorSLOP can use those results and skip its own work. GitLab's and
+Bitbucket's tokens don't say which pipeline code ran, and both hand a project's own CI variables to
+every job (which could change what a check does without anyone seeing), so their results can't be
+trusted the same way: SLAPorSLOP checks those releases itself. Nothing is lost but time.
+
+**On GitHub, set it up once by committing a file**: no secrets, keys or settings, so an AI agent
+can do it alone. With Slop Build, nothing else is needed. Without it, commit Slop Check too; until
+it's there, `get_fixes` recommends it (`checks:slop_check`), and each release waits for
+SLAPorSLOP's servers. A release fetched before its scan from GitHub arrives says
+"Waiting for its scan from GitHub", and goes on by itself; if none comes within half an hour,
+SLAPorSLOP scans it itself.
+
 ### 3. Submit a release
 
 A release is one version of your app. On SLAPorSLOP it's a **GitHub release** on your repository with
@@ -2202,14 +2233,21 @@ address with `submit_play_address` (or, in a [handoff link](#hand-the-person-one
    Godot's `user://`) in every release.
 5. Add Slop Pulse to games (optional but recommended): pick the snippet above for the project's
    language and call it once at startup. Send nothing but the token.
-6. Either publish a GitHub release with the files the store page's platforms need (Option A; archives need the
-   program path, which the owner enters on SLAPorSLOP), or add `.github/workflows/slop.yml` (Option B) with `app` set to the store address the
+6. Find where the repository lives (`git remote get-url origin`) and follow
+   [Where your repository lives](#where-your-repository-lives-github-gitlab-or-bitbucket).
+   **On GitHub:** either publish a GitHub release with the files the store page's platforms need
+   (Option A; archives need the program path, which the owner enters on SLAPorSLOP) **and commit
+   [Slop Check](#slop-check)** at `.github/workflows/slop-check.yml` (with a token,
+   `slop_build_setup` gives it as `check_workflow`), or add `.github/workflows/slop.yml`
+   (Option B, which needs no Slop Check) with `app` set to the store address the
    owner will use, `slop-url` set to the SLAPorSLOP site, and `project-type` set to the one that
    fits the project: `rust`, `go`, `godot`, `unity`, `dotnet`, `python`, `electron`, `tauri` or
    `web` (the table under **Project types** above says what each builds and needs), or `custom`
    for anything else (with `build-command`, `output-dir` and `exec`). With a token,
    `slop_build_setup` gives the file filled in for the repository. For private repositories without
-   GitHub Enterprise, add `sign: false`. Off GitHub, or for full control, set up Option C. For
+   GitHub Enterprise, add `sign: false`. **On GitLab, Bitbucket or elsewhere:** set up Option C
+   with the owner's registered signing key (a `.sig` beside each file) and submit by hand; there's
+   nothing SLAPorSLOP-specific to commit, and SLAPorSLOP's own servers run the checks. For
    Option A, name files so the version is the only part that changes between releases
    (e.g. `game-1.0.0-windows.zip`), so SLAPorSLOP can pick up later releases by itself.
 7. **(token)** Create the store page (`create_store_page`, or **Publish → New app** on the

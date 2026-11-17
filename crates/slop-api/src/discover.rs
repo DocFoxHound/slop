@@ -463,11 +463,14 @@ pub fn build(i: &Inputs) -> Vec<Reel> {
                     .into()
             },
             see_all: None,
+            // The feed leaves out what they have, played and voted on; `open` also what they
+            // donated to, made, and dead projects, as every other reel does.
             ranked: feed
                 .items
                 .into_iter()
                 .filter_map(|card| {
                     at.get(card.app.slug.as_str())
+                        .filter(|&&k| open.contains(&k))
                         .map(|&k| (k, Some(card.reason)))
                 })
                 .collect(),

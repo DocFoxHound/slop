@@ -588,6 +588,12 @@ async fn submit_checks(
 
 #[derive(Serialize)]
 struct Setup {
+    /// Where the repository lives: github, gitlab, bitbucket or other. It decides how releases are
+    /// built, signed and checked (publishing guide, "Where your repository lives").
+    host: &'static str,
+    /// Where SLAPorSLOP's malware scan and source check of its releases run: `github_actions` (the
+    /// repository's own, through Slop Build or Slop Check) or `slaporslop` (SLAPorSLOP's servers).
+    checks_run_on: &'static str,
     /// Whether Slop Build can build this repository today.
     supported: bool,
     /// What the repository looks like: rust, go, godot, godot-dotnet (Godot with C#), unity,
@@ -601,7 +607,8 @@ struct Setup {
     workflow: String,
     /// GitHub's "create file" page with the workflow filled in. The maker only clicks Commit.
     create_url: Option<String>,
-    /// Slop Check, for makers who build elsewhere: Microsoft Defender checks their Windows files.
+    /// Slop Check, for GitHub repositories that build elsewhere: SLAPorSLOP's malware scan, source
+    /// check and Microsoft Defender on the repository's own GitHub Actions.
     check_file_path: &'static str,
     check_workflow: String,
     check_create_url: Option<String>,
@@ -792,6 +799,66 @@ fn detect(names: &[String], electron: bool) -> (&'static str, Option<&'static st
     }
 }
 
+/// What a repository off GitHub does instead of Slop Build and Slop Check.
+const OFF_GITHUB: &str = "Slop Build and Slop Check run on GitHub Actions, so they need a GitHub \
+    repository. (GitLab's and Bitbucket's pipelines can't prove to SLAPorSLOP which code ran, so \
+    their results couldn't be trusted.) Build and pack the files with your own pipeline, sign each \
+    with your registered signing key (a .sig file beside it: publishing guide, \"Signing builds you \
+    make yourself\"), attach them to a release on the repository, and submit it with \
+    submit_release (on the website: Enter a release by hand). SLAPorSLOP downloads and scans the \
+    files and reads the source on its own servers, so its checks take longer, and SLAPorSLOP staff \
+    check a Windows build in place of Microsoft Defender.";
+
+/// For `get_fixes` (fixes.rs): a GitHub app whose releases are made outside Slop Build and whose
+/// repository hasn't sent SLAPorSLOP a scan lately has no Slop Check, so SLAPorSLOP's servers check
+/// each release, slower.
+pub async fn slop_check_recommendation(
+    db: &sqlx::PgPool,
+    app_id: Uuid,
+) -> sqlx::Result<Option<crate::fixes::Fix>> {
+    let row: Option<(String, bool, bool)> = sqlx::query_as(
+        "select a.repo_url,
+                exists (select 1 from releases r where r.app_id = a.id and r.source <> 'slop_build'
+                          and r.play_address is null),
+                exists (select 1 from ci_scans c where c.app_id = a.id
+                          and c.received_at > now() - interval '60 days')
+         from apps a where a.id = $1 and not ('browser' = any(a.platforms))",
+    )
+    .bind(app_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(match row {
+        Some((repo_url, true, false)) if repo_host(&repo_url) == "github" => Some(crate::fixes::Fix {
+            kind: "checks:slop_check".into(),
+            severity: "recommended",
+            problem: "This app's releases are made outside Slop Build, and its repository hasn't sent SLAPorSLOP a scan from Slop Check: SLAPorSLOP's malware scan, source check and Microsoft Defender check run on SLAPorSLOP's servers, so each release waits longer (and a Windows build waits for Defender).".into(),
+            instruction: format!(
+                "Commit Slop Check at {CHECK_PATH}: the file `slop_build_setup` gives as `check_workflow`. When a release is published it runs those checks on the repository's own GitHub Actions. Committing it is all it takes: no secrets or settings. (Or switch to Slop Build, which does them as it builds.)"
+            ),
+            guide_section: Some("Slop Check"),
+        }),
+        _ => None,
+    })
+}
+
+/// Where a repository lives, for what can run there (`Setup::host`).
+pub(crate) fn repo_host(repo_url: &str) -> &'static str {
+    if slop_provenance::github_repo_path(repo_url).is_some() {
+        return "github";
+    }
+    let host = url::Url::parse(repo_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    if host == "gitlab.com" || host.starts_with("gitlab.") {
+        "gitlab"
+    } else if host == "bitbucket.org" {
+        "bitbucket"
+    } else {
+        "other"
+    }
+}
+
 async fn setup(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -816,10 +883,17 @@ async fn setup(
         .to_string();
     let version = &state.config.releases.slop_build_version;
 
+    let host = repo_host(&repo_url);
     let repo_path = match slop_provenance::github_repo_path(&repo_url) {
         Some(path) if !in_browser => path,
         _ => {
             return Ok(Json(Setup {
+                host,
+                checks_run_on: if host == "github" {
+                    "github_actions"
+                } else {
+                    "slaporslop"
+                },
                 supported: false,
                 project_type: "custom".into(),
                 detected: None,
@@ -828,7 +902,7 @@ async fn setup(
                  on your own website: give its play address on the Releases page instead."
                     .into()
                 } else {
-                    "Slop Build runs on GitHub Actions, so it needs a GitHub repository.".into()
+                    OFF_GITHUB.into()
                 }),
                 file_path: WORKFLOW_PATH,
                 workflow: workflow_yaml(&recipe, version, &slug, &site, "custom", "main"),
@@ -911,6 +985,8 @@ async fn setup(
         &check_workflow,
     )?;
     Ok(Json(Setup {
+        host,
+        checks_run_on: "github_actions",
         supported: true,
         project_type: project_type.into(),
         detected: detected.map(String::from),

@@ -65,6 +65,8 @@ const CACHE_FOR: Duration = Duration::from_secs(5 * 60);
 const MAX_CACHED: usize = 2_000;
 /// Where Slop Build's workflow lives (publishing.md, Option B), and the most of it that's read.
 const WORKFLOW_PATH: &str = ".github/workflows/slop.yml";
+/// Where Slop Check's workflow lives (publishing.md, "Slop Check").
+const CHECK_PATH: &str = ".github/workflows/slop-check.yml";
 const MAX_WORKFLOW_BYTES: u64 = 64 * 1024;
 pub(crate) const DRY_RUN: &str =
     "This was a dry run: nothing was saved, and nothing was sent for review.";
@@ -850,6 +852,46 @@ fn workflow_value(text: &str, key: &str) -> Option<String> {
 
 const RELEASES: &str = "3. Submit a release";
 
+/// Releases made without Slop Build: Slop Check runs SLAPorSLOP's checks of them on the repository's
+/// own GitHub Actions (slop_build.rs). Without it SLAPorSLOP's servers do them, slower.
+async fn check_slop_check(
+    state: &AppState,
+    repo: &str,
+    commit: &str,
+    findings: &mut Vec<Fix>,
+    passed: &mut Vec<String>,
+    not_checked: &mut Vec<String>,
+) {
+    let check = match state
+        .config
+        .media
+        .github_raw_base
+        .join(&format!("{repo}/{commit}/{CHECK_PATH}"))
+    {
+        Ok(url) => media::download(state, url, MAX_WORKFLOW_BYTES).await,
+        Err(e) => Err(e.into()),
+    };
+    match check.map(|found| found.map(|b| String::from_utf8_lossy(&b).into_owned())) {
+        Err(e) => not_checked.push(format!("Checks: couldn't read {CHECK_PATH} ({e:#}).")),
+        Ok(Some(text)) if text.contains("slop-build/.github/workflows/check.yml") => {
+            passed.push(format!(
+                "Checks: {CHECK_PATH} is there (Slop Check scans each published release on the repository's GitHub Actions)."
+            ));
+        }
+        Ok(_) => findings.push(Fix {
+            kind: "builds:slop_check".into(),
+            severity: "recommended",
+            problem: format!(
+                "There's no Slop Build ({WORKFLOW_PATH}) and no Slop Check ({CHECK_PATH}), so SLAPorSLOP's malware scan, source check and Microsoft Defender check of each release would run on SLAPorSLOP's servers, and releases wait longer."
+            ),
+            instruction: format!(
+                "Commit {CHECK_PATH} calling `DocFoxHound/slop-build/.github/workflows/check.yml@v1` on `release: published` (the publishing guide's \"Slop Check\" section has the whole file; set `app` and `slop-url`), or use Slop Build. Committing it is all it takes: no secrets or settings."
+            ),
+            guide_section: Some("Slop Check"),
+        }),
+    }
+}
+
 async fn check_builds(
     state: &AppState,
     repo: &str,
@@ -1036,6 +1078,7 @@ async fn check_builds(
                     "Builds: the newest GitHub release, {tag}, has files for {}.",
                     platforms.join(", ")
                 ));
+                check_slop_check(state, repo, commit, findings, passed, not_checked).await;
             }
             json!({
                 "slop_build_workflow": false,
