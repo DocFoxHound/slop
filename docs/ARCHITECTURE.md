@@ -256,7 +256,10 @@ locked-down container per file (`deploy/scanner`: ClamAV, YARA with YARA-Forge r
 network, read-only, nothing executed). Windows files also need a clean Microsoft Defender result
 from Slop Build or Slop Check on GitHub's Windows runners. Source checks (`source_scan.rs`: secrets,
 vulnerable or payment packages, licences, save folder, mods and Pulse use) run on the maker's
-runner and come back with the release. With `SLOP_SCANNER=off`, staff, makers and the store
+runner and come back with the release. With `SLOP_SCANNER=remote` (production, since 2026-11-18),
+the same container runs on a separate scanning server (`scan_server.rs`, deploy/README.md
+"Scanning server"): the API sends it each file, the fingerprints to check and repository archives,
+and a release waits while it can't be reached. With `SLOP_SCANNER=off`, staff, makers and the store
 see "not scanned", and nothing claims a file was scanned.
 
 Still to do (SECURITY §5.2): moving the scanner to its own cloud account, signing its verdicts, and

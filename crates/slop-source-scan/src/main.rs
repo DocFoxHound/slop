@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! `slop-source-check <dir>`: SLAPorSLOP's source check on a checked-out repository, for a
 //! maker's GitHub runner (the Slop Build recipe's `source-checks` job). Reads the tree the way
-//! the server reads a repository archive (`.git` left out, symbolic links skipped, nothing run)
-//! and prints, as one line of JSON on stdout:
+//! the server reads a repository archive (`.git` left out, symbolic links skipped, nothing run).
+//! `slop-source-check -` reads a repository archive (.tar.gz) on stdin instead, for SLAPorSLOP's
+//! scanning server (deploy/scanner/slop-scan --source). Either way it prints, as one line of JSON
+//! on stdout:
 //!
 //! ```text
 //! {"raw": <RawScan>, "tool": "slop-source-check <version>"}
@@ -12,15 +14,20 @@
 
 use std::{path::Path, process::ExitCode};
 
-use slop_source_scan::{SourceCheck, scan_dir, tool};
+use slop_source_scan::{SourceCheck, scan_archive_raw, scan_dir, tool};
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
     let (Some(dir), None) = (args.next(), args.next()) else {
-        eprintln!("usage: slop-source-check <dir>");
+        eprintln!("usage: slop-source-check <dir>, or - for a .tar.gz on stdin");
         return ExitCode::from(2);
     };
-    let raw = match scan_dir(Path::new(&dir)) {
+    let read = if dir == "-" {
+        scan_archive_raw(std::io::BufReader::new(std::io::stdin().lock()))
+    } else {
+        scan_dir(Path::new(&dir))
+    };
+    let raw = match read {
         Ok(raw) => raw,
         Err(err) => {
             eprintln!("slop-source-check: {err:#}");

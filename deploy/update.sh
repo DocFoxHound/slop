@@ -10,6 +10,9 @@
 #                built without the tests, which GitHub ran before the owner approved it
 #   test         (the default) the tests, lints and browser tests first, then the build: how the
 #                test server worked before the GitHub pipeline, kept for a server without one
+#   scanner      the scanning server (deploy/README.md, "Scanning server"): SLOP_DEPLOY_REF=production
+#                like production, but only the API's program, run as `slop-api scan-server`
+#                (slop-scan-server.service), and the scanner image; no website, database or apps
 #
 # Other settings, for running it somewhere else (all have the defaults this server uses):
 #   SLOP_DEPLOY_ROOT, SLOP_DEPLOY_REMOTE, SLOP_DEPLOY_BRANCH (main), SLOP_DEPLOY_REF
@@ -35,17 +38,24 @@ REMOTE="${SLOP_DEPLOY_REMOTE:-git@github.com:DocFoxHound/slop.git}"
 TEST_DATABASE_URL="${SLOP_TEST_DATABASE_URL:-postgres://slop:slop@127.0.0.1:5434/slop}"
 DEPLOY_TAG="${SLOP_DEPLOY_REF:-}"
 MODE="${SLOP_DEPLOY_MODE:-test}"
-SERVICE="${SLOP_DEPLOY_SERVICE:-slop-api.service}"
-HEALTH_URL="${SLOP_DEPLOY_HEALTH_URL:-http://127.0.0.1:8090/healthz}"
-ALSO_RESTART="${SLOP_DEPLOY_ALSO_RESTART-slop-sim.service slop-sim-pulse.service}"
+if [ "$MODE" = scanner ]; then
+  SERVICE="${SLOP_DEPLOY_SERVICE:-slop-scan-server.service}"
+  HEALTH_URL="${SLOP_DEPLOY_HEALTH_URL:-http://127.0.0.1:8095/healthz}"
+  ALSO_RESTART="${SLOP_DEPLOY_ALSO_RESTART-}"
+  DESKTOP="${SLOP_DEPLOY_DESKTOP-}"
+else
+  SERVICE="${SLOP_DEPLOY_SERVICE:-slop-api.service}"
+  HEALTH_URL="${SLOP_DEPLOY_HEALTH_URL:-http://127.0.0.1:8090/healthz}"
+  ALSO_RESTART="${SLOP_DEPLOY_ALSO_RESTART-slop-sim.service slop-sim-pulse.service}"
+  DESKTOP="${SLOP_DEPLOY_DESKTOP-linux}"
+fi
 PG_CONTAINER="${SLOP_DEPLOY_PG_CONTAINER:-slop-pg}"
-DESKTOP="${SLOP_DEPLOY_DESKTOP-linux}"
 export PATH="$HOME/.cargo/bin:$PATH"
 
 log() { echo "slop-deploy: $*"; }
 case "$MODE" in
-  test | build | production) ;;
-  *) log "SLOP_DEPLOY_MODE must be test, build or production, not '$MODE'"; exit 1 ;;
+  test | build | production | scanner) ;;
+  *) log "SLOP_DEPLOY_MODE must be test, build, production or scanner, not '$MODE'"; exit 1 ;;
 esac
 for kind in $DESKTOP; do
   case "$kind" in
@@ -55,8 +65,8 @@ for kind in $DESKTOP; do
 done
 # Production builds without the tests only what passed them on GitHub and was approved: the tag,
 # never a branch's newest.
-if [ "$MODE" = production ] && [ -z "$DEPLOY_TAG" ]; then
-  log "SLOP_DEPLOY_MODE=production needs SLOP_DEPLOY_REF (the tag to deploy)"
+if { [ "$MODE" = production ] || [ "$MODE" = scanner ]; } && [ -z "$DEPLOY_TAG" ]; then
+  log "SLOP_DEPLOY_MODE=$MODE needs SLOP_DEPLOY_REF (the tag to deploy)"
   exit 1
 fi
 mkdir -p "$ROOT/builds"
@@ -122,6 +132,34 @@ update_scanner() {
   log "scanner rebuilt"
 }
 
+# The scanning server (SLOP_DEPLOY_MODE=scanner): the scanner image first, so the new program never
+# runs an older one, then the new program; kept if it answers, else the last one back.
+switch_scanner_build() {
+  local previous
+  previous=$(readlink "$ROOT/current" 2>/dev/null || true)
+  update_scanner || log "couldn't rebuild the scanner"
+  ln -sfn "$build" "$ROOT/current.new" && mv -T "$ROOT/current.new" "$ROOT/current"
+  systemctl --user restart "$SERVICE"
+  for _ in $(seq 30); do
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' "$HEALTH_URL")" = 204 ]; then
+      log "live: ${target:0:12}"
+      mkdir -p "$ROOT/bin"
+      install -m 755 "$build/update.sh" "$ROOT/bin/update.sh.new" && mv "$ROOT/bin/update.sh.new" "$ROOT/bin/update.sh"
+      # shellcheck disable=SC2012 # commit names: no spaces
+      ls -1dt "$ROOT"/builds/*/ | tail -n +4 | xargs -r rm -rf
+      exit 0
+    fi
+    sleep 1
+  done
+  log "new build isn't healthy; rolling back"
+  touch "$ROOT/builds/failed-$target"
+  if [ -n "$previous" ]; then
+    ln -sfn "$previous" "$ROOT/current.new" && mv -T "$ROOT/current.new" "$ROOT/current"
+    systemctl --user restart "$SERVICE"
+  fi
+  exit 1
+}
+
 audit_dependencies() {
   podman run --rm --network=host -v "$REPO:/src:ro,z" ghcr.io/google/osv-scanner:v2.7.0@sha256:d2c46aa2483c4e02759bc25f2224d28a5ceeb3dca5a1ecd1f569fbed83a626f0 \
     scan source --lockfile /src/Cargo.lock --lockfile /src/web/package-lock.json --format json >"$ROOT/osv.json" 2>/dev/null || true
@@ -162,6 +200,9 @@ PY
 # The image is rebuilt when its Containerfile changes.
 if [ "$MODE" = test ]; then
   build_env=(-e SLOP_TEST_DATABASE_URL="$TEST_DATABASE_URL")
+elif [ "$MODE" = scanner ]; then
+  # The program only: the scanning server serves no website.
+  build_env=(-e SLOP_BUILD_ONLY=1 -e SLOP_BUILD_NO_WEB=1)
 else
   build_env=(-e SLOP_BUILD_ONLY=1)
 fi
@@ -177,7 +218,8 @@ podman run --rm --network=host --userns=keep-id --cap-drop=all --security-opt=no
   "${build_env[@]}" -e SLOP_COMMIT="$target" \
   -v "$REPO:/src:Z" -v "$ROOT/cache:/cache:Z" -v "$ROOT/out:/out:Z" -w /src \
   "$image" bash deploy/build/build.sh >"$ROOT/out/container.log" 2>&1 || true
-if [ ! -e "$ROOT/out/ok" ] || [ -e "$ROOT/out/failed" ] || [ ! -x target/release/slop-api ] || [ ! -d web/dist ]; then
+if [ ! -e "$ROOT/out/ok" ] || [ -e "$ROOT/out/failed" ] || [ ! -x target/release/slop-api ] \
+  || { [ "$MODE" != scanner ] && [ ! -d web/dist ]; }; then
   # The step name comes from the commit's own script: shown, never run.
   step=$(head -c 40 "$ROOT/out/failed" 2>/dev/null | tr -cd 'a-z ' || true)
   step=${step:-container}
@@ -195,6 +237,10 @@ fi
 build="$ROOT/builds/$target"
 rm -rf "$build" && mkdir -p "$build"
 cp target/release/slop-api "$build/"
+cp deploy/update.sh "$build/update.sh"
+if [ "$MODE" = scanner ]; then
+  switch_scanner_build
+fi
 cp -r web/dist "$build/web"
 # The software bill of materials for this build, served at /sbom.json (SECURITY §13).
 cp "$ROOT/out/sbom.json" "$build/web/sbom.json" 2>/dev/null || log "no SBOM from the build"

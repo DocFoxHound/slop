@@ -320,6 +320,20 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
         ));
     }
 
+    // The scanning server (deploy/README.md, "Scanning server") not answering for an hour:
+    // releases wait for it.
+    if let Some(since) = crate::scan::remote_down_since()
+        && time::OffsetDateTime::now_utc() - since > time::Duration::hours(1)
+    {
+        out.push(alert(
+            format!("scanner-away-{}", since.unix_timestamp()),
+            "The scanning server isn't answering",
+            "Releases wait for their scans until it does. Check it: systemctl --user status slop-scan-server as slopscan on the scanning server, its Caddy site, and SLOP_SCAN_URL and SLOP_SCAN_TOKEN here.",
+            "/admin",
+            true,
+        ));
+    }
+
     // Reports: urgent and serious ones as they arrive, and any past its deadline. The cursor is
     // in microseconds, as Postgres keeps time: in whole seconds the newest report matched again
     // on every run. (It carries on from the earlier whole-second cursor, "reports".)

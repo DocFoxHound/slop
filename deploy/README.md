@@ -438,6 +438,44 @@ check, which arrives from Slop Build or Slop Check on GitHub's Windows runners
 (`/v1/slop-build/checks`); with the scanner on, a Windows file can't be approved without a clean
 one unless a reviewer clears it.
 
+## Scanning server
+
+Production scans nothing itself (owner decision 2026-11-18): the test server, which has more
+room, is also SLAPorSLOP's scanning server, so nothing a maker sent is opened on the machine with
+the website and the database. It runs as its own account, `slopscan`, which holds nothing but
+the scanner: not the repository's working copies, the test database or anyone's keys.
+
+- **What it does:** `slop-api scan-server` (scan_server.rs, `slop-scan-server.service`) takes a
+  file from production, runs `slop-scan` on it exactly as a local scanner would, gives back the
+  report and deletes the file. Fingerprint checks (`--match-hashes`) and source checks
+  (`--source`, a repository's archive) go the same way. Three scans run at once
+  (`SLOP_SCAN_JOBS`), the rest wait their turn.
+- **Who can reach it:** Caddy (`deploy/slop-scan.caddyfile`) lets only production's address in,
+  and the server also wants production's token (`SLOP_SCAN_TOKEN`, in
+  `~/.config/slop/scan-server.env` there and in production's `slop.env`).
+- **Keeping it current:** its `slop-deploy.timer` runs `update.sh` in its `scanner` mode: the
+  commit the `production` tag names, the program only, and the scanner image when it changed.
+- **When it's down:** releases wait and are tried again every five minutes, without using up
+  their tries; a maker's re-run of the scans is given back. Admins get an alert after an hour.
+
+Setting it up, once, after a promotion that includes it (the setup script refuses before):
+
+```sh
+# as an admin of the test server
+sudo useradd --create-home --comment "SLAPorSLOP scanning server" slopscan
+sudo loginctl enable-linger slopscan
+sudo install -o slopscan -m 755 deploy/scan-server-setup.sh ~slopscan/
+sudo cp deploy/slop-scan.caddyfile /etc/caddy/Caddyfile.d/
+sudo systemctl reload caddy
+sudo -iu slopscan env XDG_RUNTIME_DIR=/run/user/$(id -u slopscan) bash scan-server-setup.sh
+```
+
+The script prints the token once. Then in production's `slop.env`: `SLOP_SCANNER=remote`,
+`SLOP_SCAN_URL=https://scan.188-68-41-241.sslip.io/` and `SLOP_SCAN_TOKEN=` that token, and
+restart `slop-api` there. Production then no longer needs its own scanner: `systemctl --user
+disable --now slop-scan-update.timer` and `rm ~/slop-deploy/bin/slop-scan` (which also stops the
+deploy rebuilding the image), and `podman image rm slop-scanner` and `podman volume rm slop-scan-db`.
+
 ## Backups
 
 `deploy/backup/slop-backup.sh` (installed as `~/slop-deploy/bin/slop-backup`) dumps `slop_prod`

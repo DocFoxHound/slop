@@ -597,10 +597,17 @@ impl Config {
                 .context("GITHUB_API_BASE")?,
             allow_http_downloads: var_or("SLOP_ALLOW_HTTP_DOWNLOADS", "false") == "true",
             require_maker_signature: var_or("SLOP_REQUIRE_MAKER_SIGNATURE", "true") != "false",
-            scanner: crate::scan::Scanner::from_setting(
-                &var_or("SLOP_SCANNER", "off"),
-                &var_or("SLOP_SCAN_COMMAND", "slop-scan"),
-            )?,
+            scanner: match var_or("SLOP_SCANNER", "off").trim() {
+                // SLAPorSLOP's scanning server (deploy/README.md, "Scanning server").
+                "remote" => crate::scan::Scanner::remote(
+                    &var_or("SLOP_SCAN_URL", ""),
+                    &var_or("SLOP_SCAN_TOKEN", ""),
+                )?,
+                other => crate::scan::Scanner::from_setting(
+                    other,
+                    &var_or("SLOP_SCAN_COMMAND", "slop-scan"),
+                )?,
+            },
             rescan_every_days: var_or("SLOP_RESCAN_EVERY_DAYS", "0")
                 .parse()
                 .context("SLOP_RESCAN_EVERY_DAYS")?,

@@ -311,6 +311,10 @@ pub async fn scan_release(
             return Ok(None);
         };
         download_archive(state, app_id, &source, &path).await?;
+        // On the scanning server, where there is one.
+        if let Some(read) = state.config.releases.scanner.scan_source(&path).await {
+            return read.map(Some);
+        }
         let file = std::fs::File::open(&path)?;
         tokio::task::spawn_blocking(move || scan_archive_raw(std::io::BufReader::new(file)))
             .await?

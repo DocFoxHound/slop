@@ -1,0 +1,18 @@
+[Unit]
+Description=SLAPorSLOP scanning server (deploy/README.md, "Scanning server")
+After=network-online.target
+
+[Service]
+EnvironmentFile=%h/.config/slop/scan-server.env
+Environment=SLOP_SCAN_COMMAND=%h/slop-deploy/bin/slop-scan
+ExecStart=%h/slop-deploy/current/slop-api scan-server
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+# Not PrivateTmp: in a user service it adds a user namespace, and the scanner's rootless podman
+# can't start from inside one. Files waiting for their scan go to a private folder instead.
+Environment=TMPDIR=%h/slop-deploy/tmp
+ExecStartPre=/usr/bin/mkdir -p -m 700 %h/slop-deploy/tmp
+
+[Install]
+WantedBy=default.target

@@ -74,6 +74,7 @@ pub mod review;
 pub mod reviews;
 pub mod save_sync;
 pub mod scan;
+pub mod scan_server;
 pub mod shelves;
 pub mod sim;
 pub mod sim_donations;

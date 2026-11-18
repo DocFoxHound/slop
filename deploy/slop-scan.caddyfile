@@ -1,0 +1,12 @@
+# SLAPorSLOP's scanning server (deploy/README.md, "Scanning server"), on the test server: copy to
+# /etc/caddy/Caddyfile.d/ and reload Caddy. Only production's address gets in, and the scanning
+# server checks production's token as well. Production sends release files of up to 2 GB here.
+scan.188-68-41-241.sslip.io {
+	@production remote_ip 2.29.104.33
+	handle @production {
+		reverse_proxy 127.0.0.1:8095
+	}
+	handle {
+		respond 404
+	}
+}

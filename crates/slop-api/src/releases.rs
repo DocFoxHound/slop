@@ -2271,9 +2271,41 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
             }
             finish_fetched(state, id, app_id, &repo_url, &commit).await?;
         }
+        Err(err) if err.downcast_ref::<crate::scan::Unavailable>().is_some() => {
+            postpone(state, id, &err, true).await?
+        }
         Err(err) => fetch_failed(state, id, &err).await?,
     }
     Ok(true)
+}
+
+/// How soon a release is fetched again when the scanning server couldn't be reached.
+const UNAVAILABLE_RETRY: Duration = Duration::minutes(5);
+
+/// The scanning server can't be reached (scan.rs `Unavailable`): nothing is wrong with the
+/// release, so it isn't failed. It waits, and is fetched again in a few minutes without that
+/// counting as one of its tries (`counted`: the try that just ended was one). Admins are alerted
+/// when the server stays unreachable (ops.rs).
+async fn postpone(
+    state: &AppState,
+    id: Uuid,
+    err: &anyhow::Error,
+    counted: bool,
+) -> anyhow::Result<()> {
+    tracing::warn!(release = %id, error = %err, "scanning server unavailable; the release waits");
+    sqlx::query(
+        "update releases
+         set fetch_attempts = case when $4 then greatest(fetch_attempts - 1, 0) else fetch_attempts end,
+             fetch_started_at = now() - $2 + $3
+         where id = $1 and status = 'fetching'",
+    )
+    .bind(id)
+    .bind(FETCH_LEASE)
+    .bind(UNAVAILABLE_RETRY)
+    .bind(counted)
+    .execute(&state.db)
+    .await?;
+    Ok(())
 }
 
 /// The rest of a release's checks once its files are: pictures, source, then where it ends.
@@ -2364,6 +2396,10 @@ async fn resume_next(state: &AppState) -> anyhow::Result<bool> {
                 file_stage(state, id, &platform, "scanning").await?;
                 match scan_here(state, app_id, &url, &file_name, &sha256, parts.as_ref()).await {
                     Ok(v) => v,
+                    Err(err) if err.downcast_ref::<crate::scan::Unavailable>().is_some() => {
+                        postpone(state, id, &err, false).await?;
+                        return Ok(true);
+                    }
                     Err(err) => {
                         fetch_failed(state, id, &err).await?;
                         return Ok(true);
@@ -2431,16 +2467,17 @@ async fn scan_here(
             .map(|(joined, _)| joined)
     };
     let result = match downloaded {
-        Ok(file) if file.sha256 == sha256 => Ok(state
+        Ok(file) if file.sha256 == sha256 => state
             .config
             .releases
             .scanner
-            .scan(&crate::scan::Target {
+            .try_scan(&crate::scan::Target {
                 path: &path,
                 file_name,
                 sha256,
             })
-            .await),
+            .await
+            .map_err(anyhow::Error::from),
         Ok(_) => Err(anyhow!(
             "{file_name} changed on the release page while SLAPorSLOP was checking it. Send the release again."
         )),
@@ -2676,7 +2713,7 @@ async fn fetch_release(
             }
             let path = local.clone().unwrap_or_default();
             let v = scanner
-                .scan(&crate::scan::Target {
+                .try_scan(&crate::scan::Target {
                     path: &path,
                     file_name: &file_name,
                     sha256: &sha256,
@@ -2685,7 +2722,8 @@ async fn fetch_release(
             if local.is_some() {
                 let _ = tokio::fs::remove_file(&path).await;
             }
-            Some(v)
+            // The scanning server can't be reached: the release waits (`postpone`).
+            Some(v?)
         };
         waiting |= verdict.is_none();
         sqlx::query(

@@ -43,6 +43,7 @@ mod oauth_tests;
 mod people_tests;
 mod pictures_tests;
 mod publishing_tests;
+mod scan_server_tests;
 mod servers_tests;
 mod store_tests;
 

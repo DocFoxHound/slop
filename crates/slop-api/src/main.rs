@@ -49,6 +49,10 @@ enum Command {
         #[command(subcommand)]
         command: SimulateCommand,
     },
+    /// Run the scanning server (deploy/README.md, "Scanning server"): scans what production's
+    /// API sends it (SLOP_SCAN_TOKEN, SLOP_SCAN_LISTEN, SLOP_SCAN_COMMAND, SLOP_SCAN_JOBS). Needs no
+    /// database.
+    ScanServer,
     /// Revoke an approved release: it stops launching on every client (SECURITY §5.5).
     Revoke {
         release_id: Uuid,
@@ -198,6 +202,9 @@ async fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve().await,
         Command::Migrate => migrate().await,
+        Command::ScanServer => {
+            slop_api::scan_server::run(slop_api::scan_server::Settings::from_env()?).await
+        }
         Command::Keys {
             command: KeysCommand::GenerateUpdater,
         } => {

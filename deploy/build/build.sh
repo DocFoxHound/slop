@@ -10,6 +10,8 @@
 #
 # GitHub's pipeline runs it the same way for its checks (.github/workflows/pipeline.yml).
 #
+# SLOP_BUILD_NO_WEB=1 (update.sh's scanner mode) also leaves out the website.
+#
 # SLOP_BUILD_ONLY=1 (update.sh's build and production modes, deploy/README.md) skips the tests,
 # lints and browser tests: the test server deploys dev quickly and leaves them to GitHub's
 # pipeline, production deploys only commits that passed them there, and neither has a test
@@ -72,7 +74,10 @@ if [ "$build_only" != 1 ]; then
   cargo clippy --locked --all-targets -q -- -D warnings >"$out/lint.log" 2>&1 || fail lint
 fi
 SLOP_COMMIT="$commit" cargo build --locked -q --release -p slop-api >"$out/build.log" 2>&1 || fail build
-if [ "$build_only" = 1 ]; then
+if [ "${SLOP_BUILD_NO_WEB:-}" = 1 ]; then
+  # The scanning server's deploy (update.sh's scanner mode): the program only.
+  :
+elif [ "$build_only" = 1 ]; then
   (cd web && npm ci --silent --no-audit --no-fund && npm run build --silent) >"$out/web.log" 2>&1 || fail "web build"
 else
   (cd web && npm ci --silent --no-audit --no-fund && npm test --silent && npm run build --silent) >"$out/web.log" 2>&1 || fail "web build"

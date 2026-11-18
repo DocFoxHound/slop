@@ -219,10 +219,215 @@ pub enum Scanner {
     Off,
     /// The command that scans a file and prints a verdict (deploy/scanner/slop-scan).
     Local(&'static str),
+    /// SLAPorSLOP's scanning server (`SLOP_SCANNER=remote`, scan_server.rs): a separate machine
+    /// that runs the same command, so nothing a maker sent is opened where the website and the
+    /// database are. Source checks go there too (`scan_source`).
+    Remote(&'static Remote),
 }
 
 /// The longest one file's scan may take.
 const SCAN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// The scanning server couldn't be reached, was busy for too long, or turned the request away
+/// (a wrong token). Nothing is wrong with the file: the release waits and is tried again.
+#[derive(Debug)]
+pub struct Unavailable(pub String);
+
+impl std::fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SLAPorSLOP's scanning server {}", self.0)
+    }
+}
+
+impl std::error::Error for Unavailable {}
+
+/// Since when the scanning server hasn't answered (None while it does), for the admins' alerts
+/// (ops.rs).
+static REMOTE_DOWN_SINCE: std::sync::Mutex<Option<time::OffsetDateTime>> =
+    std::sync::Mutex::new(None);
+
+pub fn remote_down_since() -> Option<time::OffsetDateTime> {
+    *REMOTE_DOWN_SINCE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn remote_answered(up: bool) {
+    let mut since = REMOTE_DOWN_SINCE.lock().unwrap_or_else(|e| e.into_inner());
+    *since = match (up, *since) {
+        (true, _) => None,
+        (false, None) => Some(time::OffsetDateTime::now_utc()),
+        (false, kept) => kept,
+    };
+}
+
+/// The way to SLAPorSLOP's scanning server: its address, the token both servers share, and how
+/// long to wait between tries when it doesn't answer.
+pub struct Remote {
+    base: reqwest::Url,
+    token: String,
+    http: reqwest::Client,
+    pauses: &'static [u64],
+}
+
+impl std::fmt::Debug for Remote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never the token.
+        f.debug_struct("Remote")
+            .field("base", &self.base.as_str())
+            .finish()
+    }
+}
+
+impl PartialEq for Remote {
+    fn eq(&self, other: &Self) -> bool {
+        self.base == other.base
+    }
+}
+
+impl Eq for Remote {}
+
+/// Seconds between tries of one job, when the scanning server doesn't answer (a restart or a
+/// deploy there takes under a minute).
+const REMOTE_PAUSES: &[u64] = &[5, 30, 120];
+/// How often a job's progress is asked for.
+const POLL: Duration = Duration::from_secs(2);
+/// The longest a scan may take on the scanning server, waiting in its queue included. Under the
+/// release fetcher's lease (releases.rs), so a long queue makes the release wait, not run twice.
+const REMOTE_SCAN_DEADLINE: Duration = Duration::from_secs(35 * 60);
+
+/// How a job on the scanning server ended, when it didn't give its answer.
+enum JobError {
+    /// Try again later.
+    Unavailable(String),
+    /// The scanner itself failed on it, as a local scanner can.
+    Failed(String),
+}
+
+impl Remote {
+    fn job_url(&self, path: &str) -> reqwest::Url {
+        let mut url = self.base.clone();
+        url.set_path(&format!("{}{path}", self.base.path().trim_end_matches('/')));
+        url
+    }
+
+    /// Sends `body` to the scanning server as a job of `kind` and waits for its answer, trying
+    /// again when the server doesn't answer.
+    async fn job(
+        &self,
+        kind: &str,
+        name: Option<&str>,
+        sha256: Option<&str>,
+        body: &Path,
+        deadline: Duration,
+    ) -> Result<Value, JobError> {
+        let until = tokio::time::Instant::now() + deadline;
+        let mut why = self.once(kind, name, sha256, body, until).await;
+        for &pause in self.pauses {
+            match why {
+                Err(JobError::Unavailable(_)) => {}
+                _ => break,
+            }
+            if tokio::time::Instant::now() + Duration::from_secs(pause) >= until {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(pause)).await;
+            why = self.once(kind, name, sha256, body, until).await;
+        }
+        remote_answered(!matches!(why, Err(JobError::Unavailable(_))));
+        why
+    }
+
+    async fn once(
+        &self,
+        kind: &str,
+        name: Option<&str>,
+        sha256: Option<&str>,
+        body: &Path,
+        until: tokio::time::Instant,
+    ) -> Result<Value, JobError> {
+        let unavailable = |e: reqwest::Error| JobError::Unavailable(e.without_url().to_string());
+        let file = tokio::fs::File::open(body)
+            .await
+            .map_err(|e| JobError::Failed(format!("reading the file to send: {e}")))?;
+        let mut url = self.job_url("/v1/jobs");
+        url.query_pairs_mut().append_pair("kind", kind);
+        if let Some(name) = name {
+            url.query_pairs_mut().append_pair("name", name);
+        }
+        let mut req =
+            self.http
+                .post(url)
+                .bearer_auth(&self.token)
+                .body(reqwest::Body::wrap_stream(
+                    tokio_util::io::ReaderStream::new(file),
+                ));
+        if let Some(sha256) = sha256 {
+            req = req.header("x-slop-sha256", sha256);
+        }
+        let res = req.send().await.map_err(unavailable)?;
+        let status = res.status();
+        if matches!(status.as_u16(), 400 | 413) {
+            let text = res.text().await.unwrap_or_default();
+            return Err(JobError::Failed(format!(
+                "it refused the file ({status}): {text}"
+            )));
+        }
+        if !status.is_success() {
+            return Err(JobError::Unavailable(format!("answered {status}")));
+        }
+        let id = res.json::<Value>().await.map_err(unavailable)?["id"]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| JobError::Unavailable("gave no job id".into()))?;
+        let progress = self.job_url(&format!("/v1/jobs/{id}"));
+        loop {
+            if tokio::time::Instant::now() >= until {
+                return Err(JobError::Unavailable(
+                    "was busy for too long; the scan will be tried again".into(),
+                ));
+            }
+            tokio::time::sleep(POLL).await;
+            let res = self
+                .http
+                .get(progress.clone())
+                .bearer_auth(&self.token)
+                .send()
+                .await
+                .map_err(unavailable)?;
+            if res.status() == reqwest::StatusCode::NOT_FOUND {
+                return Err(JobError::Unavailable(
+                    "lost the scan (it restarted); it will be tried again".into(),
+                ));
+            }
+            if !res.status().is_success() {
+                return Err(JobError::Unavailable(format!("answered {}", res.status())));
+            }
+            let mut answer: Value = res.json().await.map_err(unavailable)?;
+            match answer["state"].as_str() {
+                Some("queued" | "running") => continue,
+                Some("done") => return Ok(answer["output"].take()),
+                Some("failed") => {
+                    return Err(JobError::Failed(
+                        answer["error"].as_str().unwrap_or("it failed").to_string(),
+                    ));
+                }
+                _ => return Err(JobError::Unavailable("gave an answer it shouldn't".into())),
+            }
+        }
+    }
+}
+
+/// The verdict when the scanner itself failed on a file: on hold, for staff (ops.rs alerts them).
+fn couldnt_finish(why: impl std::fmt::Display, sha256: &str) -> Verdict {
+    tracing::error!(error = %why, sha256, "scan failed");
+    Verdict {
+        result: ScanResult::OnHold,
+        detail: Some(format!(
+            "the scanner couldn't finish ({why}); running the scans again usually fixes this"
+        )),
+        report: None,
+        fingerprints: Vec::new(),
+    }
+}
 
 impl Scanner {
     pub fn from_setting(value: &str, command: &str) -> anyhow::Result<Self> {
@@ -234,76 +439,178 @@ impl Scanner {
                     command.trim().to_string().into_boxed_str(),
                 )))
             }
-            other => anyhow::bail!("SLOP_SCANNER={other:?}: use \"local\" or \"off\""),
+            "remote" => {
+                anyhow::bail!("SLOP_SCANNER=remote needs SLOP_SCAN_URL and SLOP_SCAN_TOKEN")
+            }
+            other => anyhow::bail!("SLOP_SCANNER={other:?}: use \"local\", \"remote\" or \"off\""),
         }
+    }
+
+    /// The scanning server at `url` (https, or http on this machine for tests), with the token in
+    /// its SLOP_SCAN_TOKEN.
+    pub fn remote(url: &str, token: &str) -> anyhow::Result<Self> {
+        Self::remote_with_pauses(url, token, REMOTE_PAUSES)
+    }
+
+    /// `remote`, with other pauses between tries (tests).
+    pub fn remote_with_pauses(
+        url: &str,
+        token: &str,
+        pauses: &'static [u64],
+    ) -> anyhow::Result<Self> {
+        let base: reqwest::Url = url.trim().parse().map_err(|_| {
+            anyhow::anyhow!("SLOP_SCAN_URL isn't an address (https://scan.example/)")
+        })?;
+        let local = matches!(base.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+        anyhow::ensure!(
+            base.scheme() == "https" || (base.scheme() == "http" && local),
+            "SLOP_SCAN_URL must be https"
+        );
+        let token = token.trim();
+        anyhow::ensure!(
+            token.len() >= 32,
+            "SLOP_SCAN_TOKEN must be at least 32 characters (openssl rand -hex 32)"
+        );
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .read_timeout(Duration::from_secs(120))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        Ok(Self::Remote(Box::leak(Box::new(Remote {
+            base,
+            token: token.to_string(),
+            http,
+            pauses,
+        }))))
     }
 
     pub fn is_on(self) -> bool {
         !matches!(self, Self::Off)
     }
 
+    /// Scans a file. A scanning server that can't be reached gives a hold, as a scanner that
+    /// failed does; callers that can wait use `try_scan` instead.
     pub async fn scan(self, target: &Target<'_>) -> Verdict {
+        match self.try_scan(target).await {
+            Ok(v) => v,
+            Err(why) => couldnt_finish(why, target.sha256),
+        }
+    }
+
+    /// Scans a file, or says the scanning server can't be reached right now.
+    pub async fn try_scan(self, target: &Target<'_>) -> Result<Verdict, Unavailable> {
         match self {
-            Self::Off => Verdict {
+            Self::Off => Ok(Verdict {
                 result: ScanResult::Skipped,
                 detail: Some("not scanned: scanning is off on this server".into()),
                 report: None,
                 fingerprints: Vec::new(),
-            },
-            Self::Local(command) => match run_local(command, target).await {
+            }),
+            Self::Local(command) => Ok(match run_local(command, target).await {
                 Ok(v) => v,
-                Err(e) => {
-                    tracing::error!(error = %e, sha256 = target.sha256, "scan failed");
-                    Verdict {
-                        result: ScanResult::OnHold,
-                        detail: Some(format!(
-                            "the scanner couldn't finish ({e}); running the scans again usually fixes this"
-                        )),
-                        report: None,
-                        fingerprints: Vec::new(),
-                    }
+                Err(e) => couldnt_finish(e, target.sha256),
+            }),
+            Self::Remote(remote) => match remote
+                .job(
+                    "file",
+                    Some(target.file_name),
+                    Some(target.sha256),
+                    target.path,
+                    REMOTE_SCAN_DEADLINE,
+                )
+                .await
+            {
+                Ok(report) => {
+                    Ok(verdict_of(report).unwrap_or_else(|e| couldnt_finish(e, target.sha256)))
                 }
+                Err(JobError::Failed(e)) => Ok(couldnt_finish(e, target.sha256)),
+                Err(JobError::Unavailable(e)) => Err(Unavailable(e)),
             },
         }
     }
 
-    /// Checks fingerprints (JSON lines written to `queries` by the caller) against today's
-    /// ClamAV signatures: `slop-scan --match-hashes` (deploy/scanner/hashes.py). None with the
-    /// scanner off.
+    /// Reads a repository archive (a .tar.gz) on the scanning server. None when this server
+    /// reads source itself (source_scan.rs).
+    pub async fn scan_source(
+        self,
+        archive: &Path,
+    ) -> Option<anyhow::Result<slop_source_scan::RawScan>> {
+        let Self::Remote(remote) = self else {
+            return None;
+        };
+        Some(
+            match remote
+                .job("source", None, None, archive, REMOTE_SCAN_DEADLINE)
+                .await
+            {
+                Ok(out) => serde_json::from_value::<slop_source_scan::SourceCheck>(out)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|c| {
+                        c.raw.validate().map_err(|why| anyhow::anyhow!("{why}"))?;
+                        Ok(c.raw)
+                    }),
+                Err(JobError::Failed(e)) => Err(anyhow::anyhow!("the source check failed: {e}")),
+                Err(JobError::Unavailable(e)) => Err(Unavailable(e).into()),
+            },
+        )
+    }
+
+    /// Checks fingerprints (JSON lines written by the caller) against today's ClamAV
+    /// signatures: `slop-scan --match-hashes` (deploy/scanner/hashes.py), here or on the scanning
+    /// server. None with the scanner off.
     pub async fn match_fingerprints<F, Fut>(self, write: F) -> anyhow::Result<Option<Matches>>
     where
-        F: FnOnce(tokio::process::ChildStdin) -> Fut,
+        F: FnOnce(std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<()>>,
     {
-        let Self::Local(command) = self else {
-            return Ok(None);
+        let report: Value = match self {
+            Self::Off => return Ok(None),
+            Self::Local(command) => {
+                let mut child = tokio::process::Command::new(command)
+                    .arg("--match-hashes")
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()?;
+                let stdin = child.stdin.take().expect("piped");
+                let run = async {
+                    // The scanner reads every line before it answers, so writing first can't block.
+                    write(Box::pin(stdin)).await?;
+                    Ok::<_, anyhow::Error>(child.wait_with_output().await?)
+                };
+                let out = tokio::time::timeout(MATCH_TIMEOUT, run)
+                    .await
+                    .map_err(|_| anyhow::anyhow!("checking fingerprints took too long"))??;
+                anyhow::ensure!(
+                    out.status.success(),
+                    "exit {}: {}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stderr)
+                        .lines()
+                        .last()
+                        .unwrap_or("")
+                );
+                serde_json::from_slice(&out.stdout)?
+            }
+            Self::Remote(remote) => {
+                // Written to a file first, then sent (the same prefix as re-scans' copies, so a
+                // left-over one is swept, releases.rs).
+                let path =
+                    std::env::temp_dir().join(format!("slop-rescan-hashes-{}", Uuid::now_v7()));
+                let sent = async {
+                    write(Box::pin(tokio::fs::File::create(&path).await?)).await?;
+                    match remote.job("hashes", None, None, &path, MATCH_TIMEOUT).await {
+                        Ok(report) => Ok(report),
+                        Err(JobError::Failed(e)) => Err(anyhow::anyhow!("{e}")),
+                        Err(JobError::Unavailable(e)) => Err(Unavailable(e).into()),
+                    }
+                }
+                .await;
+                let _ = tokio::fs::remove_file(&path).await;
+                sent?
+            }
         };
-        let mut child = tokio::process::Command::new(command)
-            .arg("--match-hashes")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
-        let stdin = child.stdin.take().expect("piped");
-        let run = async {
-            // The scanner reads every line before it answers, so writing first can't block.
-            write(stdin).await?;
-            Ok::<_, anyhow::Error>(child.wait_with_output().await?)
-        };
-        let out = tokio::time::timeout(MATCH_TIMEOUT, run)
-            .await
-            .map_err(|_| anyhow::anyhow!("checking fingerprints took too long"))??;
-        anyhow::ensure!(
-            out.status.success(),
-            "exit {}: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr)
-                .lines()
-                .last()
-                .unwrap_or("")
-        );
-        let report: Value = serde_json::from_slice(&out.stdout)?;
         let signatures = report["engines"]["clamav"]
             .as_str()
             .filter(|s| !s.is_empty())
@@ -335,12 +642,33 @@ impl Scanner {
 }
 
 async fn run_local(command: &str, target: &Target<'_>) -> anyhow::Result<Verdict> {
+    let file_name = std::ffi::OsStr::new(target.file_name);
+    verdict_of(
+        run_command(
+            command,
+            &[target.path.as_os_str(), file_name],
+            None,
+            SCAN_TIMEOUT,
+        )
+        .await?,
+    )
+}
+
+/// Runs the scanner command with `args` (and `stdin` from a file) and reads the JSON it prints:
+/// here, or on the scanning server for a job (scan_server.rs).
+pub(crate) async fn run_command(
+    command: &str,
+    args: &[&std::ffi::OsStr],
+    stdin: Option<&Path>,
+    timeout: Duration,
+) -> anyhow::Result<Value> {
     let mut cmd = tokio::process::Command::new(command);
-    cmd.arg(target.path)
-        .arg(target.file_name)
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let out = tokio::time::timeout(SCAN_TIMEOUT, cmd.output())
+    cmd.args(args).kill_on_drop(true);
+    match stdin {
+        Some(path) => cmd.stdin(std::fs::File::open(path)?),
+        None => cmd.stdin(std::process::Stdio::null()),
+    };
+    let out = tokio::time::timeout(timeout, cmd.output())
         .await
         .map_err(|_| anyhow::anyhow!("it took too long"))??;
     anyhow::ensure!(
@@ -352,7 +680,7 @@ async fn run_local(command: &str, target: &Target<'_>) -> anyhow::Result<Verdict
             .last()
             .unwrap_or("")
     );
-    verdict_of(serde_json::from_slice(&out.stdout)?)
+    Ok(serde_json::from_slice(&out.stdout)?)
 }
 
 /// The verdict in a scanner's report (deploy/scanner/scan.py), whether SLAPorSLOP's scanner
@@ -521,6 +849,8 @@ impl DefenderCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn scanners_from_settings() {
@@ -622,6 +952,158 @@ mod tests {
         );
         let broken = Scanner::from_setting("local", "/nonexistent/scan").unwrap();
         assert_eq!(broken.scan(&t("good.zip")).await.result, ScanResult::OnHold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_scanning_server_scans_for_production() {
+        let dir = std::env::temp_dir().join(format!("slop-scan-remote-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A repository archive with one file, read as the source check reads it.
+        let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_size(5);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "game-abc/README.md", &b"hello"[..])
+            .unwrap();
+        let archive = archive.into_inner().unwrap().finish().unwrap();
+        let expected = slop_source_scan::scan_archive_raw(&archive[..]).unwrap();
+        let source = slop_source_scan::SourceCheck {
+            raw: expected.clone(),
+            tool: slop_source_scan::tool(),
+        };
+        std::fs::write(
+            dir.join("source.json"),
+            serde_json::to_string(&source).unwrap(),
+        )
+        .unwrap();
+        let script = dir.join("scan.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncase \"$1\" in\n--match-hashes) grep -q Win.Test.query && echo '{{\"engines\":{{\"clamav\":\"bytecode 1 daily 2\"}},\"matches\":[{{\"id\":\"r/windows/a.exe\",\"name\":\"Win.Test\"}}]}}';;\n--source) cat {};;\n*) case \"$2\" in *bad*) echo '{{\"result\":\"on_hold\",\"detail\":\"Flagged\"}}';; *broken*) exit 3;; *) echo '{{\"result\":\"passed\",\"detail\":\"clean\"}}';; esac;;\nesac\n",
+                dir.join("source.json").display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let token = "t".repeat(40);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = crate::scan_server::router(crate::scan_server::Settings {
+            listen: addr,
+            token: token.clone(),
+            command: script.to_str().unwrap().to_string(),
+            jobs: 2,
+            max_bytes: 1000,
+            dir: dir.clone(),
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let url = format!("http://{addr}/");
+        let scanner = Scanner::remote_with_pauses(&url, &token, &[]).unwrap();
+
+        let file = dir.join("f");
+        std::fs::write(&file, b"x").unwrap();
+        let x_sha = hex::encode(sha2::Sha256::digest(b"x"));
+        let t = |name: &'static str, sha256: &'static str| Target {
+            path: &file,
+            file_name: name,
+            sha256,
+        };
+        let x: &'static str = Box::leak(x_sha.into_boxed_str());
+        assert_eq!(
+            scanner.try_scan(&t("good.zip", x)).await.unwrap().result,
+            ScanResult::Passed
+        );
+        let held = scanner.try_scan(&t("bad.zip", x)).await.unwrap();
+        assert_eq!(
+            (held.result, held.detail.as_deref()),
+            (ScanResult::OnHold, Some("Flagged"))
+        );
+        assert_eq!(remote_down_since(), None);
+        // The scanner failing on the file holds it, as a local one does.
+        let broken = scanner.try_scan(&t("broken.zip", x)).await.unwrap();
+        assert_eq!(broken.result, ScanResult::OnHold);
+        assert!(
+            broken
+                .detail
+                .unwrap()
+                .starts_with("the scanner couldn't finish")
+        );
+        // A file changed on the way is sent again, then waits.
+        assert!(scanner.try_scan(&t("good.zip", "00")).await.is_err());
+        // Over the size limit: held, not retried for ever.
+        let big = dir.join("big");
+        std::fs::write(&big, vec![0u8; 2000]).unwrap();
+        let too_big = scanner
+            .try_scan(&Target {
+                path: &big,
+                file_name: "big.zip",
+                sha256: "00",
+            })
+            .await
+            .unwrap();
+        assert_eq!(too_big.result, ScanResult::OnHold);
+
+        // Fingerprints and source checks go there too.
+        let matches = scanner
+            .match_fingerprints(|mut w| async move {
+                w.write_all(b"{\"id\":\"r/windows/a.exe\",\"q\":\"Win.Test.query\"}\n")
+                    .await?;
+                w.shutdown().await?;
+                Ok(())
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(matches.signatures, "bytecode 1 daily 2");
+        assert_eq!(
+            matches.found,
+            vec![("r/windows/a.exe".to_string(), "Win.Test".to_string())]
+        );
+        let raw = scanner.scan_source(&file).await.unwrap().unwrap();
+        assert_eq!(raw, expected);
+        assert!(Scanner::Off.scan_source(&file).await.is_none(), "read here");
+
+        // A wrong token, or nobody answering: the file waits, and admins learn of it.
+        let wrong = Scanner::remote_with_pauses(&url, &"w".repeat(40), &[]).unwrap();
+        assert!(wrong.try_scan(&t("good.zip", x)).await.is_err());
+        let gone = Scanner::remote_with_pauses("http://127.0.0.1:9/", &token, &[]).unwrap();
+        let why = gone.try_scan(&t("good.zip", x)).await.unwrap_err();
+        assert!(why.to_string().starts_with("SLAPorSLOP's scanning server"));
+        assert!(remote_down_since().is_some());
+        assert_eq!(
+            gone.scan(&t("good.zip", x)).await.result,
+            ScanResult::OnHold
+        );
+        scanner.try_scan(&t("good.zip", x)).await.unwrap();
+        assert_eq!(remote_down_since(), None, "answering again");
+        // Nothing is kept there.
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("slop-job-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+
+        assert!(
+            Scanner::remote("http://scan.example/", &token).is_err(),
+            "https only"
+        );
+        assert!(Scanner::remote("https://scan.example/", "short").is_err());
+        assert!(
+            format!("{scanner:?}").contains("127.0.0.1")
+                && !format!("{scanner:?}").contains(&token)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

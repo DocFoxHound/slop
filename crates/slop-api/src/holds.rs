@@ -1222,6 +1222,8 @@ enum Rerun {
     Changed,
     /// It couldn't be downloaded.
     Unreachable(String),
+    /// SLAPorSLOP's scanning server couldn't be reached (scan.rs `Unavailable`): not the maker's doing.
+    ScannerAway(String),
     /// It took longer than `RESCAN_FILE_DEADLINE`.
     TooSlow,
     /// SLAPorSLOP's shared GitHub allowance is low: try again later.
@@ -1347,6 +1349,19 @@ pub async fn rescan_next(state: &AppState) -> anyhow::Result<bool> {
                 stopped = Some(format!(
                     "{label}: running the scans again took longer than {} minutes, so SLAPorSLOP stopped. This re-run counts.",
                     RESCAN_FILE_DEADLINE.as_secs() / 60
+                ));
+                break;
+            }
+            Rerun::ScannerAway(why) => {
+                // SLAPorSLOP's own trouble: given back whenever nothing was scanned.
+                give_back = lines.is_empty();
+                stopped = Some(format!(
+                    "{label}: {why}. {}",
+                    if give_back {
+                        "This re-run doesn't count: try again in a few minutes."
+                    } else {
+                        "The files before it were scanned, so this re-run counts."
+                    }
                 ));
                 break;
             }
@@ -1495,16 +1510,20 @@ async fn rerun_file(
     if f.sha256.as_deref() != Some(file.sha256.as_str()) {
         return Rerun::Changed;
     }
-    let verdict = state
+    let verdict = match state
         .config
         .releases
         .scanner
-        .scan(&crate::scan::Target {
+        .try_scan(&crate::scan::Target {
             path,
             file_name: &f.file_name,
             sha256: &file.sha256,
         })
-        .await;
+        .await
+    {
+        Ok(v) => v,
+        Err(why) => return Rerun::ScannerAway(why.to_string()),
+    };
     let after = verdict.result.as_str().to_string();
     if let Err(e) =
         crate::scan::save_fingerprints(&state.db, release_id, &f.platform, &verdict.fingerprints)
