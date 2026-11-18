@@ -133,8 +133,8 @@ pub struct DesktopConfig {
     /// The workflow file in `.github/workflows` that builds the app (`SLOP_DESKTOP_WORKFLOW`).
     pub workflow: String,
     /// The GitHub environment the uploading job must run in (`SLOP_DESKTOP_ENVIRONMENT`): in
-    /// production `production`, which needs the owner's approval, so only an approved run can
-    /// update production's players. Unset, the server takes no uploads from GitHub at all: the
+    /// production `desktop-updates`, which only the pipeline's publish-windows job uses, after the
+    /// owner approved `production`, so only an approved run can update production's players. Unset, the server takes no uploads from GitHub at all: the
     /// test server builds its own apps (deploy/README.md, "The desktop app").
     pub environment: Option<String>,
 }

@@ -5243,10 +5243,7 @@ async fn ownership_checks_refuse_private_network_hosts(db: PgPool) {
     })
     .await;
     let (_, ann) = app.user("Ann", "US").await;
-    for repo in [
-        "https://localhost/ann/game.git",
-        "https://127.0.0.1/ann/game.git",
-    ] {
+    for repo in ["https://localhost/ann/game.git"] {
         let code = code_for_repo(&app, &ann, repo).await;
         assert!(code.starts_with("slop-verify-"));
         let res = app.send(check_code(&ann, repo)).await;
@@ -5256,6 +5253,16 @@ async fn ownership_checks_refuse_private_network_hosts(db: PgPool) {
             "{repo}"
         );
     }
+    // An address written into the link is refused before anything is fetched.
+    assert_eq!(
+        error_field(
+            app.send(ownership(&ann, "https://127.0.0.1/ann/game.git"))
+                .await
+        )
+        .await,
+        "repo_url",
+        "IP addresses aren't accepted"
+    );
     assert_eq!(
         error_field(
             app.send(ownership(&ann, "http://git.example/ann/game.git"))

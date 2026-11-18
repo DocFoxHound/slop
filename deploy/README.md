@@ -157,7 +157,8 @@ shows a notice ("SLAPorSLOP 0.1.N is available: Update and restart / Later"); up
 installed without the player choosing to. The website's store page links the newest installers.
 
 **Uploads.** Production takes Windows builds only from `pipeline.yml` on main, from a job in the
-approved `production` environment (`SLOP_DESKTOP_REPO`, `SLOP_DESKTOP_WORKFLOW`,
+`desktop-updates` environment, which only the pipeline's `publish-windows` job uses and which runs
+only after the owner approved `production` (`SLOP_DESKTOP_REPO`, `SLOP_DESKTOP_WORKFLOW`,
 `SLOP_DESKTOP_REF`, `SLOP_DESKTOP_ENVIRONMENT`; "Production" below), and never an older version
 than it has. This server leaves `SLOP_DESKTOP_ENVIRONMENT` unset and so takes no uploads at all:
 everything it offers was built here and published with `slop-api desktop publish`.
@@ -238,7 +239,7 @@ SLOP_FORMER_URLS=https://slopai.games
 SLOP_DESKTOP_REPO=DocFoxHound/slop
 SLOP_DESKTOP_REF=refs/heads/main
 SLOP_DESKTOP_WORKFLOW=pipeline.yml
-SLOP_DESKTOP_ENVIRONMENT=production
+SLOP_DESKTOP_ENVIRONMENT=desktop-updates
 SLOP_DESKTOP_DIR=/home/slop/slop-desktop
 ```
 

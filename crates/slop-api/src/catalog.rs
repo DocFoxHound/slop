@@ -1758,6 +1758,14 @@ fn validate_repo_url_with(value: &str, allow_http: bool) -> ApiResult<String> {
     {
         return Err(invalid());
     }
+    // By name only: fetches check where a name leads (PublicOnly), which an address written into
+    // the URL would skip. Test servers (plain http) use 127.0.0.1.
+    if !allow_http && matches!(url.host(), Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))) {
+        return Err(ApiError::invalid(
+            "repo_url",
+            "use the repository's https:// address with its site's name, not an IP address",
+        ));
+    }
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
@@ -2437,6 +2445,9 @@ mod tests {
             "https://github.com/a/b?x=1",
             "git@github.com:a/b.git",
             "javascript:alert(1)",
+            "https://10.0.0.5/a/b",
+            "https://93.184.215.14/a/b",
+            "https://[::1]/a/b",
         ] {
             assert!(validate_repo_url(bad).is_err(), "{bad}");
         }

@@ -16,7 +16,7 @@ run() {
   fi
   # shellcheck disable=SC2086 # empty, or one word
   exec podman run --rm -i $entrypoint --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
-    --pids-limit=256 --memory=4g --tmpfs /tmp:rw,size=6g,mode=1777 --timeout=1500 \
+    --pids-limit=256 --memory=4g --memory-swap=4g --cpus=4 --tmpfs /tmp:rw,size=6g,mode=1777 --timeout=1500 \
     -v slop-scan-db:/db:ro \
     localhost/slop-scanner "$@"
 }

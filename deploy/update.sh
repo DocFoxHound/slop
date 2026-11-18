@@ -161,7 +161,7 @@ switch_scanner_build() {
 }
 
 audit_dependencies() {
-  podman run --rm --network=host -v "$REPO:/src:ro,z" ghcr.io/google/osv-scanner:v2.7.0@sha256:d2c46aa2483c4e02759bc25f2224d28a5ceeb3dca5a1ecd1f569fbed83a626f0 \
+  podman run --rm -v "$REPO:/src:ro,z" ghcr.io/google/osv-scanner:v2.7.0@sha256:d2c46aa2483c4e02759bc25f2224d28a5ceeb3dca5a1ecd1f569fbed83a626f0 \
     scan source --lockfile /src/Cargo.lock --lockfile /src/web/package-lock.json --format json >"$ROOT/osv.json" 2>/dev/null || true
   python3 - "$ROOT/osv.json" "$target" "$REPO/deploy/audit-accepted.json" "$build/shipped.json" >"$ROOT/audit.json.new" <<'PY' && mv "$ROOT/audit.json.new" "$ROOT/audit.json"
 import json, sys, datetime
@@ -198,8 +198,13 @@ PY
 
 # Tests and build, in the build container (only the build in the build and production modes).
 # The image is rebuilt when its Containerfile changes.
+# Only the tests reach this machine's own services (the test database): a build has the internet
+# for its crates and npm packages and nothing else, so a bad install script can't reach Caddy's
+# admin API, the databases or the running site on localhost.
+network=(--network=pasta)
 if [ "$MODE" = test ]; then
   build_env=(-e SLOP_TEST_DATABASE_URL="$TEST_DATABASE_URL")
+  network=(--network=host)
 elif [ "$MODE" = scanner ]; then
   # The program only: the scanning server serves no website.
   build_env=(-e SLOP_BUILD_ONLY=1 -e SLOP_BUILD_NO_WEB=1)
@@ -213,7 +218,7 @@ if ! podman image exists "$image"; then
 fi
 mkdir -p "$ROOT/cache/cargo" "$ROOT/cache/npm" "$ROOT/out"
 rm -rf "$ROOT/out"/* target/release/slop-api web/dist
-podman run --rm --network=host --userns=keep-id --cap-drop=all --security-opt=no-new-privileges \
+podman run --rm "${network[@]}" --userns=keep-id --cap-drop=all --security-opt=no-new-privileges \
   -e HOME=/tmp/home -e CARGO_HOME=/cache/cargo -e npm_config_cache=/cache/npm \
   "${build_env[@]}" -e SLOP_COMMIT="$target" \
   -v "$REPO:/src:Z" -v "$ROOT/cache:/cache:Z" -v "$ROOT/out:/out:Z" -w /src \

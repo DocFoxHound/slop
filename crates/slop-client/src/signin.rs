@@ -57,11 +57,9 @@ pub async fn begin(api: &ApiClient, device_name: &str) -> Result<PendingSignIn> 
     }
     let created: Created =
         serde_json::from_value(res.body).map_err(|e| Error::Verify(e.to_string()))?;
-    // Only ever open the configured SLAPorSLOP site in the browser.
-    if !created
-        .approve_url
-        .starts_with(api.base().as_str().trim_end_matches('/'))
-    {
+    // Only ever open the configured SLAPorSLOP site in the browser: the same scheme, host and
+    // port, not just the same start (https://slaporslop.games.example.com would match that).
+    if !on_site(api.base(), &created.approve_url) {
         return Err(Error::Verify(
             "sign-in page isn't on the SLAPorSLOP site".into(),
         ));
@@ -167,4 +165,38 @@ async fn respond(stream: &mut TcpStream, status: &str, body: &str) -> std::io::R
     );
     stream.write_all(response.as_bytes()).await?;
     stream.shutdown().await
+}
+
+/// Whether `url` is a page of the site at `base`.
+fn on_site(base: &url::Url, url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| {
+        u.origin() == base.origin()
+            && u.username().is_empty()
+            && u.password().is_none()
+            && u.path().starts_with(base.path().trim_end_matches('/'))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::on_site;
+
+    #[test]
+    fn only_the_sites_own_pages_count_as_the_sign_in_page() {
+        let base = url::Url::parse("https://slaporslop.games/").unwrap();
+        assert!(on_site(
+            &base,
+            "https://slaporslop.games/signin/device?code=x"
+        ));
+        for bad in [
+            "https://slaporslop.games.example.com/signin",
+            "https://slaporslop.games@example.com/signin",
+            "http://slaporslop.games/signin",
+            "https://slaporslop.games:8443/signin",
+            "https://example.com/?https://slaporslop.games/",
+            "not a url",
+        ] {
+            assert!(!on_site(&base, bad), "{bad}");
+        }
+    }
 }

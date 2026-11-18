@@ -432,6 +432,12 @@ async fn unlink(
     Path((provider, subject)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let mut tx = state.db.begin().await?;
+    // One unlink at a time per account: two at once (two tabs) would each count the other's
+    // sign-in and could leave none.
+    sqlx::query("select 1 from users where id = $1 for update")
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
     let count: i64 = sqlx::query_scalar("select count(*) from identities where user_id = $1")
         .bind(user.id)
         .fetch_one(&mut *tx)

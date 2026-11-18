@@ -4,8 +4,9 @@
 # only fast-forwards main to a dev commit whose run passed. On main the same commit then runs:
 #
 #   checks ─────────┐
-#                   ├─► production: waits for the owner's approval, moves the `production` tag
-#   build-windows ──┘   (slaporslop.games deploys it), then publishes the Windows app there
+#                   ├─► production ──► publish-windows
+#   build-windows ──┘   (the owner's approval, then the `production` tag; slaporslop.games deploys
+#                       it) and then the Windows app is published there
 #
 # checks         The same tests, lints, builds and browser tests the deploy's test mode runs:
 #                deploy/build/build.sh in the deploy/build/Containerfile image, against a Postgres
@@ -13,14 +14,17 @@
 #                passes at once when the same commit already passed them on dev. A browser test
 #                that fails once and then passes is retried, and named as a warning to be fixed.
 # build-windows  The "Slop" Windows installer for slaporslop.games, built while the checks run, with
-#                no write access and no tokens.
+#                no write access. On main it runs in `production` too, for its signing sign-in
+#                (docs/CODE-SIGNING.md); that identity can't publish the app (publish-windows).
 # production     Runs in the `production` environment, which needs the owner's approval (set up
 #                in the repository's settings, deploy/README.md). Moves the annotated tag
 #                `production` to this commit (production's update.sh deploys it within minutes),
-#                waits until slaporslop.games runs it, then uploads the Windows installer with this
-#                job's GitHub OIDC token. slaporslop.games takes desktop uploads only from this
-#                workflow on main, in the approved environment (SLOP_DESKTOP_WORKFLOW,
-#                SLOP_DESKTOP_REF, SLOP_DESKTOP_ENVIRONMENT; desktop_updates.rs).
+#                and waits until slaporslop.games runs it.
+# publish-windows  Uploads the Windows installer with its own GitHub OIDC token, from the
+#                `desktop-updates` environment, which only this job uses. slaporslop.games takes
+#                desktop uploads only from this workflow on main, in that environment
+#                (SLOP_DESKTOP_WORKFLOW, SLOP_DESKTOP_REF, SLOP_DESKTOP_ENVIRONMENT;
+#                desktop_updates.rs). Nothing is built in it.
 #
 # Nothing here runs for pull requests, and nothing runs on self-hosted runners. (A tag pushed
 # with this run's token starts no other workflow, which is why the Windows app is published here
@@ -369,14 +373,18 @@ jobs:
     concurrency:
       group: production
       cancel-in-progress: false
+    outputs:
+      superseded: ${{ steps.live.outputs.superseded }}
     permissions:
+      # Moving the production tag.
       contents: write
-      id-token: write
     steps:
       # Only this repository's own shell steps run with write access: nothing is built here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # The tag is pushed by the step below; nothing else here needs the token.
+          persist-credentials: true
 
       - name: Move the production tag
         run: |
@@ -433,14 +441,32 @@ jobs:
           echo "::error::slaporslop.games still runs ${live:0:12} after an hour; see its deploy log (journalctl --user -u slop-deploy)"
           exit 1
 
+  # The Windows app's upload, in its own environment (`desktop-updates`) and job. slaporslop.games
+  # takes desktop uploads only from a job in that environment (SLOP_DESKTOP_ENVIRONMENT), and only
+  # this job is in it: build-windows runs in `production` for its signing, and since it also runs
+  # npm's and cargo's install and build scripts, a token it could ask GitHub for must not be one
+  # that updates the players. Nothing is built or installed here, and it runs only once the owner
+  # approved production and slaporslop.games runs this commit.
+  publish-windows:
+    needs: [build-windows, production]
+    if: ${{ !cancelled() && needs.production.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: desktop-updates
+      url: https://slaporslop.games
+    permissions:
+      # Signing in to slaporslop.games with GitHub's OIDC token.
+      id-token: write
+    steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: needs.build-windows.result == 'success' && steps.live.outputs.superseded != '1'
+        if: needs.build-windows.result == 'success' && needs.production.outputs.superseded != '1'
         with:
           name: slop-windows
           path: ${{ runner.temp }}/windows
 
       - name: Publish the Windows app to slaporslop.games
-        if: needs.build-windows.result == 'success' && steps.live.outputs.superseded != '1'
+        if: needs.build-windows.result == 'success' && needs.production.outputs.superseded != '1'
         env:
           VERSION: ${{ needs.build-windows.outputs.version }}
         run: |
