@@ -10,7 +10,16 @@ CONF
 freshclam --config-file=/tmp/freshclam.conf --quiet || freshclam --config-file=/tmp/freshclam.conf
 # YARA-Forge's core and extended packages, split into the rules that hold a file and the ones that
 # only make a note, keeping only rules whose licence lets SLAPorSLOP use them (slop-scan-rules).
-tag=$(curl -fsSL https://api.github.com/repos/YARAHQ/yara-forge/releases/latest | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')
+# The newest release's tag, from where github.com's "latest" page leads (GitHub's API allows few
+# lookups without signing in, shared by everything on the server's address). With no answer,
+# the rules already here are kept.
+tag=$(curl -fsSI https://github.com/YARAHQ/yara-forge/releases/latest | tr -d '\r' \
+  | sed -n 's|^[Ll]ocation: .*/releases/tag/\([0-9A-Za-z._-]*\)$|\1|p' || true)
+if [ -z "$tag" ]; then
+  [ -f /db/yara/hold.yarc ] || { echo "couldn't find YARA-Forge's newest release" >&2; exit 1; }
+  echo "couldn't find YARA-Forge's newest release; keeping $(cat /db/yara/version)" >&2
+  tag=$(cat /db/yara/version)
+fi
 if [ "$(cat /db/yara/version 2>/dev/null)" != "$tag" ] || [ ! -f /db/yara/hold.yarc ]; then
   rm -rf /tmp/yf && mkdir -p /tmp/yf/out
   for p in core extended; do
