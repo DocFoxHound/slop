@@ -29,7 +29,9 @@ use crate::{
 
 /// The automatic front-page shelves (web/src/pages/Store.tsx), which staff may hide.
 pub const BUILT_IN: &[(&str, &str)] = &[
+    ("hot", "Hot this week"),
     ("popular", "Popular this month"),
+    ("releasing_soon", "Releasing soon"),
     ("upcoming", "Coming soon & in beta"),
     ("categories", "Browse by category"),
     ("not_slop", "Most Slaps right now"),

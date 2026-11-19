@@ -88,6 +88,30 @@ export function deadlineText(app: Pick<AppSummary, "stage" | "stage_deadline">, 
   return `Full release due by ${formatDate(app.stage_deadline)}`;
 }
 
+/**
+ * An app's release date as players read it: "Releases Dec 5" ("Releases Jan 5, 2027" when it isn't
+ * this year), or "Releases December 2026" when its maker gave only the month. A calendar day, the
+ * same in every time zone. Null without one, or once it has passed.
+ */
+export function releaseDateText(
+  app: Pick<AppSummary, "release_date" | "release_date_precision" | "release_date_passed">,
+  now: number = Date.now(),
+  locale?: string,
+): string | null {
+  // Its maker still gets a date that has passed, to update it; it isn't shown as if to come.
+  if (!app.release_date || app.release_date_passed) return null;
+  const date = new Date(`${app.release_date}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  if (app.release_date_precision === "month") {
+    return `Releases ${date.toLocaleDateString(locale, { month: "long", year: "numeric", timeZone: "UTC" })}`;
+  }
+  const sameYear = date.getUTCFullYear() === new Date(now).getUTCFullYear();
+  const options: Intl.DateTimeFormatOptions = sameYear
+    ? { month: "short", day: "numeric", timeZone: "UTC" }
+    : { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" };
+  return `Releases ${date.toLocaleDateString(locale, options)}`;
+}
+
 /** A stable two-colour gradient and initial for apps that have no artwork yet. */
 export function artFor(slug: string): { from: string; to: string } {
   let hash = 0;

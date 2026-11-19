@@ -392,6 +392,8 @@ export function appFill(fields: Record<string, unknown>, tags?: ReadonlySet<stri
       mods_folder: modsFolder,
       platforms: platformList,
       play_address: httpsUrl(APP_LIMITS.play_address),
+      release_date: pattern(/^\d{4}-\d{2}-\d{2}$/, 10, 10, "should be a date, YYYY-MM-DD"),
+      release_date_precision: oneOf(["day", "month"] as const),
       tags: list<string>((x) => (tags ? tags.has(x) : slug.test(x)), APP_LIMITS.tags, true),
     },
     {
@@ -447,6 +449,8 @@ export const APP_LABELS: Record<string, string> = {
   mods_folder: "Mods",
   platforms: "Runs on",
   play_address: "Play address",
+  release_date: "Release date",
+  release_date_precision: "Release date: exact day or month",
   tags: "Tags",
   repo_token: "Repository token",
 };

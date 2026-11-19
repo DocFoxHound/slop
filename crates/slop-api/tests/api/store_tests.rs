@@ -2862,7 +2862,7 @@ async fn staff_edit_order_remove_and_hide_shelves(db: PgPool) {
         .find(|b| b["key"] == "popular")
         .unwrap();
     assert_eq!(popular["hidden"], true);
-    assert_eq!(listed["built_in"].as_array().unwrap().len(), 9);
+    assert_eq!(listed["built_in"].as_array().unwrap().len(), 11);
     let hidden = || async {
         body_json(app.send(req(Method::GET, "/v1/shelves")).await).await["hidden"].clone()
     };

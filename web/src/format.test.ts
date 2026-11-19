@@ -2,7 +2,18 @@
 import { describe, expect, it } from "vitest";
 
 import { query } from "./api";
-import { accountId, addressHost, artFor, dayGroup, deadlineText, money, playsInBrowser, timeAgo, toMinor } from "./format";
+import {
+  accountId,
+  addressHost,
+  artFor,
+  dayGroup,
+  deadlineText,
+  money,
+  playsInBrowser,
+  releaseDateText,
+  timeAgo,
+  toMinor,
+} from "./format";
 import { canOpenPlayAddress } from "./platform";
 
 const now = Date.parse("2026-10-18T12:00:00Z");
@@ -20,6 +31,29 @@ describe("deadlineText", () => {
 
   it("has nothing to say once released", () => {
     expect(deadlineText({ stage: "released", stage_deadline: null }, now)).toBeNull();
+  });
+});
+
+describe("releaseDateText", () => {
+  it("says the day, with the year when it isn't this year's", () => {
+    expect(releaseDateText({ release_date: "2026-12-05", release_date_precision: "day" }, now, "en-US")).toBe("Releases Dec 5");
+    expect(releaseDateText({ release_date: "2027-01-05", release_date_precision: "day" }, now, "en-US")).toBe("Releases Jan 5, 2027");
+  });
+
+  it("says only the month when that's all its maker gave, the same day in every time zone", () => {
+    expect(releaseDateText({ release_date: "2026-12-01", release_date_precision: "month" }, now, "en-US")).toBe(
+      "Releases December 2026",
+    );
+    // The 1st of a month, read as UTC: never the end of the month before.
+    expect(releaseDateText({ release_date: "2027-03-01", release_date_precision: "day" }, now, "en-US")).toBe("Releases Mar 1, 2027");
+  });
+
+  it("has nothing to say without a date, or for its maker once it has passed", () => {
+    expect(releaseDateText({ release_date: null, release_date_precision: null }, now)).toBeNull();
+    expect(releaseDateText({}, now)).toBeNull();
+    expect(
+      releaseDateText({ release_date: "2026-10-01", release_date_precision: "day", release_date_passed: true }, now),
+    ).toBeNull();
   });
 });
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 
-import { advanceHint, canPutInStore, moveEffects } from "./MakerFrame";
+import { advanceHint, canPutInStore, moveEffects, releaseDateNote } from "./MakerFrame";
 
 describe("moveEffects", () => {
   it("says who's told and that it's one way", () => {
@@ -42,5 +42,25 @@ describe("canPutInStore", () => {
     expect(canPutInStore({ status: "listed", private: false, stage: "beta" }, true)).toBe(false);
     expect(canPutInStore({ status: "delisted", private: false, stage: "beta" }, true)).toBe(false);
     expect(canPutInStore({ status: undefined, private: false, stage: "beta" }, true)).toBe(false);
+  });
+});
+
+describe("releaseDateNote", () => {
+  const now = Date.parse("2026-11-19T12:00:00Z");
+  it("says what players see, or that the date has passed and needs updating", () => {
+    expect(releaseDateNote({ stage: "beta", release_date: "2026-12-05", release_date_precision: "day" }, now)).toEqual({
+      text: "Players see “Releases Dec 5”.",
+      passed: false,
+    });
+    const passed = releaseDateNote(
+      { stage: "coming_soon", release_date: "2026-10-01", release_date_precision: "month", release_date_passed: true },
+      now,
+    );
+    expect(passed?.passed).toBe(true);
+    expect(passed?.text).toMatch(/has passed, so players no longer see it/);
+  });
+  it("has nothing to say without a date, or once released", () => {
+    expect(releaseDateNote({ stage: "beta", release_date: null, release_date_precision: null }, now)).toBeNull();
+    expect(releaseDateNote({ stage: "released", release_date: "2026-12-05", release_date_precision: "day" }, now)).toBeNull();
   });
 });

@@ -923,8 +923,9 @@ pub async fn set_stage(
     Ok(())
 }
 
-/// Moves an app (locked by the caller) from `from` to `stage`: restarts the stage's clock, tells
-/// everyone Interested, and records who did it. The caller checks the move is allowed.
+/// Moves an app (locked by the caller) from `from` to `stage`: restarts the stage's clock, clears
+/// the release date on release, tells everyone Interested, and records who did it. The caller
+/// checks the move is allowed.
 pub(crate) async fn move_stage(
     tx: &mut sqlx::PgConnection,
     id: Uuid,
@@ -933,8 +934,12 @@ pub(crate) async fn move_stage(
     stage: AppStage,
     actor: &str,
 ) -> anyhow::Result<()> {
+    // A released app is out: its release date goes (migration 0104).
     sqlx::query(
-        "update apps set stage = $2, stage_entered_at = now(), updated_at = now() where id = $1",
+        "update apps set stage = $2, stage_entered_at = now(), updated_at = now(),
+                release_date = case when $2 = 'released' then null else release_date end,
+                release_date_precision = case when $2 = 'released' then null else release_date_precision end
+         where id = $1",
     )
     .bind(id)
     .bind(stage)
