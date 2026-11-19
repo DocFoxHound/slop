@@ -570,7 +570,7 @@ struct ConfirmBody {
 
 /// The owner confirms a month's winners (this month or an earlier one), in order: they replace
 /// the month's winners, until any of its prizes is marked paid. Each new winner's maker is told
-/// the award, and that it comes as a donation from SLAPorSLOP to the app.
+/// the award, and that SLAPorSLOP pays it through the app's Donate button.
 async fn confirm(
     State(state): State<AppState>,
     admin: AdminUser,
@@ -716,8 +716,9 @@ async fn confirm(
                 title: format!("{} is App of the Month · {label}", app.title),
                 body: format!(
                     "SLAPorSLOP staff picked {} as an App of the Month for {label}, with a {money} award. \
-                     The award comes as a donation from SLAPorSLOP to {}, through its Donate button: \
-                     keep donations on so it can be paid. The badge shows on its page and your profile.",
+                     SLAPorSLOP pays the award to you through the Donate button on the {} page: keep donations \
+                     on so it can be paid. It's a prize, not a gift, so it may count as income for your taxes. \
+                     The badge shows on its page and your profile.",
                     app.title, app.title
                 ),
                 link: format!("/app/{slug}"),

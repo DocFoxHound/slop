@@ -23,8 +23,7 @@ export function Awards() {
       </h1>
       <p className="muted">
         Every month SLAPorSLOP's staff vote for apps they think players should try, and pick up to three. Each winner
-        gets a small cash award, which SLAPorSLOP gives as a donation to the app, through its Donate button like anyone
-        else. Nobody can pay for an award, and it doesn't change where an app shows in the store.
+        gets a small cash award, which SLAPorSLOP pays to the maker through the app's Donate button. Nobody can pay for an award, and it doesn't change where an app shows in the store.
       </p>
       {awards.error ? (
         <ErrorState error={awards.error} onRetry={awards.reload} />

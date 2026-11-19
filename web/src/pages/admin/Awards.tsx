@@ -35,7 +35,7 @@ export function AwardsTab() {
         <p className="muted small">
           Staff nominate finished public apps in the store (Released only) and vote: {d.max_votes} votes each a month, never for
           an app you make. The owner confirms up to {d.max_winners} winners. Each gets a published award that the owner
-          pays by hand as a donation to the app. Shown on the app's page, its maker's profile and{" "}
+          pays by hand through the app's Donate button (tick covering the fees so the maker gets the full award). Shown on the app's page, its maker's profile and{" "}
           <Link to="/awards">/awards</Link>.
         </p>
         <label className="small">
@@ -258,7 +258,7 @@ function ConfirmForm({ d, busy, run }: { d: AdminAwards; busy: boolean; run: Run
         >
           <p className="small muted">
             Pick up to {d.max_winners}, in order. Saving replaces this month's winners (until a prize is marked paid),
-            and each new winner's maker is told the award and that it comes as a donation from SLAPorSLOP.
+            and each new winner's maker is told the award and that SLAPorSLOP pays it through their Donate button.
           </p>
           <fieldset>
             <legend>Winners</legend>

@@ -385,7 +385,8 @@ async fn the_owner_confirms_up_to_three_winners_and_their_makers_are_told(db: Pg
     assert_eq!(title, &format!("lanterns is App of the Month · {label}"));
     assert!(body.contains("€30.00 award"), "{body}");
     assert!(
-        body.contains("donation from SLAPorSLOP to lanterns"),
+        body.contains("pays the award to you through the Donate button on the lanterns page")
+            && body.contains("prize, not a gift"),
         "{body}"
     );
     assert_eq!(link, "/app/lanterns");

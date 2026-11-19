@@ -1,7 +1,7 @@
 ---
 title: People Terms
-version: 2026-11-11
-summary: New: open requests on People. A client can post what a project needs, and creatives can put their name forward. On the board, SLAPorSLOP doesn't match, rank or assign anyone, and a job still starts only with a hire request, an offer and an accepted Service Agreement.
+version: 2026-11-19
+summary: Who reports what to tax authorities: Stripe reports US income on Form 1099-K where required, and SLAPorSLOP may have to report creatives' People-job income to EU tax authorities under DAC7.
 ---
 > **Draft for legal review.** These terms haven't been reviewed by a lawyer yet. You'll get 15 days' notice of any change.
 
@@ -21,7 +21,7 @@ The Service Agreement binds both sides to its words: the creative delivers what'
 - SLAPorSLOP's fee is **5%** of each payment, taken from what the creative receives. Nothing is added to the client's price.
 - **SLAPorSLOP's fee promise:** the fee will never be more than 5%. Any other change to fees that costs creatives more takes effect at least 12 months after SLAPorSLOP announces it, instead of the usual 15 days.
 - Refunds are issued by the creative.
-- Creatives are responsible for their own taxes. SLAPorSLOP may have to report creatives' income to tax authorities (EU DAC7, US 1099-K).
+- Creatives are responsible for their own taxes. Stripe reports US income on Form 1099-K where required. SLAPorSLOP may have to report creatives' People-job income to EU tax authorities under DAC7.
 
 ## 4. Delivery
 Delivery before the last payment is a preview. The client may use the work only once it's paid in full. After delivery, the client has 7 days to accept it or ask for a change; after that, it counts as accepted, but not while a problem about it is open. Completing a job never shortens a consumer's legal right to cancel.
