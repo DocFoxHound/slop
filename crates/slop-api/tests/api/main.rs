@@ -38,6 +38,7 @@ mod history_tests;
 mod holds_tests;
 mod icons_tests;
 mod invites_tests;
+mod maker_stats_tests;
 mod messages_tests;
 mod money_tests;
 mod news_tests;

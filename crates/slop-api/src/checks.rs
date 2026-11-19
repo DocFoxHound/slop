@@ -229,7 +229,7 @@ struct AddressReport {
     rules: &'static str,
 }
 
-const SLUG_RULES: &str = "3 to 60 lowercase letters, numbers and single dashes, e.g. my-game. Each app's address is unique; its name needn't be. Addresses aren't held: someone else can take a free one before the store page is created.";
+const SLUG_RULES: &str = "3 to 60 lowercase letters, numbers and single dashes, e.g. my-game; new, guide and stats are kept for SLAPorSLOP's own pages. Each app's address is unique; its name needn't be. Addresses aren't held: someone else can take a free one before the store page is created.";
 
 /// An address made from what was given: lower case, other characters as dashes. None when that
 /// still isn't one (too short).
@@ -244,7 +244,11 @@ fn slug_like(input: &str) -> Option<String> {
         }
     }
     out.truncate(60);
-    let out = out.trim_end_matches('-').to_string();
+    let mut out = out.trim_end_matches('-').to_string();
+    // A word kept for SLAPorSLOP's own pages gets a number, like a taken address.
+    if catalog::RESERVED_SLUGS.contains(&out.as_str()) {
+        out.push_str("-2");
+    }
     catalog::validate_slug(&out).is_ok().then_some(out)
 }
 

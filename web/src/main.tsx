@@ -17,6 +17,7 @@ import { Notifications } from "./pages/Notifications";
 import { Profile } from "./pages/Profile";
 import { Releases } from "./pages/Releases";
 import { Manage } from "./pages/Manage";
+import { MakerStats } from "./pages/MakerStats";
 import { Download } from "./pages/Download";
 import { ChatPage } from "./pages/Chat";
 import { FriendsPage } from "./pages/Friends";
@@ -61,6 +62,8 @@ const router = createBrowserRouter([
       { path: "/publish", element: <Publish /> },
       { path: "/publish/guide", element: <Guide /> },
       { path: "/publish/new", element: <AppEditor /> },
+      // Before /publish/:slug: "stats" is the tab, never an app (catalog.rs RESERVED_SLUGS).
+      { path: "/publish/stats", element: <MakerStats /> },
       { path: "/publish/:slug", element: <AppEditor /> },
       { path: "/publish/:slug/releases", element: <Releases /> },
       { path: "/publish/:slug/manage", element: <Manage /> },

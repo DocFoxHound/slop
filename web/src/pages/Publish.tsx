@@ -44,12 +44,13 @@ import { CONTENT_LABEL, ONLINE_LABEL, playsInBrowser } from "../format";
 import { useDocumentTitle, useInterval, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { PasskeyNotice } from "../components/PasskeyNotice";
+import { PublishTabs } from "../components/PublishTabs";
 import { InviteNotice } from "../components/Invite";
 import { useTermsGate } from "../components/Terms";
 import { APP_LABELS, appFill, forgetHandoff, type AppFields, type Fill, type HandoffLink } from "../handoff";
 import type { FirstAddress } from "./Releases";
 
-function SignInFirst({ what, handoff = null }: { what: string; handoff?: HandoffLink | null }) {
+export function SignInFirst({ what, handoff = null }: { what: string; handoff?: HandoffLink | null }) {
   return (
     <div className="page narrow">
       <HandoffWaiting link={handoff} />
@@ -109,6 +110,7 @@ export function Publish() {
         </div>
       <PasskeyNotice />
       </div>
+      <PublishTabs on="apps" />
       <p className="muted">
         Each app goes through the same steps: a store page, a release (for a browser game, its play address), SLAPorSLOP's
         checks, then you publish it and put the app in the store. This is where each one is.
