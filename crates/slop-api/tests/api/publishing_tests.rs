@@ -4246,6 +4246,51 @@ async fn watch_state(
     .unwrap()
 }
 
+/// With its own token (GITHUB_WATCH_TOKEN), the watcher polls with that, not the shared one; a
+/// repository that token can't see (GitHub's 404 for a private one) is asked again with the
+/// shared token.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_watcher_polls_with_its_own_token_and_the_shared_one_for_what_it_cant_see(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |c| {
+        c.releases.github_token = Some("gh-shared".into());
+        c.releases.github_watch_token = Some("gh-watch".into());
+    })
+    .await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    watched_app(&app, maker_id, "game", "maker").await;
+    let path = "/repos/octo/game/releases/latest";
+    let release = latest(
+        "game",
+        OffsetDateTime::now_utc() - time::Duration::days(1),
+        true,
+    );
+    // Public: the watcher's own token sees it, and the shared token isn't used.
+    gh.set(path, 200, &[("etag", "\"e1\"")], release.to_string());
+    slop_api::updates::watch_once(&app.state).await.unwrap();
+    assert_eq!(gh.auths(path), ["Bearer gh-watch"]);
+
+    // Private: only the shared token sees it, so the watcher asks again with that.
+    watched_app(&app, maker_id, "secret", "maker").await;
+    let private = "/repos/octo/secret/releases/latest";
+    gh.set(private, 404, &[], r#"{"message":"Not Found"}"#);
+    gh.set(
+        &format!("{private} Bearer gh-shared"),
+        200,
+        &[("etag", "\"e2\"")],
+        latest(
+            "secret",
+            OffsetDateTime::now_utc() - time::Duration::days(1),
+            true,
+        )
+        .to_string(),
+    );
+    slop_api::updates::watch_once(&app.state).await.unwrap();
+    assert_eq!(gh.auths(private), ["Bearer gh-watch", "Bearer gh-shared"]);
+    // The public one isn't asked again with the shared token.
+    assert_eq!(gh.auths(path), ["Bearer gh-watch", "Bearer gh-watch"]);
+}
+
 /// A release whose files are still uploading is checked again every pass, then given up on
 /// after two hours; one that can't be made is recorded as the watch problem.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

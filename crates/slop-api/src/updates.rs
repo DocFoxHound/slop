@@ -624,19 +624,32 @@ async fn watch_app(
         .releases
         .github_api_base
         .join(&format!("repos/{repo_path}/releases/latest"))?;
-    let auth = github_app::auth_for(state, &url).await;
-    let mut req = state
-        .fetch_http
-        .get(url)
-        .header("accept", "application/vnd.github+json")
-        .header("user-agent", "slop-api");
-    if let Some((token, _)) = &auth {
-        req = req.bearer_auth(token);
+    let auth = github_app::watch_auth_for(state, &url).await;
+    let send = |token: Option<&str>| {
+        let mut req = state
+            .fetch_http
+            .get(url.clone())
+            .header("accept", "application/vnd.github+json")
+            .header("user-agent", "slop-api");
+        if let Some(token) = token {
+            req = req.bearer_auth(token);
+        }
+        if let Some(etag) = &app.etag {
+            req = req.header("if-none-match", etag);
+        }
+        req.send()
+    };
+    let mut res = send(auth.as_ref().map(|(t, _)| t.as_str())).await?;
+    // The watcher's own token can't see a private repository (GitHub answers 404): the shared
+    // token may.
+    let releases = &state.config.releases;
+    if res.status() == reqwest::StatusCode::NOT_FOUND
+        && let (Some(watch), Some(shared)) = (&releases.github_watch_token, &releases.github_token)
+        && auth.as_ref().is_some_and(|(t, _)| t == watch)
+        && shared != watch
+    {
+        res = send(Some(shared)).await?;
     }
-    if let Some(etag) = &app.etag {
-        req = req.header("if-none-match", etag);
-    }
-    let res = req.send().await?;
     // Only the shared token's allowance is the watcher's to protect; an installation has its own.
     let shared = auth.as_ref().is_none_or(|(_, shared)| *shared);
     let remaining = res

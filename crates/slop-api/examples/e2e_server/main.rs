@@ -442,6 +442,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
             slop_build_version: "v1".into(),
             github_oidc_issuer: fake.trim_end_matches('/').to_string(),
             github_token: None,
+            github_watch_token: None,
             github_app: None,
             github_statuses: false,
             require_repo_owner: false,

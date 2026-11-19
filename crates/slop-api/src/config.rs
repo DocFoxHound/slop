@@ -305,6 +305,10 @@ pub struct ReleaseConfig {
     pub github_oidc_issuer: String,
     /// Optional GitHub token, for higher API rate limits when checking commits and attestations.
     pub github_token: Option<String>,
+    /// Optional GitHub token for the release watcher alone (`GITHUB_WATCH_TOKEN`, updates.rs): its
+    /// polls then count against this token's allowance, not `github_token`'s. Where it can't see a
+    /// repository (a private one), the watcher asks again with `github_token`.
+    pub github_watch_token: Option<String>,
     /// SLAPorSLOP's GitHub App, when configured (github_app.rs).
     pub github_app: Option<GithubAppConfig>,
     /// Posts each release's state as a commit status on its GitHub commit, for apps whose maker
@@ -382,6 +386,10 @@ impl fmt::Debug for ReleaseConfig {
             .field(
                 "github_token",
                 &self.github_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "github_watch_token",
+                &self.github_watch_token.as_ref().map(|_| "<redacted>"),
             )
             .field(
                 "github_app",
@@ -631,6 +639,9 @@ impl Config {
                 "https://token.actions.githubusercontent.com",
             ),
             github_token: env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()),
+            github_watch_token: env::var("GITHUB_WATCH_TOKEN")
+                .ok()
+                .filter(|s| !s.is_empty()),
             github_app: GithubAppConfig::from_env()?,
             github_statuses: switched_on(&var_or("SLOP_GITHUB_STATUSES", "false")),
             require_repo_owner: var_or("SLOP_REQUIRE_REPO_OWNER", "true") != "false",

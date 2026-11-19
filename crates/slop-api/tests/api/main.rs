@@ -592,6 +592,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             slop_build_version: "v1".into(),
             github_oidc_issuer: github_base.trim_end_matches('/').to_string(),
             github_token: None,
+            github_watch_token: None,
             github_app: None,
             github_statuses: false,
             // Tests users have no GitHub accounts; repo_owner tests switch it on.

@@ -102,18 +102,46 @@ pub async fn installation_only(
 /// The token for a GitHub API request: the repository's installation token when the App is
 /// installed there, else SLAPorSLOP's shared token. The flag says whether it's the shared one.
 pub async fn auth_for(state: &AppState, url: &Url) -> Option<(String, bool)> {
-    let cfg = &state.config.releases;
-    if let (Some(app), Some(repo)) = (&cfg.github_app, repo_of_api_url(&cfg.github_api_base, url)) {
-        match installation_for(state, &repo).await {
-            Ok(Some(id)) => match installation_token(state, app, id, false).await {
-                Ok(token) => return Some((token.token, false)),
-                Err(err) => tracing::warn!(%repo, error = %err, "GitHub App token"),
-            },
-            Ok(None) => {}
-            Err(err) => tracing::warn!(%repo, error = %err, "GitHub App lookup"),
-        }
+    if let Some(token) = installation_auth(state, url).await {
+        return Some((token, false));
     }
-    cfg.github_token.clone().map(|t| (t, true))
+    state
+        .config
+        .releases
+        .github_token
+        .clone()
+        .map(|t| (t, true))
+}
+
+/// As `auth_for`, for the release watcher: its own token (`GITHUB_WATCH_TOKEN`) before the shared
+/// one, so its polls don't spend the shared allowance. The flag says whether it's one of those two.
+pub async fn watch_auth_for(state: &AppState, url: &Url) -> Option<(String, bool)> {
+    if let Some(token) = installation_auth(state, url).await {
+        return Some((token, false));
+    }
+    let cfg = &state.config.releases;
+    cfg.github_watch_token
+        .clone()
+        .or_else(|| cfg.github_token.clone())
+        .map(|t| (t, true))
+}
+
+/// The repository's installation token, when the App is installed there.
+async fn installation_auth(state: &AppState, url: &Url) -> Option<String> {
+    let cfg = &state.config.releases;
+    let (Some(app), Some(repo)) = (&cfg.github_app, repo_of_api_url(&cfg.github_api_base, url))
+    else {
+        return None;
+    };
+    match installation_for(state, &repo).await {
+        Ok(Some(id)) => match installation_token(state, app, id, false).await {
+            Ok(token) => return Some(token.token),
+            Err(err) => tracing::warn!(%repo, error = %err, "GitHub App token"),
+        },
+        Ok(None) => {}
+        Err(err) => tracing::warn!(%repo, error = %err, "GitHub App lookup"),
+    }
+    None
 }
 
 /// A JWT signed with the App's key proves a request is the App's (valid 10 minutes at most;
