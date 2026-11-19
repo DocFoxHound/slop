@@ -39,6 +39,7 @@ pub mod frozen;
 pub mod github_app;
 pub mod history;
 pub mod holds;
+pub mod hot;
 pub mod interested;
 pub mod invites;
 pub mod label;
@@ -301,6 +302,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(fixes::routes())
         .merge(offers::routes())
         .merge(label::routes())
+        .merge(hot::routes())
         .merge(bounties::routes())
         .merge(bug_reports::routes())
         .merge(demos::routes())

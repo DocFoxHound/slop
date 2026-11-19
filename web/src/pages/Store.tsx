@@ -4,6 +4,7 @@ import { Link } from "react-router";
 
 import { api } from "../api";
 import { FeaturedCarousel } from "../components/Featured";
+import { HotReel } from "../components/HotReel";
 import { StoreFrame } from "../components/StoreNav";
 import { CategoryIcon } from "../components/StoreIcons";
 import { ErrorState, SectionHeader, Shelf } from "../components/ui";
@@ -73,6 +74,8 @@ export function Store() {
   const notSlop = useLoad(() => api.apps({ sort: "not_slop_now", limit: 8 }).then((p) => p.apps), []);
   const freshSlop = useLoad(() => api.apps({ sort: "fresh_slop", limit: 4 }).then((p) => p.apps), []);
   const barelySeen = useLoad(() => api.apps({ sort: "barely_seen", limit: 4 }).then((p) => p.apps), []);
+  const hot = useLoad(() => api.hot(), []);
+  const releasingSoon = useLoad(() => api.apps({ sort: "releasing_soon", limit: 8 }).then((p) => p.apps), []);
   const glowUps = useLoad(
     () => api.glowUps().then((list) => list.map((a) => ({ ...a, reason: `${a.before}% → ${a.after}% Slaps` }))),
     [],
@@ -120,6 +123,9 @@ export function Store() {
 
       {featured.data && <FeaturedCarousel slides={featured.data} />}
 
+      {/* Hidden while there's nothing hot (hot.rs has an activity floor). */}
+      {show("hot") && hot.data && hot.data.length > 0 && <HotReel apps={hot.data} />}
+
       {me && <ForYouShelf />}
 
       {shelves.data?.shelves.map((s) => (
@@ -146,6 +152,17 @@ export function Store() {
         <Shelf apps={popular.data} empty="Nothing to play yet." />
       )}
       </>
+      )}
+
+      {show("releasing_soon") && releasingSoon.data && releasingSoon.data.length > 0 && (
+        <>
+          <SectionHeader title="Releasing soon" sub="Release dates their makers gave, in the next 60 days, soonest first">
+            <Link to="/upcoming?sort=release_date" className="sub">
+              See all →
+            </Link>
+          </SectionHeader>
+          <Shelf apps={releasingSoon.data} empty="" />
+        </>
       )}
 
       {show("upcoming") && (

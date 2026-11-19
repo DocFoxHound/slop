@@ -6,7 +6,7 @@ import { Link } from "react-router";
 
 import type { AppSummary } from "../api";
 import { ApiError } from "../api";
-import { ageLabel, artFor, deadlineText } from "../format";
+import { ageLabel, artFor, deadlineText, releaseDateText } from "../format";
 import { openExternal } from "../platform";
 import { AppIcon, appIconProps } from "./AppIcon";
 import { InlineIcon, StoreIcon } from "./StoreIcons";
@@ -44,6 +44,16 @@ export function StageBadge({ app }: { app: Pick<AppSummary, "stage" | "is_dead">
   return null;
 }
 
+/** "Releases Dec 5" beside a Coming soon or Beta app's stage, when its maker gave a date. */
+export function ReleaseDate({
+  app,
+}: {
+  app: Pick<AppSummary, "stage" | "release_date" | "release_date_precision" | "release_date_passed">;
+}) {
+  const text = app.stage === "released" ? null : releaseDateText(app);
+  return text ? <span className="release-date">{text}</span> : null;
+}
+
 export function StatusBadge({ app }: { app: Pick<AppSummary, "status"> }) {
   if (app.status === "draft") return <span className="badge neutral">DRAFT</span>;
   if (app.status === "delisted") return <span className="badge bad">DELISTED</span>;
@@ -53,6 +63,7 @@ export function StatusBadge({ app }: { app: Pick<AppSummary, "status"> }) {
 /** A store tile. `reason` says why it's recommended ("Because you like …"). */
 export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
   const deadline = deadlineText(app);
+  const release = app.stage === "released" ? null : releaseDateText(app);
   const age = ageLabel(app.min_age);
   return (
     <Link className="tile" to={`/app/${app.slug}`}>
@@ -98,6 +109,7 @@ export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
             <InlineIcon name="star-on" /> {app.interested.toLocaleString()} interested
           </div>
         )}
+        {release && <div className="tile-stat release-date">{release}</div>}
         {deadline && !app.is_dead && <div className="tile-stat">{deadline}</div>}
         <div className="tile-foot">
           <div className="chips">

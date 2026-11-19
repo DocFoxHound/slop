@@ -887,6 +887,8 @@ fn store_page_fields() -> Value {
         "mods_folder": { "type": ["object", "null"], "description": "Where it reads mods from: {base: game|saves, path, layout: folder|flat}; null if it reads SLOP_MODS or has no mods. Not for browser games" },
         "bug_reports": { "type": "boolean", "description": "Take bug reports from players on SLAPorSLOP (on by default)" },
         "accessibility": { "type": "array", "items": { "type": "string" }, "description": "Accessibility features it really has (players confirm or dispute them): remap_controls, colorblind, subtitles, text_size, one_handed, difficulty, no_flashing, screen_reader, controller. Check the code before claiming one" },
+        "release_date": { "type": ["string", "null"], "description": "Coming soon or Beta only: when your maker expects to release it, YYYY-MM-DD (or YYYY-MM with release_date_precision month). From today to three years ahead; null clears it. Only set a date your maker gave you. Players stop seeing it once it has passed (get_store_page then says release_date_passed), and moving to Released clears it" },
+        "release_date_precision": s("day (an exact day, the default) or month (only the month); send it with release_date"),
     })
 }
 

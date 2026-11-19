@@ -14,7 +14,7 @@ import { BugReports } from "../components/BugReports";
 import { usePlayStopped } from "../components/AppUpdates";
 import { Reviews } from "../components/Reviews";
 import { AppIcon, appIconProps } from "../components/AppIcon";
-import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
+import { Art, ErrorState, ExternalLink, Loading, ReleaseDate, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
 import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LABEL, playsInBrowser, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad, useMediaQuery } from "../hooks";
 import { renderMarkdown } from "../markdown";
@@ -278,6 +278,7 @@ function AppView({ app }: { app: AppDetail }) {
                 <AppIcon {...appIconProps(app)} size={48} className="app-head-icon" />
                 <h1>{app.title}</h1>
                 <StageBadge app={app} />
+                <ReleaseDate app={app} />
                 {age && <span className="badge neutral" title={`Rated ${age}`}>{age}</span>}
                 {inBrowser && (
                   <span className="badge official">

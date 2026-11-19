@@ -78,6 +78,7 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
     trending: "Most played this week",
     popular: "Popular this month",
     anticipated: "Most anticipated",
+    release_date: "Release date (soonest first)",
     rating: "Most Slaps",
     not_slop_now: "Most Slaps right now",
     fresh_slop: "Fresh slop (most Slop votes this month)",
@@ -245,13 +246,18 @@ export function Upcoming() {
             role="tab"
             aria-selected={stage === s}
             className={stage === s ? "on" : ""}
-            onClick={() => setParams({ stage: s }, { replace: true })}
+            onClick={() => {
+              // Switching tabs keeps the sort.
+              const p = new URLSearchParams(params);
+              p.set("stage", s);
+              setParams(p, { replace: true });
+            }}
           >
             {s === "beta" ? "Beta" : "Coming soon"}
           </button>
         ))}
       </div>
-      <AppGrid base={{ stage }} sorts={["anticipated", "recent", "title"]} />
+      <AppGrid base={{ stage }} sorts={["anticipated", "release_date", "recent", "title"]} />
     </StoreFrame>
   );
 }

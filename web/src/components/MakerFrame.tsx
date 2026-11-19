@@ -7,7 +7,7 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { api, ApiError, type AppDetail, type AppStage, type ManageOverview } from "../api";
-import { daysUntil, formatDate, STAGE_LABEL } from "../format";
+import { daysUntil, formatDate, releaseDateText, STAGE_LABEL } from "../format";
 import { useLoad } from "../hooks";
 import { AppIcon, appIconProps } from "./AppIcon";
 import { InviteNotice } from "./Invite";
@@ -47,7 +47,7 @@ export function moveEffects(to: AppStage, interested: number): string[] {
           told,
           "It has a year to be released.",
         ]
-      : ["Its page shows it as released: no Beta label, and new votes count as released ones.", told];
+      : ["Its page shows it as released: no Beta label or release date, and new votes count as released ones.", told];
   return [...lines, "Only forward: to move it back, you'd ask SLAPorSLOP."];
 }
 
@@ -57,6 +57,21 @@ export function advanceHint(next: AppStage[], browser: boolean): { text: string;
   return browser
     ? { text: `${moves} once you've published a play address.`, link: "Add the play address" }
     : { text: `${moves} once you've published a release.`, link: "Submit a release" };
+}
+
+/**
+ * What the stage bar says about the release date its maker gave: what players see, or that it has
+ * passed and players no longer see it. Null without one, or once released. Exported for tests.
+ */
+export function releaseDateNote(
+  app: Pick<AppDetail, "stage" | "release_date" | "release_date_precision" | "release_date_passed">,
+  now: number = Date.now(),
+): { text: string; passed: boolean } | null {
+  if (app.stage === "released" || !app.release_date) return null;
+  if (app.release_date_passed) {
+    return { text: "The release date you gave has passed, so players no longer see it: give a new one, or clear it.", passed: true };
+  }
+  return { text: `Players see “${releaseDateText(app, now)}”.`, passed: false };
 }
 
 /** Whether the maker can put a draft in the store from here: a Coming soon page, or once a release
@@ -170,7 +185,10 @@ export function StageBar({
   onReleasesPage,
   onMoved,
 }: {
-  app: Pick<AppDetail, "slug" | "stage" | "stage_entered_at" | "stage_deadline" | "interested"> & { plays_in_browser?: boolean };
+  app: Pick<
+    AppDetail,
+    "slug" | "stage" | "stage_entered_at" | "stage_deadline" | "interested" | "release_date" | "release_date_precision" | "release_date_passed"
+  > & { plays_in_browser?: boolean };
   /** Undefined while it's being loaded. */
   canAdvance: boolean | undefined;
   onReleasesPage?: boolean;
@@ -184,6 +202,7 @@ export function StageBar({
   const due = app.stage_deadline;
   const late = due ? daysUntil(due) < 0 : false;
   const hint = advanceHint(next, Boolean(app.plays_in_browser));
+  const releaseNote = releaseDateNote(app);
 
   const move = async (to: AppStage) => {
     setBusy(true);
@@ -228,6 +247,11 @@ export function StageBar({
             {late
               ? `Missed its deadline: out of the store until it reaches ${app.stage === "coming_soon" ? "Beta" : "Released"}.`
               : `${app.stage === "coming_soon" ? "Must reach Beta" : "Must be released"} by ${formatDate(due)}.`}
+          </p>
+        )}
+        {releaseNote && (
+          <p className={`small ${releaseNote.passed ? "bad" : "muted"}`} role={releaseNote.passed ? "alert" : undefined}>
+            {releaseNote.text} <Link to={`/publish/${app.slug}`}>{releaseNote.passed ? "Update the release date" : "Change it"}</Link>
           </p>
         )}
         {next.length === 0 ? (

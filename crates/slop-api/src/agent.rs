@@ -1021,7 +1021,7 @@ const TOOLS: &[Tool] = &[
         description: "Hide or show one of the automatic front-page shelves (store_shelves lists their keys).",
         method: Method::POST,
         path: "/v1/admin/front-shelves/{key}",
-        properties: || json!({ "key": s("popular, upcoming, categories, not_slop, barely_seen, glow_ups, community, fresh or fresh_slop"), "hidden": { "type": "boolean", "description": "true hides it" } }),
+        properties: || json!({ "key": s("hot, popular, releasing_soon, upcoming, categories, not_slop, barely_seen, glow_ups, community, fresh or fresh_slop"), "hidden": { "type": "boolean", "description": "true hides it" } }),
         required: &["key", "hidden"],
     },
     // Legal documents

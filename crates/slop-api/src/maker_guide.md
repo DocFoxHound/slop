@@ -49,6 +49,14 @@ and links, in plain words.
 5. Before the first release, `check_source`: SLAPorSLOP's source check on what's pushed, without submitting anything. Fix the `must` items it lists (a missing licence file, purchases, code loaded from outside SLAPorSLOP, going online without the store page saying so), push, and check the new commit.
 6. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs, scans and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`; on GitHub, also commit the Slop Check workflow `slop_build_setup` gives (`check_workflow`, at `.github/workflows/slop-check.yml`): when a release is published it runs SLAPorSLOP's malware scan, source check and Microsoft Defender on the repository's own GitHub Actions, and the release isn't left waiting for SLAPorSLOP's servers. Committing it is all it takes; nobody needs to click anything. A game that plays on the maker's own website works differently: see the next section.
 
+**Release date** (Coming soon and Beta only, optional): when your maker expects to release it,
+`release_date` (`YYYY-MM-DD`) with `release_date_precision` `day` (the default) or `month` (only
+the month counts) in `create_store_page` or `update_store_page`; `null` clears it. Only a date your
+maker gave you: players see it on tiles, the store page and the front page's Releasing soon shelf
+(the 60 days before). From today to three years ahead. Once it has passed, players stop seeing it
+and `get_store_page` says `release_date_passed: true`: ask your maker for a new date, or clear it.
+Moving to Released clears it.
+
 **Where the repository lives decides the setup** (`git remote get-url origin`; `slop_build_setup`
 answers `host` and `checks_run_on`):
 

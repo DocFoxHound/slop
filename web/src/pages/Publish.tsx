@@ -37,6 +37,7 @@ import { TagPicker } from "../components/TagPicker";
 import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
 import { MakerFrame } from "../components/MakerFrame";
+import { ReleaseDateField, releaseDateChanges, releaseDateValue } from "../components/ReleaseDateField";
 import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { CONTENT_LABEL, ONLINE_LABEL, playsInBrowser } from "../format";
@@ -317,7 +318,16 @@ function EditorForm({
 }) {
   const navigate = useNavigate();
   // A play address from the link isn't part of the store page: it's sent as the first release.
-  const { play_address: filledAddress, ...filled } = fill?.values ?? {};
+  // The release date is its own control (ReleaseDateField), sent only when it changes.
+  const {
+    play_address: filledAddress,
+    release_date: filledDate,
+    release_date_precision: filledPrecision,
+    ...filled
+  } = fill?.values ?? {};
+  const [releaseDate, setReleaseDate] = useState(
+    releaseDateValue(existing ?? { release_date: filledDate ?? null, release_date_precision: filledPrecision ?? null }),
+  );
   const [playAddress, setPlayAddress] = useState(filledAddress ?? "");
   const [form, setForm] = useState<NewApp>(
     existing
@@ -420,6 +430,7 @@ function EditorForm({
     "platforms",
     "tags",
     ...(existing ? [] : ["kind", "stage"]),
+    ...(form.stage === "released" ? [] : ["release_date", "release_date_precision"]),
     ...(isMod ? [] : ["mods_folder"]),
     ...(needsToken ? ["repo_token"] : []),
   ]);
@@ -449,12 +460,18 @@ function EditorForm({
           accessibility: form.accessibility,
           bug_reports: form.bug_reports,
           ...(isMod || inBrowser ? {} : { mods_folder: form.mods_folder ?? null }),
+          ...releaseDateChanges(releaseDate, existing),
         });
         navigate(`/app/${saved.slug}`);
         return;
       }
       const saved = await terms.guard(() => {
-        const app = { ...form, online_hosts: hosts(), ...(inBrowser ? { sandbox_ready: false, mods_folder: null } : {}) };
+        const app = {
+          ...form,
+          online_hosts: hosts(),
+          ...(inBrowser ? { sandbox_ready: false, mods_folder: null } : {}),
+          ...releaseDateChanges(releaseDate, { stage: form.stage, release_date: null, release_date_precision: null }),
+        };
         return api.createApp(needsToken && token.token.trim() ? { ...app, repo_token: token } : app);
       });
       const address = playAddress.trim();
@@ -656,6 +673,15 @@ function EditorForm({
                     "You move it on yourself later, from the stage bar at the top of its pages.",
                   )}
                 </div>
+              )}
+
+              {form.stage !== "released" && (
+                <ReleaseDateField
+                  value={releaseDate}
+                  onChange={setReleaseDate}
+                  passed={Boolean(existing?.release_date_passed) && releaseDate.date === existing?.release_date}
+                  error={error?.field === "release_date" || error?.field === "release_date_precision" ? error.message : undefined}
+                />
               )}
             </section>
 

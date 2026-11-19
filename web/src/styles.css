@@ -1287,6 +1287,15 @@ label.check.news-switch input { flex: none; width: 18px; height: 18px; margin: 0
 .featured-nav .dot { width: 24px; height: 24px; border: 0; background: transparent; padding: 0; display: grid; place-items: center; cursor: pointer; }
 .featured-nav .dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .featured-nav .dot.on::before { background: var(--slime); }
+/* The Hot reel (HotReel.tsx): Featured's layout, with its title and Pause above. */
+.hot-head { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; padding: 10px 20px; border-bottom: 1px solid var(--line); }
+.hot-head h2 { margin: 0; font-size: 18px; }
+.hot-pause { margin-left: auto; }
+.featured-text h3 { margin: 0; font-size: 22px; }
+.featured-text h3 a { color: inherit; }
+/* A Coming soon or Beta app's release date ("Releases Dec 5"), beside its stage. */
+.release-date { font-size: 12px; font-weight: 600; color: var(--warn); }
+.release-date-field input[type="date"] { max-width: 220px; }
 .tile-stat.live { color: var(--good); }
 .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--good); margin-right: 2px; }
 .label-chips { display: flex; flex-wrap: wrap; gap: 6px; }

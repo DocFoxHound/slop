@@ -147,8 +147,22 @@ export interface AppSummary {
   plays_in_browser: boolean;
   is_dead: boolean;
   stage_deadline: string | null;
+  /**
+   * Coming soon or Beta: when its maker expects to release it, YYYY-MM-DD (a month: its first
+   * day). Null once it has passed, except in the maker's own views (`release_date_passed`).
+   */
+  release_date?: string | null;
+  /** "day" (an exact day) or "month" (only the month), with `release_date`. */
+  release_date_precision?: ReleasePrecision | null;
+  /** The maker's own views only: the release date has passed; players no longer see it. */
+  release_date_passed?: boolean;
   updated_at: string;
 }
+
+export type ReleasePrecision = "day" | "month";
+
+/** An app on the front page's Hot reel (crates/slop-api/src/hot.rs): this week's numbers. */
+export type HotApp = AppSummary & { adds_week: number; slaps_week: number; players_week: number };
 
 /** Donations (crates/slop-api/src/donations.rs). Amounts are in minor units (cents). */
 export interface DonationQuote {
@@ -2874,6 +2888,10 @@ export interface NewApp {
   accessibility?: string[];
   /** Takes bug reports from players. */
   bug_reports?: boolean;
+  /** Coming soon or Beta: when it's expected to release (YYYY-MM-DD); null clears it. */
+  release_date?: string | null;
+  /** Sent with `release_date`. */
+  release_date_precision?: ReleasePrecision;
 }
 
 /** Where a game reads mods from: SLAPorSLOP keeps only approved mods there (DESIGN §9). */
@@ -2922,7 +2940,9 @@ export interface AppQuery {
     | "reviewed"
     | "not_slop_now"
     | "fresh_slop"
-    | "barely_seen";
+    | "barely_seen"
+    | "releasing_soon"
+    | "release_date";
   made_with_people?: boolean;
   /** Has every one of these accessibility features (comma-separated). */
   accessibility?: string;
@@ -3264,6 +3284,7 @@ export const api = {
   shelves: () => request<{ shelves: StoreShelf[]; hidden: string[] }>("GET", "/v1/shelves"),
   shelf: (slug: string) => request<StoreShelf>("GET", `/v1/shelves/staff/${encodeURIComponent(slug)}`),
   glowUps: () => request<Array<AppSummary & { before: number; after: number }>>("GET", "/v1/shelves/glow-ups"),
+  hot: () => request<HotApp[]>("GET", "/v1/shelves/hot"),
   app: (slug: string) =>
     request<AppDetail>("GET", `/v1/apps/${encodeURIComponent(slug)}`),
   createApp: (app: NewApp) => request<AppDetail>("POST", "/v1/apps", app),

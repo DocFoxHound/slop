@@ -233,9 +233,50 @@ pub(crate) fn push_summary_columns_with(
     .push_bind(rules.coming_soon_days)
     .push(") when 'beta' then a.stage_entered_at + make_interval(days => ")
     .push_bind(rules.beta_days)
-    .push(") end as stage_deadline")
+    .push(") end as stage_deadline, ")
+    .push(format!(
+        "case when {RELEASE_DATE_SHOWN} then to_char(a.release_date, 'YYYY-MM-DD') end as release_date,
+         case when {RELEASE_DATE_SHOWN} then a.release_date_precision end as release_date_precision"
+    ))
     .push(extra)
     .push(" from apps a");
+}
+
+/// Today in UTC: release dates are calendar days, the same for everyone.
+pub(crate) const TODAY_UTC: &str = "(now() at time zone 'utc')::date";
+
+/// SQL: app `a` has a release date players see: one that hasn't passed (a day once it's over, a
+/// month once it is: the last day it covers is today or later). Only Coming soon and Beta apps
+/// have one (migration 0104).
+pub(crate) const RELEASE_DATE_SHOWN: &str = "(a.release_date is not null
+     and (case a.release_date_precision
+          when 'month' then (a.release_date + interval '1 month' - interval '1 day')::date
+          else a.release_date end) >= (now() at time zone 'utc')::date)";
+
+/// For the maker's own views (their apps, their store page): the release date they gave even
+/// once it has passed, with `release_date_passed` so they're asked to update it. Players don't
+/// see a date that has passed.
+pub(crate) async fn with_own_release_dates(
+    db: &sqlx::PgPool,
+    apps: &mut [AppSummary],
+) -> sqlx::Result<()> {
+    let slugs: Vec<&str> = apps.iter().map(|a| a.slug.as_str()).collect();
+    let rows: Vec<(String, String, String, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select a.slug, to_char(a.release_date, 'YYYY-MM-DD'), a.release_date_precision,
+                not {RELEASE_DATE_SHOWN}
+         from apps a where a.slug = any($1) and a.release_date is not null"
+    )))
+    .bind(&slugs)
+    .fetch_all(db)
+    .await?;
+    for (slug, date, precision, passed) in rows {
+        if let Some(app) = apps.iter_mut().find(|a| a.slug == slug) {
+            app.release_date = Some(date);
+            app.release_date_precision = Some(precision);
+            app.release_date_passed = Some(passed);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Serialize, sqlx::FromRow)]
@@ -279,6 +320,16 @@ pub struct AppSummary {
     /// When a Coming soon or Beta app must reach its next stage. `None` once released.
     #[serde(with = "time::serde::rfc3339::option")]
     stage_deadline: Option<OffsetDateTime>,
+    /// Coming soon or Beta: when its maker expects to release it, `YYYY-MM-DD` (a month: its
+    /// first day). Null once it has passed, except in the maker's own views.
+    pub release_date: Option<String>,
+    /// `day` (an exact day) or `month` (only the month), with `release_date`.
+    pub release_date_precision: Option<String>,
+    /// The maker's own views only (`with_own_release_dates`): the release date has passed, so
+    /// players no longer see it and the maker should update it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(skip)]
+    pub release_date_passed: Option<bool>,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
 }
@@ -312,6 +363,12 @@ enum Sort {
     /// Released in the last 60 days and in few libraries so far, in an order that changes every
     /// day, so each new app gets seen ("New and barely seen", DESIGN §5).
     BarelySeen,
+    /// Coming soon and Beta apps whose release date falls in the next 60 days (a month that
+    /// overlaps them counts), by the first day each may come (a month: its 1st); never dead
+    /// projects ("Releasing soon", DESIGN §5).
+    ReleasingSoon,
+    /// Apps with a release date players see first, soonest first, then the rest as `Recent`.
+    ReleaseDate,
 }
 
 #[derive(Deserialize)]
@@ -351,6 +408,9 @@ const MAX_PAGE: i64 = 50;
 
 /// "Barely seen": in fewer libraries than this.
 const BARELY_SEEN_LIBRARIES: i64 = 25;
+
+/// "Releasing soon": a release date within this many days from today.
+pub(crate) const RELEASING_SOON_DAYS: i32 = 60;
 
 /// Most players at once over the last 7 days (Slop Pulse). `a` is `apps`.
 pub(crate) const PLAYERS_THIS_WEEK: &str = "(select coalesce(max(p.players), 0) from pulse_counts p
@@ -571,6 +631,27 @@ async fn list_apps(
             )
             .push_bind(BARELY_SEEN_LIBRARIES)
             .push(" order by md5(a.id::text || current_date::text), a.slug");
+        }
+        (Sort::ReleasingSoon, _) => {
+            // By the first day it may come: a month by its 1st, before an exact day on the same.
+            qb.push(format!(
+                " and a.stage <> 'released' and {RELEASE_DATE_SHOWN}
+                  and a.release_date <= {TODAY_UTC} + "
+            ))
+            .push_bind(RELEASING_SOON_DAYS)
+            .push(
+                " and not (a.last_commit_at is not null and a.last_commit_at < now() - make_interval(days => ",
+            )
+            .push_bind(rules.dead_after_days)
+            .push(
+                ")) order by a.release_date, a.release_date_precision = 'day', lower(a.title), a.slug",
+            );
+        }
+        (Sort::ReleaseDate, _) => {
+            qb.push(format!(
+                " order by case when {RELEASE_DATE_SHOWN} then a.release_date end nulls last,
+                           a.release_date_precision = 'day', a.updated_at desc, a.slug"
+            ));
         }
         (Sort::Trending, _) => {
             qb.push(" order by ")
@@ -1075,7 +1156,10 @@ async fn load_detail(
     let mut qb = QueryBuilder::new("");
     push_summary_columns(&mut qb, &state.config);
     qb.push(" where a.id = ").push_bind(extra.id);
-    let summary: AppSummary = qb.build_query_as().fetch_one(&state.db).await?;
+    let mut summary: AppSummary = qb.build_query_as().fetch_one(&state.db).await?;
+    if is_mine {
+        with_own_release_dates(&state.db, std::slice::from_mut(&mut summary)).await?;
+    }
     let tag_details = sqlx::query_as(
         "select t.slug, t.name from app_tags at join tags t on t.id = at.tag_id where at.app_id = $1 order by t.slug",
     )
@@ -1289,7 +1373,9 @@ async fn my_apps(
             .push(")");
     }
     qb.push(" order by a.updated_at desc");
-    Ok(Json(qb.build_query_as().fetch_all(&state.db).await?))
+    let mut apps: Vec<AppSummary> = qb.build_query_as().fetch_all(&state.db).await?;
+    with_own_release_dates(&state.db, &mut apps).await?;
+    Ok(Json(apps))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1492,6 +1578,12 @@ struct NewApp {
     /// Takes bug reports from players (bug_reports.rs); on unless turned off.
     #[serde(default = "yes")]
     bug_reports: bool,
+    /// Coming soon or Beta: when the maker expects to release it (`parse_release_date`).
+    #[serde(default)]
+    release_date: Option<String>,
+    /// `day` (the default) or `month`.
+    #[serde(default)]
+    release_date_precision: Option<String>,
 }
 
 fn yes() -> bool {
@@ -1521,6 +1613,12 @@ struct AppChanges {
     accessibility: Option<Vec<String>>,
     /// Takes bug reports from players (bug_reports.rs).
     bug_reports: Option<bool>,
+    /// Coming soon or Beta: when the maker expects to release it (`parse_release_date`).
+    /// `null` clears it.
+    #[serde(default, deserialize_with = "present")]
+    release_date: Option<Option<String>>,
+    /// `day` (the default) or `month`, sent with `release_date`.
+    release_date_precision: Option<String>,
 }
 
 /// A field that was sent, even as `null`: `Some(None)`.
@@ -1640,6 +1738,80 @@ pub(crate) fn validate_online_hosts(hosts: &[String]) -> ApiResult<Vec<String>> 
 }
 
 const MAX_TAGS: usize = 10;
+
+/// How far ahead a release date may be: about three years.
+const RELEASE_DATE_MAX_DAYS: i64 = 3 * 365 + 1;
+
+/// A release date a maker gives (DESIGN §8), and its precision: `YYYY-MM-DD` for an exact day
+/// (the default), or `month` for only the month, kept as its first day (`YYYY-MM` is fine too).
+/// Not in the past (a month: not over yet), in UTC, and at most about three years ahead. Only
+/// for Coming soon and Beta apps: `stage` is the app's.
+pub(crate) fn parse_release_date(
+    text: &str,
+    precision: Option<&str>,
+    stage: AppStage,
+    today: time::Date,
+) -> ApiResult<(time::Date, &'static str)> {
+    if stage == AppStage::Released {
+        return Err(ApiError::invalid(
+            "release_date",
+            "only Coming soon and Beta apps have a release date: a released app is out already",
+        ));
+    }
+    let month = match precision.map(str::trim) {
+        None | Some("day") => false,
+        Some("month") => true,
+        Some(_) => {
+            return Err(ApiError::invalid(
+                "release_date_precision",
+                "day (an exact day) or month (only the month)",
+            ));
+        }
+    };
+    let text = text.trim();
+    let full = if month && text.len() == 7 {
+        format!("{text}-01")
+    } else {
+        text.to_string()
+    };
+    let mut date = time::Date::parse(&full, &time::format_description::well_known::Iso8601::DATE)
+        .map_err(|_| {
+        ApiError::invalid(
+            "release_date",
+            if month {
+                "a month, YYYY-MM"
+            } else {
+                "a date, YYYY-MM-DD"
+            },
+        )
+    })?;
+    if month {
+        date = date.replace_day(1).expect("every month has a 1st");
+        if date < today.replace_day(1).expect("every month has a 1st") {
+            return Err(ApiError::invalid(
+                "release_date",
+                "that month is over: give this month or a later one",
+            ));
+        }
+    } else if date < today {
+        return Err(ApiError::invalid(
+            "release_date",
+            "that day has passed: give today or a later day",
+        ));
+    }
+    if date > today + time::Duration::days(RELEASE_DATE_MAX_DAYS) {
+        return Err(ApiError::invalid(
+            "release_date",
+            "at most three years ahead",
+        ));
+    }
+    Ok((date, if month { "month" } else { "day" }))
+}
+
+/// `release_date_precision` alone changes nothing: it goes with a date.
+fn precision_without_date() -> ApiError {
+    ApiError::invalid("release_date_precision", "send release_date with it")
+}
 
 #[derive(Serialize)]
 struct AddressCheck {
@@ -1999,6 +2171,16 @@ async fn create_app(
     let online = validate_online(&req.online)?;
     let online_hosts = validate_online_hosts(&req.online_hosts)?;
     let mods_folder = validate_mods_folder(req.mods_folder.clone())?;
+    let release_date = match &req.release_date {
+        Some(text) => Some(parse_release_date(
+            text,
+            req.release_date_precision.as_deref(),
+            req.stage,
+            OffsetDateTime::now_utc().date(),
+        )?),
+        None if req.release_date_precision.is_some() => return Err(precision_without_date()),
+        None => None,
+    };
     let in_browser = platforms == ["browser"];
     if in_browser {
         browser_game_rules(
@@ -2029,8 +2211,8 @@ async fn create_app(
     let inserted = sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
                            platforms, visibility, content_labels, online, online_hosts, sandbox_ready, mods_folder,
-                           accessibility, bug_reports, watch_releases)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
+                           accessibility, bug_reports, watch_releases, release_date, release_date_precision)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -2053,6 +2235,8 @@ async fn create_app(
     .bind(crate::label::validate_accessibility(&req.accessibility)?)
     .bind(req.bug_reports)
     .bind(!in_browser)
+    .bind(release_date.map(|(d, _)| d))
+    .bind(release_date.map(|(_, p)| p))
     .execute(&mut *tx)
     .await;
     match inserted {
@@ -2092,6 +2276,7 @@ async fn update_app(
         maker_id: Uuid,
         repo_url: String,
         kind: AppKind,
+        stage: AppStage,
         private: bool,
         in_browser: bool,
         /// A community build or mod (DESIGN §9).
@@ -2099,7 +2284,7 @@ async fn update_app(
     }
     let mut tx = state.db.begin().await?;
     let current: Option<Current> = sqlx::query_as(
-        "select id, maker_id, repo_url, kind, visibility = 'private' as private,
+        "select id, maker_id, repo_url, kind, stage, visibility = 'private' as private,
                 'browser' = any(platforms) as in_browser, parent_app_id is not null as is_branch
          from apps where slug = $1 for update",
     )
@@ -2315,6 +2500,27 @@ async fn update_app(
         qb.push(", content_labels = ")
             .push_bind(validate_content_labels(labels)?);
     }
+    match &changes.release_date {
+        Some(Some(text)) => {
+            let (date, precision) = parse_release_date(
+                text,
+                changes.release_date_precision.as_deref(),
+                current.stage,
+                OffsetDateTime::now_utc().date(),
+            )?;
+            qb.push(", release_date = ")
+                .push_bind(date)
+                .push(", release_date_precision = ")
+                .push_bind(precision);
+        }
+        Some(None) => {
+            qb.push(", release_date = null, release_date_precision = null");
+        }
+        None if changes.release_date_precision.is_some() => {
+            return Err(precision_without_date());
+        }
+        None => {}
+    }
     qb.push(" where id = ").push_bind(app_id);
     qb.build().execute(&mut *tx).await?;
     if repo_moved {
@@ -2451,6 +2657,52 @@ mod tests {
         ] {
             assert!(validate_repo_url(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn release_dates() {
+        let today = time::macros::date!(2026 - 11 - 19);
+        let parse = |text: &str, precision: Option<&str>| {
+            parse_release_date(text, precision, AppStage::Beta, today)
+                .map(|(d, p)| (d.to_string(), p))
+                .map_err(|e| match e {
+                    ApiError::Invalid { field, .. } => field,
+                    other => panic!("{other}"),
+                })
+        };
+        assert_eq!(parse("2026-11-19", None), Ok(("2026-11-19".into(), "day")));
+        assert_eq!(
+            parse(" 2026-12-05 ", Some("day")),
+            Ok(("2026-12-05".into(), "day"))
+        );
+        // A month is its 1st; this month is fine though its 1st has gone.
+        assert_eq!(
+            parse("2026-11", Some("month")),
+            Ok(("2026-11-01".into(), "month"))
+        );
+        assert_eq!(
+            parse("2027-02-17", Some("month")),
+            Ok(("2027-02-01".into(), "month"))
+        );
+        // About three years ahead at most.
+        assert_eq!(parse("2029-11-19", None), Ok(("2029-11-19".into(), "day")));
+        assert_eq!(parse("2029-11-20", None), Err("release_date"));
+        for bad in ["2026-11-18", "2026-11", "soon", "2026-02-30", ""] {
+            assert_eq!(parse(bad, None), Err("release_date"), "{bad}");
+        }
+        assert_eq!(parse("2026-10", Some("month")), Err("release_date"));
+        assert_eq!(
+            parse("2026-12-05", Some("week")),
+            Err("release_date_precision")
+        );
+        assert!(matches!(
+            parse_release_date("2026-12-05", None, AppStage::Released, today),
+            Err(ApiError::Invalid {
+                field: "release_date",
+                ..
+            })
+        ));
+        assert!(parse_release_date("2026-12-05", None, AppStage::ComingSoon, today).is_ok());
     }
 
     #[test]
