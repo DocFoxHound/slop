@@ -12,6 +12,9 @@
 // On a community build or mod, a one-off donation is shared: the original's maker gets 30% as its
 // own donation, paid first, then the branch's author gets the rest. Two payments, because SLAPorSLOP
 // never splits one; after Stripe the donor comes back here (?shared=…&rest=…) for the second.
+//
+// A link can open the form with an amount filled in: ?donate=25.00 (the owner paying an App of the
+// Month award, awards.rs). The donor still sees the total and confirms it like any donation.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -44,7 +47,9 @@ export function DonateButton({ slug, title, isMine = false }: { slug: string; ti
   const [params] = useSearchParams();
   const info = useLoad(() => api.donations.info(slug), [slug, me?.id]);
   // Back from Stripe (?donated=… or ?shared=…): the form opens to say thanks, or for step 2.
-  const back = Boolean(params.get("donated") || params.get("shared"));
+  // A link with ?donate=… opens it with that amount filled in.
+  const prefilled = params.get("donate") !== null;
+  const back = Boolean(params.get("donated") || params.get("shared")) || prefilled;
   const [open, setOpen] = useState(back);
   // The form, rather than what the viewer already gave.
   const [form, setForm] = useState(back);
@@ -65,6 +70,14 @@ export function DonateButton({ slug, title, isMine = false }: { slug: string; ti
     if (focusNext.current) target.current?.focus();
     focusNext.current = null;
   }, [open, form, confirming, cancelled]);
+  // Opened by a ?donate= link: bring the form into view once it has loaded.
+  const showPrefilled = useRef(prefilled);
+  useEffect(() => {
+    if (!showPrefilled.current || !panel.current) return;
+    showPrefilled.current = false;
+    panel.current.focus();
+    panel.current.scrollIntoView?.({ block: "center" });
+  }, [info.data]);
 
   const d = info.data;
   // Not a public app (a local build, say): nothing to donate to.
@@ -314,7 +327,11 @@ function DonateForm({
   const [params, setParams] = useSearchParams();
   const [monthly, setMonthly] = useState(false);
   const [chosen, setChosen] = useState<number>();
-  const [custom, setCustom] = useState("");
+  // An amount from a ?donate= link, when it's one.
+  const [custom, setCustom] = useState(() => {
+    const prefill = params.get("donate") ?? "";
+    return toMinor(prefill) !== null ? prefill : "";
+  });
   const [customQuote, setCustomQuote] = useState<DonationQuote & { consent: string | null }>();
   const [shareName, setShareName] = useState(false);
   const [message, setMessage] = useState("");

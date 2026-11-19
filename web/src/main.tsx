@@ -28,6 +28,7 @@ import { People, PersonPage } from "./pages/People";
 import { PeopleEdit } from "./pages/PeopleEdit";
 import { Sim } from "./pages/Sim";
 import { Transparency } from "./pages/Transparency";
+import { Awards } from "./pages/Awards";
 import { Source } from "./pages/Source";
 import { Contact } from "./pages/Contact";
 import { Verify } from "./pages/Verify";
@@ -86,6 +87,7 @@ const router = createBrowserRouter([
       { path: "/shelf/:slug", element: <ShelfPage /> },
       { path: "/legal/:kind", element: <LegalPage /> },
       { path: "/transparency", element: <Transparency /> },
+      { path: "/awards", element: <Awards /> },
       { path: "/source", element: <Source /> },
       { path: "/contact", element: <Contact /> },
       { path: "/verify", element: <Verify /> },

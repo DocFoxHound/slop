@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The admin panel for SLAPorSLOP staff: the review queue (an inbox, admin/Inbox.tsx), apps, accounts,
-// the front page, money, the audit log, AI messages, AI reviewer tokens, staff, policies and legal
+// the front page, App of the Month, money, the audit log, AI messages, AI reviewer tokens, staff, policies and legal
 // requests. Every action is recorded in the audit log under the admin's name
 // (crates/slop-api/src/admin_web.rs).
 
@@ -17,6 +17,7 @@ import { LegalRequestsTab } from "../components/LegalRequests";
 import { AiMessagesTab } from "./admin/AiMessages";
 import { AppRecord, AuditRows } from "./admin/AppRecord";
 import { AppsTab } from "./admin/Apps";
+import { AwardsTab } from "./admin/Awards";
 import { AdminHome } from "./admin/Home";
 import { QueueTab, useWaiting } from "./admin/Inbox";
 import { LegalDocsTab } from "./admin/LegalDocs";
@@ -32,6 +33,7 @@ type Tab =
   | "apps"
   | "users"
   | "store"
+  | "awards"
   | "money"
   | "audit"
   | "ai-messages"
@@ -71,6 +73,7 @@ function AdminPanel() {
             ["apps", "Apps"],
             ["users", "Accounts"],
             ["store", "Front page"],
+            ["awards", "Awards"],
             ["money", "Money"],
             ["audit", "Audit log"],
             ["ai-messages", "AI messages"],
@@ -103,6 +106,7 @@ function AdminPanel() {
       {tab === "apps" && (params.get("app") ? <AppRecord slug={params.get("app")!} /> : <AppsTab />)}
       {tab === "users" && <UsersTab />}
       {tab === "store" && <StoreTab />}
+      {tab === "awards" && <AwardsTab />}
       {tab === "money" && <MoneyTab />}
       {tab === "audit" && <AuditTab />}
       {tab === "ai-messages" && <AiMessagesTab />}

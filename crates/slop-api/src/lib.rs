@@ -12,6 +12,7 @@ pub mod agent;
 pub mod agent_oauth;
 pub mod auth;
 pub mod avatars;
+pub mod awards;
 pub mod bad_links;
 pub mod bounties;
 pub mod branches;
@@ -313,6 +314,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(votes::routes())
         .merge(featured::routes())
         .merge(invites::routes())
+        .merge(awards::routes())
         .merge(shelves::routes())
         .merge(foryou::routes())
         .merge(discover::routes())

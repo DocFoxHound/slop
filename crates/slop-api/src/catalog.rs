@@ -997,6 +997,8 @@ struct AppDetail {
     bug_reports: bool,
     /// A browser demo running now (demos.rs): where to play it, and until when.
     demo: Option<serde_json::Value>,
+    /// Its App of the Month awards, newest first (awards.rs).
+    awards: Vec<crate::awards::AppAward>,
 }
 
 #[derive(Serialize)]
@@ -1206,6 +1208,7 @@ async fn load_detail(
         mods_folder: extra.mods_folder,
         accessibility: extra.accessibility,
         bug_reports: extra.bug_reports,
+        awards: crate::awards::of_app(&state.db, extra.id).await?,
         // A browser game is already played in the browser: it never has a demo (demos.rs).
         demo: match crate::demos::play_link(state, slug).filter(|_| !in_browser) {
             Some(url) => sqlx::query_scalar::<_, OffsetDateTime>(

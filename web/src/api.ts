@@ -488,6 +488,81 @@ export interface NewsPage {
   posting?: { allowed: boolean; why_not: "not_in_store" | "wait" | null; next_post_at: string | null };
 }
 
+/** Award currencies: the owner donates the award to the app by hand (awards.rs). */
+export type AwardCurrency = "usd" | "eur" | "gbp";
+/** One App of the Month award on an app's store page. */
+export interface AppAward {
+  /** YYYY-MM. */
+  month: string;
+  position: number;
+  amount_minor: number;
+  currency: AwardCurrency;
+  blurb: string;
+}
+/** One month's winners on the awards page (`GET /v1/awards`). */
+export interface AwardMonth {
+  month: string;
+  winners: Array<
+    AppSummary & {
+      position: number;
+      amount_minor: number;
+      currency: AwardCurrency;
+      blurb: string;
+      /** The maker it was awarded to, while their account is open. */
+      maker_id: string | null;
+      maker_name: string | null;
+    }
+  >;
+}
+/** App of the Month for staff (`GET /v1/admin/awards`). */
+export interface AdminAwards {
+  /** YYYY-MM. */
+  month: string;
+  /** This month: nominating and voting are open. */
+  current: boolean;
+  /** The viewer may confirm winners and mark prizes paid (the owner, signed in). */
+  can_confirm: boolean;
+  max_votes: number;
+  max_winners: number;
+  my_votes: number;
+  nominations: Array<{
+    slug: string;
+    title: string;
+    eligible: boolean;
+    /** The viewer makes it: no vote. */
+    mine: boolean;
+    nominated_by: string | null;
+    note: string;
+    created_at: string;
+    votes: number;
+    voters: string[];
+    my_vote: boolean;
+  }>;
+  winners: Array<{
+    slug: string;
+    title: string;
+    position: number;
+    amount_minor: number;
+    currency: AwardCurrency;
+    blurb: string;
+    confirmed_by: string | null;
+    confirmed_at: string;
+    prize_paid_at: string | null;
+    /** It takes donations right now, so the prize can be paid. */
+    accepts_donations: boolean;
+    /** The currency its Donate button takes; null when it isn't public. */
+    donation_currency: AwardCurrency | null;
+  }>;
+  /** Months with nominations or winners, newest first. */
+  months: string[];
+}
+export interface AwardWinnerInput {
+  slug: string;
+  amount_minor?: number;
+  currency?: AwardCurrency;
+  blurb?: string;
+}
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -505,6 +580,9 @@ export interface UserProfile {
       voted_at: string;
     }
   >;
+  /** App of the Month awards they won, with apps in the store. */
+  award_count: number;
+  awards: Array<{ slug: string; title: string; month: string; amount_minor: number; currency: AwardCurrency }>;
 }
 
 /** Teams (crates/slop-api/src/teams.rs). */
@@ -737,6 +815,8 @@ export interface AppDetail extends AppSummary {
   bug_reports: boolean;
   /** A browser demo running now: where to play it, and until when. */
   demo: { url: string; ends_at: string } | null;
+  /** Its App of the Month awards, newest first (crates/slop-api/src/awards.rs). */
+  awards: AppAward[];
   /** ...but the check of its newest release found saves elsewhere: players aren't told it works. */
   sandbox_mismatch: boolean;
   /** Sandbox mode is suggested: it goes online (servers SLAPorSLOP can't check). */
@@ -3596,6 +3676,21 @@ export const api = {
     publishInvite: () => request<AdminPublishInvite>("GET", "/v1/admin/publish-invite"),
     setPublishInvite: (required: boolean, code: string) =>
       request<AdminPublishInvite>("PUT", "/v1/admin/publish-invite", { required, code }),
+    /** App of the Month (awards.rs): a month's nominations, votes and winners. */
+    awards: (month?: string) => request<AdminAwards>("GET", `/v1/admin/awards${query({ month })}`),
+    nominateAward: (slug: string, note: string) =>
+      request<AdminAwards>("POST", "/v1/admin/awards/nominations", { slug, note }),
+    voteAward: (slug: string, on: boolean) =>
+      request<void>(on ? "PUT" : "DELETE", `/v1/admin/awards/votes/${encodeURIComponent(slug)}`),
+    /** The owner, signed in: the month's winners, in order (replaces them until a prize is paid). */
+    confirmAwards: (month: string, winners: AwardWinnerInput[]) =>
+      request<AdminAwards>("PUT", `/v1/admin/awards/${encodeURIComponent(month)}/winners`, { winners }),
+    markPrizePaid: (month: string, slug: string, paid: boolean) =>
+      request<AdminAwards>(
+        "PUT",
+        `/v1/admin/awards/${encodeURIComponent(month)}/winners/${encodeURIComponent(slug)}/paid`,
+        { paid },
+      ),
     featured: () => request<AdminFeatured[]>("GET", "/v1/admin/featured"),
     setFeatured: (apps: Array<{ slug: string; blurb: string }>) =>
       request<AdminFeatured[]>("PUT", "/v1/admin/featured", { apps }),
@@ -3925,6 +4020,8 @@ export const api = {
       `/v1/apps/${encodeURIComponent(slug)}/history${query({ days })}`,
     ),
   featured: () => request<FeaturedApp[]>("GET", "/v1/featured"),
+  /** App of the Month winners by month, newest first. */
+  awards: () => request<AwardMonth[]>("GET", "/v1/awards"),
   vote: (slug: string, vote: "not_slop" | "slop" | null) =>
     request<Ratings>("POST", `/v1/apps/${encodeURIComponent(slug)}/vote`, {
       vote,

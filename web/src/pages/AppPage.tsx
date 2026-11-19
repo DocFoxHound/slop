@@ -24,6 +24,7 @@ import { InlineIcon, StoreIcon } from "../components/StoreIcons";
 import { ModControls } from "../components/ModControls";
 import { DedicatedServers } from "../components/DedicatedServers";
 import { DonateButton } from "../components/Donate";
+import { AwardBadges } from "../components/Awards";
 import { InterestedButton } from "../components/Interested";
 import { AppNews } from "../components/News";
 import { workflowName } from "./Releases";
@@ -286,6 +287,7 @@ function AppView({ app }: { app: AppDetail }) {
                     PLAYS IN YOUR BROWSER
                   </span>
                 )}
+                <AwardBadges awards={app.awards} />
               </div>
               {app.content_labels.length > 0 && (
                 <div className="label-chips" aria-label="Content labels">
