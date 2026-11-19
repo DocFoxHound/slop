@@ -49,9 +49,10 @@ pub fn routes() -> Router<AppState> {
 
 /// The maker puts their app in the store the first time (decided 2026-11): a person signed in on
 /// SLAPorSLOP, never an AI agent's token or session (it's not in `maker_agents::ALLOWED` either),
-/// as with Publish. Only a draft: an app taken out of the store goes back through SLAPorSLOP
-/// staff (an appeal), and a private app goes public once staff have checked its repository. It
-/// runs the same checks as staff listing (`admin::not_listable`).
+/// as with Publish, with the beta's invite code entered while it's required (invites.rs). Only a
+/// draft: an app taken out of the store goes back through SLAPorSLOP staff (an appeal), and a
+/// private app goes public once staff have checked its repository. It runs the same checks as
+/// staff listing (`admin::not_listable`).
 async fn list_app(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -63,6 +64,7 @@ async fn list_app(
             "Putting an app in the store is for its maker, signed in on SLAPorSLOP: an AI agent can't. Tell your maker to put it in the store from its Manage page.",
         ));
     }
+    crate::invites::require(&state.db, user.id).await?;
     list_draft(&state.db, app_id, &slug, user.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

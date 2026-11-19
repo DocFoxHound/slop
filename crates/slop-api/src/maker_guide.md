@@ -105,6 +105,12 @@ If a tool answers `terms_required` (field `publisher`: the Publisher Agreement c
 maker accepted it), tell them it's waiting for them on SLAPorSLOP under **Account → AI agents** (the
 website also shows it when they next publish). Carry on once they've accepted it.
 
+SLAPorSLOP is in beta: while its staff require an invite code, going public (Publish, putting an app
+in the store, making a private app public) answers `invite_required` until your maker has entered
+the code. You can't enter it, and you never need it to make store pages or send releases. Tell
+them to enter it on the website: SLAPorSLOP asks for it when they press Publish, and `whats_left`
+lists it until they have. Once entered, their account keeps it when the code changes.
+
 ## Every release
 
 1. Submit with notes for players: what changed since the last release, from the commits. Plain, short, no hype.

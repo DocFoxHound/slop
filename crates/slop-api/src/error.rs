@@ -34,6 +34,11 @@ pub enum ApiError {
         format!("accept the current {} first", crate::legal::title(.0))
     })]
     TermsRequired(&'static str),
+    /// Going public needs the beta's invite code, and the user hasn't entered it (invites.rs).
+    #[error(
+        "SLAPorSLOP is in beta: going public needs an invite code. Enter it when you publish on the website."
+    )]
+    InviteRequired,
     #[error("your account is suspended: see the decision on your account page")]
     Suspended,
     /// Too many unfinished checkouts: solve a proof-of-work challenge first (challenge.rs).
@@ -82,6 +87,7 @@ impl IntoResponse for ApiError {
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
             Self::TermsRequired(_) => (StatusCode::CONFLICT, "terms_required"),
+            Self::InviteRequired => (StatusCode::CONFLICT, "invite_required"),
             Self::Suspended => (StatusCode::FORBIDDEN, "suspended"),
             Self::ChallengeRequired => (StatusCode::CONFLICT, "challenge_required"),
             Self::TooFast { .. } | Self::NotYet { .. } => {

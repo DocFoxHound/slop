@@ -1863,6 +1863,24 @@ export interface AdminFeatured {
   listed: boolean;
 }
 
+/** The beta's invite code for going public, as staff see it (invites.rs). */
+export interface AdminPublishInvite {
+  required: boolean;
+  code: string;
+  updated_at: string;
+  /** Accounts that can go public: entered a code, or published before it existed. */
+  invited: number;
+  /** Of those, the ones that entered it since these settings were last saved. */
+  invited_since_update: number;
+}
+
+/** Whether going public needs the beta's invite code, and whether this account has it. */
+export interface PublishInvite {
+  required: boolean;
+  /** Entered it before (any earlier code counts), or SLAPorSLOP staff. */
+  invited: boolean;
+}
+
 export interface AdminQueue {
   /** Patterns the abuse checks found (abuse.rs). */
   abuse: Array<{
@@ -3444,6 +3462,11 @@ export const api = {
       "POST",
       `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(id)}/rescan`,
     ),
+  /** The beta's invite code (invites.rs): whether it's needed to go public, and whether it's entered. */
+  publishInvite: () => request<PublishInvite>("GET", "/v1/me/publish-invite"),
+  /** Enters the invite code: 422 on `code` when it's wrong. */
+  enterPublishInvite: (code: string) =>
+    request<PublishInvite>("POST", "/v1/me/publish-invite", { code }),
   /** Puts a draft app in the store the first time (manage.rs `list_app`): the maker, signed in. */
   listApp: (slug: string) =>
     request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/list`),
@@ -3549,6 +3572,9 @@ export const api = {
         `/v1/admin/legal/${encodeURIComponent(kind)}/${encodeURIComponent(version)}/withdraw`,
         { reason },
       ),
+    publishInvite: () => request<AdminPublishInvite>("GET", "/v1/admin/publish-invite"),
+    setPublishInvite: (required: boolean, code: string) =>
+      request<AdminPublishInvite>("PUT", "/v1/admin/publish-invite", { required, code }),
     featured: () => request<AdminFeatured[]>("GET", "/v1/admin/featured"),
     setFeatured: (apps: Array<{ slug: string; blurb: string }>) =>
       request<AdminFeatured[]>("PUT", "/v1/admin/featured", { apps }),

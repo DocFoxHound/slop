@@ -2201,7 +2201,7 @@ async fn account_actions_wait_for_a_second_person_and_check_again_when_approved(
 // The admin MCP endpoint
 
 /// Every tool the admin MCP endpoint offers (agent.rs TOOLS).
-const ADMIN_TOOLS: [&str; 68] = [
+const ADMIN_TOOLS: [&str; 70] = [
     "slop_status",
     "review_guide",
     "review_queue",
@@ -2244,6 +2244,8 @@ const ADMIN_TOOLS: [&str; 68] = [
     "edit_team",
     "featured_apps",
     "set_featured_apps",
+    "publish_invite",
+    "set_publish_invite",
     "store_shelves",
     "create_shelf",
     "update_shelf",

@@ -170,6 +170,13 @@ SLAPorSLOP is a Steam-style store for **apps and games made with AI**, from smal
 - **Missed deadline:** the page is **delisted** (hidden from the store, search and recommendations) until it moves to the next stage (decided). Existing installs and libraries keep working. A browser game has nothing installed: while it's out of the store, for any reason, its page and Play are gone for everyone but its maker.
 - People can mark Coming soon and Beta apps **Interested**, which puts them in their library and gives publishers a demand signal. (Built 2026-10-20: the count shows on tiles and pages, "Most anticipated" sorts by it, Interested tags count double in "For you", and everyone Interested is notified when the app reaches beta or release; they also get the maker's news under the bell (switchable per app, never emailed).)
 
+### The beta's invite code (built 2026-11-19)
+
+**Decided 2026-11-19:** SLAPorSLOP is in beta. Anyone can sign up, donate, play, make store pages and send releases through the automatic checks, but **going public** needs an invite code while staff have it switched on (`invites.rs`, migration 0103): publishing a release, putting an app in the store the first time, and asking for a private app to go public. Those three routes answer 409 `invite_required` ("SLAPorSLOP is in beta: going public needs an invite code. Enter it when you publish on the website.") until the account has entered it; staff never need it.
+- **One code** for everyone, set on Admin → Store → Publishing invite (on/off, the code, 4 to 64 characters; Perm::Review; audited `publish_invite.set`; admin tools `publish_invite`, `set_publish_invite`), with how many accounts can go public. It isn't a secret: staff change it when too many people have it. Off by default.
+- **Entered once:** `POST /v1/me/publish-invite` (letter case and spaces around it don't matter; a wrong one is a 422 on `code`; 10 tries an hour) sets `users.publish_invited_at`, kept when the code changes. Makers who had an app in the store or a published release before this count as invited. Only the person, on the website: AI agents can't enter it, and their `whats_left` says their person must.
+- **On the website**, the Publish, Put it in the store and Ask to make it public buttons ask for the code in a dialog when it's needed, then carry on (`components/Invite.tsx`, like the agreements' `useTermsGate`); the Your apps page and the maker workspace say so beforehand, with a button to enter it.
+
 ### Browser games (built 2026-11-07)
 
 **Decided 2026-11-07:** a game can run entirely on its maker's own website, with no download and no launcher. It's a different thing from **browser demos** (below), which are SLAPorSLOP-hosted web builds of downloadable games for their first 14 days.

@@ -14,6 +14,7 @@ import { addressCheckItems } from "../addressChecks";
 import { api, ApiError, type AppSummary, type FileCheckStage, type Release, type ReleaseFile } from "../api";
 import { formatDate, isDedicatedServer } from "../format";
 import { useConfirmStep, useNow } from "../hooks";
+import { useInviteGate } from "./Invite";
 
 type State = "done" | "active" | "problem" | "waiting" | "skipped";
 
@@ -913,11 +914,13 @@ export function ListInStore({ slug, onListed }: { slug: string; onListed?: () =>
   const [error, setError] = useState<string>();
   const [done, setDone] = useState(false);
   const { opener, close } = useConfirmStep(confirm, setConfirm);
+  // While SLAPorSLOP is in beta, going public may need the invite code first (invites.rs).
+  const invite = useInviteGate();
   const list = async () => {
     setBusy(true);
     setError(undefined);
     try {
-      await api.listApp(slug);
+      await invite.guard(() => api.listApp(slug));
       setConfirm(false);
       setDone(true);
       onListed?.();
@@ -961,6 +964,7 @@ export function ListInStore({ slug, onListed }: { slug: string; onListed?: () =>
           {error}
         </p>
       )}
+      {invite.prompt}
     </div>
   );
 }

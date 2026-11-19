@@ -40,6 +40,7 @@ pub mod github_app;
 pub mod history;
 pub mod holds;
 pub mod interested;
+pub mod invites;
 pub mod label;
 pub mod legal;
 pub mod legal_requests;
@@ -309,6 +310,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(legal_requests::routes())
         .merge(votes::routes())
         .merge(featured::routes())
+        .merge(invites::routes())
         .merge(shelves::routes())
         .merge(foryou::routes())
         .merge(discover::routes())

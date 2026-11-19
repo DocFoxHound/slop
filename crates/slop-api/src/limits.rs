@@ -56,6 +56,8 @@ pub enum Action {
     Rescan,
     /// Writing to SLAPorSLOP staff about a held or failed release (holds.rs).
     HoldMessage,
+    /// Entering the beta's invite code (invites.rs): enough for typos, too few to guess it.
+    InviteCode,
 }
 
 impl Action {
@@ -95,6 +97,7 @@ impl Action {
             Self::WorkResponse => (30, DAY),
             Self::Rescan => (10, DAY),
             Self::HoldMessage => (20, DAY),
+            Self::InviteCode => (10, HOUR),
         };
         (n, Duration::from_secs(secs))
     }
@@ -128,6 +131,7 @@ impl Action {
             Self::WorkResponse => "names put forward",
             Self::Rescan => "scan re-runs",
             Self::HoldMessage => "messages to SLAPorSLOP staff about releases",
+            Self::InviteCode => "invite code tries",
         }
     }
 }

@@ -43,6 +43,7 @@ import { CONTENT_LABEL, ONLINE_LABEL, playsInBrowser } from "../format";
 import { useDocumentTitle, useInterval, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { PasskeyNotice } from "../components/PasskeyNotice";
+import { InviteNotice } from "../components/Invite";
 import { useTermsGate } from "../components/Terms";
 import { APP_LABELS, appFill, forgetHandoff, type AppFields, type Fill, type HandoffLink } from "../handoff";
 import type { FirstAddress } from "./Releases";
@@ -111,6 +112,7 @@ export function Publish() {
         Each app goes through the same steps: a store page, a release (for a browser game, its play address), SLAPorSLOP's
         checks, then you publish it and put the app in the store. This is where each one is.
       </p>
+      <InviteNotice />
       {mine.error && <ErrorState error={mine.error} onRetry={mine.reload} />}
       {mine.data && mine.data.length === 0 && (
         <div className="empty-state">

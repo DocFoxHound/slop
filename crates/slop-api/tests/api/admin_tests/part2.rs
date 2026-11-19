@@ -944,6 +944,13 @@ fn tool_cases(ids: &ToolIds) -> Vec<(&'static str, Value, &'static str, &'static
             "review",
             &[],
         ),
+        ("publish_invite", json!({}), "read", &[]),
+        (
+            "set_publish_invite",
+            json!({ "required": true, "code": "beta-fox" }),
+            "review",
+            &[],
+        ),
         ("store_shelves", json!({}), "read", &[]),
         (
             "create_shelf",
