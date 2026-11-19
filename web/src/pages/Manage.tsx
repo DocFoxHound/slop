@@ -15,6 +15,7 @@ import { OffersPanel } from "../components/Offers";
 import { DemoPanel } from "../components/Demo";
 import { BugReportsPanel, ReleaseFeedbackPanel } from "../components/BugReports";
 import { CommitStatusPanel } from "../components/CommitStatus";
+import { useInviteGate } from "../components/Invite";
 import { HistoryPanel } from "../components/MakerHistory";
 import { NewsPanel } from "../components/News";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
@@ -295,6 +296,8 @@ function PulseNeeded({ received }: { received: boolean }) {
 /** A private app going public (SECURITY §12.3): a public repository, then a fresh review. */
 function GoPublic({ slug, requested, onChanged }: { slug: string; requested: boolean; onChanged: () => void }) {
   const { busy, error, submit } = useSubmit(onChanged);
+  // While SLAPorSLOP is in beta, going public may need the invite code first (invites.rs).
+  const invite = useInviteGate();
   return (
     <section className="panel panel-pad">
       <h2>Make it public</h2>
@@ -314,7 +317,7 @@ function GoPublic({ slug, requested, onChanged }: { slug: string; requested: boo
             Apps in the store need public source. Make the repository public under its open-source licence first, then ask
             here. SLAPorSLOP staff check it again before it goes in the store.
           </p>
-          <button type="button" className="btn" disabled={busy} onClick={() => void submit(() => api.makePublic(slug))}>
+          <button type="button" className="btn" disabled={busy} onClick={() => void submit(() => invite.guard(() => api.makePublic(slug)))}>
             Ask to make it public
           </button>
         </>
@@ -324,6 +327,7 @@ function GoPublic({ slug, requested, onChanged }: { slug: string; requested: boo
           {error}
         </p>
       )}
+      {invite.prompt}
     </section>
   );
 }

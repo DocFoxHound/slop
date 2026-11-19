@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The front page for staff: the Featured carousel (featured.rs), shelves staff make
-// (shelves.rs), and hiding the automatic shelves. Every change is in the audit log.
+// The store for staff: the beta's invite code for going public (invites.rs), the front page's
+// Featured carousel (featured.rs), shelves staff make (shelves.rs), and hiding the automatic
+// shelves. Every change is in the audit log.
 
-import { useState } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
-import { api, ApiError, type AdminFeatured, type AdminShelves } from "../../api";
+import { api, ApiError, type AdminFeatured, type AdminPublishInvite, type AdminShelves } from "../../api";
+import { formatDate } from "../../format";
 import { ErrorState, Loading } from "../../components/ui";
 import { useLoad } from "../../hooks";
 import { ActionMessages, useAction } from "./shared";
@@ -13,9 +15,112 @@ import { ActionMessages, useAction } from "./shared";
 export function StoreTab() {
   return (
     <>
+      <PublishInviteEditor />
       <FeaturedEditor />
       <ShelvesEditor />
     </>
+  );
+}
+
+/** The beta's invite code (invites.rs): on or off, the code, and how many accounts have it. */
+export function PublishInviteEditor() {
+  const current = useLoad(() => api.admin.publishInvite(), []);
+  const [required, setRequired] = useState(false);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ApiError>();
+  const [saved, setSaved] = useState(false);
+  const hintId = useId();
+  const errorId = useId();
+  const data: AdminPublishInvite | undefined = current.data;
+  useEffect(() => {
+    if (!data) return;
+    setRequired(data.required);
+    setCode(data.code);
+  }, [data]);
+  const changed = data !== undefined && (required !== data.required || code.trim() !== data.code);
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    setSaved(false);
+    try {
+      await api.admin.setPublishInvite(required, code);
+      setSaved(true);
+      current.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onCode = error?.field === "code";
+  return (
+    <details className="panel panel-pad" open>
+      <summary>
+        <b>Publishing invite</b>{" "}
+        <span className="muted">({data ? (data.required ? "on" : "off") : "…"})</span>
+      </summary>
+      <p className="muted small">
+        While it's on, publishing a release, putting an app in the store and making a private app public need this code.
+        Anyone can still sign up, make store pages and send releases through the checks. It isn't a secret: change it if
+        too many people have it. Accounts that entered an earlier code keep going public. Changes are logged.
+      </p>
+      {current.error && <ErrorState error={current.error} onRetry={current.reload} />}
+      {data && (
+        <form className="form" onSubmit={(e) => void save(e)}>
+          <label className="check">
+            <input
+              type="checkbox"
+              role="switch"
+              checked={required}
+              onChange={(e) => {
+                setRequired(e.target.checked);
+                setSaved(false);
+              }}
+            />
+            <span>Going public needs the invite code</span>
+          </label>
+          <label>
+            Invite code
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={64}
+              value={code}
+              onChange={(e) => {
+                setCode(e.target.value);
+                setSaved(false);
+              }}
+              aria-describedby={`${hintId}${onCode ? ` ${errorId}` : ""}`}
+              aria-invalid={onCode || undefined}
+            />
+          </label>
+          <p id={hintId} className="faint small">
+            4 to 64 characters. Letter case and spaces around it don't matter.
+          </p>
+          {error && (
+            <p id={errorId} className="form-error" role="alert">
+              {error.message}
+            </p>
+          )}
+          <div className="row-actions">
+            <button type="submit" className="btn small slime" disabled={busy || !changed}>
+              {busy ? "Saving…" : "Save"}
+            </button>
+            <span className="small muted" role="status">
+              {saved ? "Saved." : ""}
+            </span>
+          </div>
+          <p className="small">
+            {data.invited.toLocaleString()} {data.invited === 1 ? "account can" : "accounts can"} go public (entered a code,
+            or published before it existed); {data.invited_since_update.toLocaleString()} entered it since{" "}
+            {formatDate(data.updated_at)}, when this was last saved.
+          </p>
+        </form>
+      )}
+    </details>
   );
 }
 

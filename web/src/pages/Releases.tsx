@@ -32,6 +32,7 @@ import {
 import { MakerFrame } from "../components/MakerFrame";
 import { PublishProgress, refreshEvery } from "../components/PublishProgress";
 import { AskAboutFailed, PastHold, ReleaseHold } from "../components/ReleaseHold";
+import { useInviteGate } from "../components/Invite";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { CONTENT_LABEL, formatDate, isDedicatedServer, playsInBrowser } from "../format";
@@ -1549,11 +1550,13 @@ export function PublishPanel({
   const { opener, close } = useConfirmStep(confirming, setConfirming);
   const waits = publishWait(r, picturesPending);
   const notes = publishNotes(r, { heldAt, playsNow });
+  // While SLAPorSLOP is in beta, going public may need the invite code first (invites.rs).
+  const invite = useInviteGate();
   const publish = async () => {
     setBusy(true);
     setError(undefined);
     try {
-      const done = await api.publishRelease(slug, r.id);
+      const done = await invite.guard(() => api.publishRelease(slug, r.id));
       setConfirming(false);
       onPublished(done);
     } catch (err) {
@@ -1633,6 +1636,7 @@ export function PublishPanel({
           {error}
         </p>
       )}
+      {invite.prompt}
     </section>
   );
 }

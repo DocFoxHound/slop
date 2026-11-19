@@ -959,6 +959,23 @@ const TOOLS: &[Tool] = &[
         properties: || json!({ "apps": { "type": "array", "items": { "type": "object", "properties": { "slug": s("App address"), "blurb": s("Why it's featured") }, "required": ["slug"] } } }),
         required: &["apps"],
     },
+    // The beta's invite code (invites.rs)
+    Tool {
+        name: "publish_invite",
+        description: "The beta's invite code for going public: whether it's required, the code, when it was last changed, and how many accounts can go public (entered a code, or published before it existed).",
+        method: Method::GET,
+        path: "/v1/admin/publish-invite",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "set_publish_invite",
+        description: "Switch the beta's invite code on or off and set it (4 to 64 characters when it's on; letter case and spaces around it don't matter). Accounts that entered an earlier code keep going public.",
+        method: Method::PUT,
+        path: "/v1/admin/publish-invite",
+        properties: || json!({ "required": { "type": "boolean", "description": "true: publishing, putting an app in the store and making a private app public need the code" }, "code": s("The code; optional when it's off") }),
+        required: &["required"],
+    },
     Tool {
         name: "store_shelves",
         description: "The shelves staff made (each with its apps), and the automatic front-page shelves with whether each is hidden.",

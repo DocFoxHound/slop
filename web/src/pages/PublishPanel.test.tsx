@@ -8,6 +8,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError, type Release } from "../api";
 import { PublishPanel } from "./Releases";
 
+// jsdom has no modal dialogs: here showModal only opens one.
+HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) {
+  this.open = true;
+};
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -121,6 +126,25 @@ describe("Publish", () => {
     expect(notes).toContain("The source check found code loading that 1.3 didn't have. See the source check on this release.");
     expect(screen.getByRole("region", { name: "Publish version 1.4" }).textContent).toContain("Once you publish it, Play opens its address.");
     expect((screen.getByRole("button", { name: "Publish version 1.4…" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("asks for the beta's invite code when it's needed, then publishes", async () => {
+    const published = release({ status: "approved" });
+    const publish = vi
+      .spyOn(api, "publishRelease")
+      .mockRejectedValueOnce(new ApiError(409, "invite_required", "SLAPorSLOP is in beta: going public needs an invite code."))
+      .mockResolvedValue(published);
+    const enter = vi.spyOn(api, "enterPublishInvite").mockResolvedValue({ required: true, invited: true });
+    const props = show();
+    fireEvent.click(screen.getByRole("button", { name: "Publish version 1.4…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Yes, publish it" }));
+    await screen.findByRole("dialog", { name: "Enter your invite code" });
+    fireEvent.change(screen.getByRole("textbox", { name: "Invite code" }), { target: { value: "beta-fox" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enter and continue" }));
+    await waitFor(() => expect(props.onPublished).toHaveBeenCalledWith(published));
+    expect(enter).toHaveBeenCalledWith("beta-fox");
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(props.onRefused).not.toHaveBeenCalled();
   });
 
   it("says why it couldn't be published, and the page looks again", async () => {

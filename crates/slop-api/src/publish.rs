@@ -1026,7 +1026,7 @@ pub async fn settle_after_upgrade(state: &crate::AppState) -> anyhow::Result<()>
 /// "Publish": the maker gives players a release that passed its checks. A person signed in on
 /// SLAPorSLOP only: never an AI agent's token or session (it's not in `maker_agents::ALLOWED`
 /// either), so neither a stolen token nor a compromised repository can put a build in front of
-/// players.
+/// players. While the beta's invite code is required, they need to have entered it (invites.rs).
 async fn publish_route(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -1047,6 +1047,7 @@ async fn publish_route(
             "Publishing is for the app's maker, signed in on SLAPorSLOP: an AI agent can't publish. Tell your maker to press Publish on the Releases page.",
         ));
     }
+    crate::invites::require(&state.db, user.id).await?;
     let cfg = &state.config;
     publish(
         &state.db,

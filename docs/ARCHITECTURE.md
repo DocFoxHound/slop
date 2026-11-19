@@ -207,7 +207,7 @@ staff command line included, is covered without a hook.
 3. **SLAPorSLOP verifies** the signature, that the commit exists in the linked repo, and the recipe identity.
 4. **Scans** run in the isolated environment (DESIGN §10, `SECURITY.md` §5.2). Files are deleted after scanning.
 5. **The checks end** (`publish.rs` `finish_checks`): **ready** (passed, waiting for its maker), **on hold** (a scanner or Defender finding or a lowered age rating for SLAPorSLOP staff; a missing Defender check until Slop Check reports; `holds.rs`), or **failed** with the reason.
-   **The maker publishes it** (`POST /v1/apps/{slug}/releases/{id}/publish`, a person signed in on the website, never an agent), and only then **SLAPorSLOP signs** the release manifest (`SECURITY.md` §5.3; `approved_at` is the publish time) and publishes it, along with the transparency log entry. Players get the newest published release (`releases.published_at`).
+   **The maker publishes it** (`POST /v1/apps/{slug}/releases/{id}/publish`, a person signed in on the website, never an agent; during the beta, with the invite code entered while staff require it: `invites.rs`, `POST /v1/me/publish-invite`, `GET`/`PUT /v1/admin/publish-invite`), and only then **SLAPorSLOP signs** the release manifest (`SECURITY.md` §5.3; `approved_at` is the publish time) and publishes it, along with the transparency log entry. Players get the newest published release (`releases.published_at`).
 6. **The client:**
    - downloads each file from the maker's release page;
    - checks **both** signatures and the SHA-256 before writing anything;

@@ -140,6 +140,17 @@ async fn next_steps(
             ),
             other => other?,
         }
+        // The beta's invite code (invites.rs): only the person enters it, on the website.
+        match crate::invites::require(&state.db, user.id).await {
+            Err(ApiError::InviteRequired) => step(
+                Who::You,
+                None,
+                "SLAPorSLOP is in beta: going public needs an invite code. Enter it on the website before you publish: SLAPorSLOP asks for it when you press Publish or Put it in the store. Store pages and releases can be made and checked without it.".into(),
+                site("/publish"),
+                false,
+            ),
+            other => other?,
+        }
     }
 
     for a in &apps {

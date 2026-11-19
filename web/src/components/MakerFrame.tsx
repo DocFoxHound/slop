@@ -10,6 +10,7 @@ import { api, ApiError, type AppDetail, type AppStage, type ManageOverview } fro
 import { daysUntil, formatDate, STAGE_LABEL } from "../format";
 import { useLoad } from "../hooks";
 import { AppIcon, appIconProps } from "./AppIcon";
+import { InviteNotice } from "./Invite";
 import { ListInStore } from "./PublishProgress";
 import { StoreIcon } from "./StoreIcons";
 
@@ -122,6 +123,8 @@ export function MakerFrame({
           View store page
         </Link>
       </header>
+      {/* While SLAPorSLOP is in beta, going public may need an invite code: said before Publish. */}
+      <InviteNotice />
       <StageBar
         app={app}
         canAdvance={can}

@@ -413,7 +413,8 @@ pub async fn check_now(
 }
 
 /// The owner asks for a private app to go in the store (SECURITY §12.3). The repository has to be
-/// public, under the open-source licence the app names; a reviewer then checks it from scratch.
+/// public, under the open-source licence the app names, and the beta's invite code entered while
+/// it's required (invites.rs); a reviewer then checks it from scratch.
 async fn request_public(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -423,6 +424,7 @@ async fn request_public(
     if visibility != "private" {
         return Err(ApiError::Conflict("it's already public".into()));
     }
+    crate::invites::require(&state.db, user.id).await?;
     crate::catalog::validate_license(&license)?;
     match check(&state, &repo, true).await {
         Access::Readable => {}
