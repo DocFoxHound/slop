@@ -93,6 +93,7 @@ describe("YearlyStatements", () => {
     const refunds = within(table).getByRole("rowheader", { name: "Refunds" }).closest("tr")!;
     expect(refunds.querySelector("td")!.textContent).toBe("−$8.00");
     expect(within(table).queryByRole("rowheader", { name: "VAT in the fee" })).toBeNull();
+    expect(within(table).queryByRole("rowheader", { name: "Fee without VAT" })).toBeNull();
     const months = screen.getByRole("table", { name: "2026 by month, in US dollars" });
     expect(within(months).getAllByRole("rowheader").map((c) => c.textContent)).toEqual(["January", "March"]);
     const section = screen.getByRole("region", { name: "Yearly statements" });
@@ -126,6 +127,8 @@ describe("YearlyStatements", () => {
     const table = await screen.findByRole("table", { name: "2026 in US dollars" });
     const row = within(table).getByRole("rowheader", { name: "VAT in the fee" }).closest("tr")!;
     expect(row.querySelector("td")!.textContent).toBe("$0.24");
+    const exVat = within(table).getByRole("rowheader", { name: "Fee without VAT" }).closest("tr")!;
+    expect(exVat.querySelector("td")!.textContent).toBe(`$${((s.totals[0].slop_fee_minor - 24) / 100).toFixed(2)}`);
     expect(screen.getByText(/includes 19% VAT/)).toBeTruthy();
     expect(screen.getByRole("note").textContent).toContain("not real money");
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Download CSV" })));

@@ -267,11 +267,11 @@ async fn year(
 }
 
 pub const CSV_HEADER: &str = "Period,Currency,Kind,Payments,Charged,Processing added by donors,\
-                              Received,Refunds,Disputes,SLAPorSLOP fee,VAT in the fee,Net";
+                              Received,Refunds,Disputes,SLAPorSLOP fee,VAT in the fee,Fee without VAT,Net";
 
 /// One header row, then one row per month, currency and kind, then the year's per currency and
 /// kind. Plain numbers in the currency's units (12.34), no notes, so it opens as it is in a
-/// spreadsheet. The VAT column is empty where SLAPorSLOP's fee includes none.
+/// spreadsheet. The two VAT columns are empty where SLAPorSLOP's fee includes none.
 pub fn to_csv(months: &[Totals], totals: &[Totals], vat_included: bool) -> String {
     let amount = |minor: i64| {
         let sign = if minor < 0 { "-" } else { "" };
@@ -285,13 +285,13 @@ pub fn to_csv(months: &[Totals], totals: &[Totals], vat_included: bool) -> Strin
             "bounty" => "Bounties",
             _ => "People jobs",
         };
-        let vat = if vat_included {
-            amount(t.vat_minor)
+        let (vat, ex_vat) = if vat_included {
+            (amount(t.vat_minor), amount(t.slop_fee_minor - t.vat_minor))
         } else {
-            String::new()
+            (String::new(), String::new())
         };
         out.push_str(&format!(
-            "{},{},{kind},{},{},{},{},{},{},{},{vat},{}\r\n",
+            "{},{},{kind},{},{},{},{},{},{},{},{vat},{ex_vat},{}\r\n",
             t.period,
             t.currency.to_ascii_uppercase(),
             t.payments,
@@ -358,13 +358,13 @@ mod tests {
         assert_eq!(lines[0], CSV_HEADER);
         assert_eq!(
             lines[1],
-            "2026-03,USD,Bounties,1,20.00,0.00,20.00,25.00,0.00,1.00,,-6.00"
+            "2026-03,USD,Bounties,1,20.00,0.00,20.00,25.00,0.00,1.00,,,-6.00"
         );
         assert_eq!(
             lines[2],
-            "2026,USD,Bounties,1,20.00,0.00,20.00,25.00,0.00,1.00,,-6.00"
+            "2026,USD,Bounties,1,20.00,0.00,20.00,25.00,0.00,1.00,,,-6.00"
         );
         assert_eq!(lines[3], "");
-        assert!(to_csv(&months, &totals, true).contains(",1.00,0.16,-6.00"));
+        assert!(to_csv(&months, &totals, true).contains(",1.00,0.16,0.84,-6.00"));
     }
 }

@@ -168,6 +168,7 @@ function Statement({ statement, onVat }: { statement: YearStatement; onVat: () =
                   {line("Disputes", money((x) => -x.disputed_minor))}
                   {line("SLAPorSLOP fee", money((x) => -x.slop_fee_minor))}
                   {showVat && line("VAT in the fee", money((x) => x.vat_minor))}
+                  {showVat && line("Fee without VAT", money((x) => x.slop_fee_minor - x.vat_minor))}
                   {line("Net", money((x) => x.net_minor))}
                 </tbody>
               </table>

@@ -400,7 +400,7 @@ async fn the_csv_has_one_header_and_the_same_totals(db: PgPool) {
     // Germany: 19% VAT inside the 1.00 fee is 0.16.
     assert_eq!(t["vat_minor"], 16);
     let tail = format!(
-        "USD,Donations,1,{}.{:02},{}.{:02},20.00,0.00,0.00,1.00,0.16,19.00",
+        "USD,Donations,1,{}.{:02},{}.{:02},20.00,0.00,0.00,1.00,0.16,0.84,19.00",
         total / 100,
         total % 100,
         covered / 100,
@@ -409,7 +409,7 @@ async fn the_csv_has_one_header_and_the_same_totals(db: PgPool) {
     assert_eq!(lines[1].split_once(',').unwrap().1, tail, "{body}");
     assert_eq!(lines[2], format!("{year},{tail}"));
     for line in &lines {
-        assert_eq!(line.split(',').count(), 12, "{line}");
+        assert_eq!(line.split(',').count(), 13, "{line}");
     }
     // Nobody else's donation shows in the file: a donor's own statement is empty.
     let res = app
