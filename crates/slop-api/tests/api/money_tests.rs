@@ -12,6 +12,7 @@ mod donations;
 mod holds;
 mod makers;
 mod offers;
+mod statements;
 mod webhooks;
 
 use std::{

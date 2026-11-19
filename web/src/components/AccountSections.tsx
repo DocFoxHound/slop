@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Parts of the account page (pages/Account.tsx) for moderation, money, agreements and the user's
 // own data (DESIGN §4, §16): their picture, decisions about them with the statement of reasons and
-// an appeal, the reports they sent, donations and fee statements, the agreements waiting for them,
+// an appeal, the reports they sent, donations and yearly statements, the agreements waiting for them,
 // notifications, downloading their data and closing the account.
 
 import { useEffect, useState, type FormEvent } from "react";
@@ -13,13 +13,11 @@ import {
   PROVIDER_LABEL,
   type CounterNotice,
   type DonationAccount,
-  type FeeStatement,
   type LegalNotice,
   type ModerationDecision,
   type MyPicture,
   type MyReport,
   type SignInProvider,
-  type VatTreatment,
 } from "../api";
 import { formatDate } from "../format";
 import { useLoad, type Loaded } from "../hooks";
@@ -31,6 +29,7 @@ import { AcceptDocument, useTermsGate } from "./Terms";
 import { LinkSignIn } from "./LinkSignIn";
 import { ErrorState } from "./ui";
 import { InlineIcon } from "./StoreIcons";
+import { YearlyStatements } from "./Statements";
 
 /** The Content Policy section a rule title points to (headings get ids from their text). */
 function ruleLink(title: string): string {
@@ -584,10 +583,10 @@ export function AccountNotifications() {
   );
 }
 
-/** Account → Money: donations given, where donations are received, and SLAPorSLOP's fee statements. */
+/** Account → Money: donations given, where donations are received, and yearly statements of the money received. */
 export function AccountMoney() {
   const mine = useLoad(() => api.donations.mine(), []);
-  const statements = useLoad(() => api.donations.feeStatements(), []);
+  const statements = useLoad(() => api.statements.years(), []);
   const account = useLoad(() => api.donations.account(), []);
   const [cancelling, setCancelling] = useState<string>();
   const [error, setError] = useState<string>();
@@ -596,7 +595,7 @@ export function AccountMoney() {
   const receiving = Boolean(account.data && account.data.status !== "none" && account.data.payments !== "off");
   const loaded = d && (statements.data || statements.error) && (account.data || account.error);
   const none =
-    loaded && d.donations.length === 0 && d.server_donations.length === 0 && !receiving && !statements.data?.statements.length;
+    loaded && d.donations.length === 0 && d.server_donations.length === 0 && !receiving && !statements.data?.years.length;
   const cancel = async (id: string) => {
     setError(undefined);
     try {
@@ -693,13 +692,11 @@ export function AccountMoney() {
       )}
       {receiving && <ReceivingDonations account={account} />}
       {account.data?.status === "none" && account.data.payments !== "off" && <DonationsSetupHint />}
-      {statements.data && statements.data.statements.length > 0 && (
-        <FeeStatements statements={statements.data.statements} vat={statements.data.vat} onVat={statements.reload} />
-      )}
+      {statements.data && <YearlyStatements years={statements.data.years} simulated={statements.data.simulated} />}
       {none && (
         <p className="empty-state account-empty">
-          No donations yet. Donations you give, and donations to your apps once you set them up, show here with SLAPorSLOP's fee
-          statements.
+          No donations yet. Donations you give, and donations to your apps once you set them up, show here with yearly
+          statements of the money you receive.
         </p>
       )}
     </>
@@ -844,96 +841,6 @@ function ReceivingDonations({ account }: { account: Loaded<DonationAccount> }) {
         )}
       </div>
     </section>
-  );
-}
-
-const money = (minor: number, currency: string) => {
-  const symbol = currency === "eur" ? "€" : currency === "gbp" ? "£" : "$";
-  return `${symbol}${(minor / 100).toFixed(2)}`;
-};
-
-/** SLAPorSLOP's fee by month, with the VAT inside it (LEGAL §3.5). */
-function FeeStatements({ statements, vat, onVat }: { statements: FeeStatement[]; vat: VatTreatment; onVat: () => void }) {
-  const showVat = vat.kind !== "none";
-  return (
-    <section id="fee-statements" className="account-panel" aria-labelledby="fee-statements-title">
-      <h3 className="account-panel-title" id="fee-statements-title">
-        Fee statements
-      </h3>
-      <p className="muted small">
-        SLAPorSLOP's 5% fee on the donations and People payments you received, by month.{" "}
-        {vat.kind === "none" && "There's no VAT on SLAPorSLOP's fee where you are."}
-        {vat.kind === "included" &&
-          `The fee includes ${(vat.rate_bp! / 100).toFixed(vat.rate_bp! % 100 ? 1 : 0)}% VAT, which SLAPorSLOP pays out of its 5%; it's never added on top.`}
-        {vat.kind === "reverse_charge" &&
-          `Reverse charge: you account for the VAT on SLAPorSLOP's fee yourself (VAT number ${vat.vat_number}).`}{" "}
-        {showVat && (vat.slop_vat_id ? `SLAPorSLOP's VAT number: ${vat.slop_vat_id}.` : "SLAPorSLOP's VAT registration is still being set up.")}
-      </p>
-      <table className="table small panel">
-        <thead>
-          <tr>
-            <th>Month</th>
-            <th>For</th>
-            <th>Payments</th>
-            <th>Received</th>
-            <th>SLAPorSLOP fee</th>
-            {showVat && <th>VAT in the fee</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {statements.map((s) => (
-            <tr key={s.month + s.kind + s.currency}>
-              <td>{s.month}</td>
-              <td>{s.kind === "donation" ? "Donations" : "People jobs"}</td>
-              <td>{s.payments}</td>
-              <td>{money(s.received_minor, s.currency)}</td>
-              <td>
-                {money(s.slop_fee_minor, s.currency)}
-                {s.simulated && <span className="muted"> · simulated</span>}
-              </td>
-              {showVat && <td>{vat.kind === "reverse_charge" ? "Reverse charge" : money(s.vat_minor, s.currency)}</td>}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {showVat && <VatNumber vat={vat} onSaved={onVat} />}
-    </section>
-  );
-}
-
-function VatNumber({ vat, onSaved }: { vat: VatTreatment; onSaved: () => void }) {
-  const [value, setValue] = useState(vat.vat_number ?? "");
-  const [note, setNote] = useState<string>();
-  const [error, setError] = useState<string>();
-  const save = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(undefined);
-    setNote(undefined);
-    try {
-      const res = await api.donations.setVat(value.trim() || null);
-      setNote(res.note ?? (res.checked ? "Confirmed. SLAPorSLOP's fee is reverse-charged from now on." : "Removed."));
-      onSaved();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
-    }
-  };
-  return (
-    <form className="form inline-form" onSubmit={(e) => void save(e)}>
-      <label>
-        VAT number, if you're a VAT-registered business{" "}
-        <input value={value} onChange={(e) => setValue(e.target.value)} placeholder={`${vat.country === "GR" ? "EL" : vat.country}123456789`} />
-      </label>
-      <button className="btn small">Save</button>
-      {vat.vat_number && !vat.vat_number_checked && !note && (
-        <p className="muted small">Not confirmed yet, so VAT is shown as included in SLAPorSLOP's fee.</p>
-      )}
-      {note && <p className="muted small">{note}</p>}
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-    </form>
   );
 }
 

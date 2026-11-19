@@ -86,6 +86,7 @@ pub mod sim_people;
 pub mod slop_build;
 pub mod source_scan;
 pub mod staff;
+pub mod statements;
 pub mod teams;
 pub mod tokens;
 pub mod updates;
@@ -327,6 +328,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(passkeys::routes())
         .merge(ops::routes())
         .merge(donations::routes())
+        .merge(statements::routes())
         .merge(donation_holds::routes())
         .merge(reviews::routes())
         .merge(branches::routes())

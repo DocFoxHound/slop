@@ -1,7 +1,7 @@
 # SLAPorSLOP — Money: Donations & People Payments
 
 **Status:** Draft · companion to [`DESIGN.md`](DESIGN.md) §12 and §15
-**Last updated:** 2026-10-19
+**Last updated:** 2026-11-19
 **Related:** `LEGAL.md` (private) (legal positions behind every rule here) · [`SECURITY.md`](SECURITY.md) §9 · [`METRICS.md`](METRICS.md)
 
 > Wherever this document says "must" or "never", the reason is usually a legal position in `LEGAL.md`. Check there before changing it.
@@ -158,6 +158,17 @@ payments(id, kind,                  -- donation | server_donation | people_job |
 - **Daily reconciliation** of the record against Stripe's application fees and charges. Any mismatch alerts an admin.
 - SLAPorSLOP's own fee income is reconciled for accounting, with a monthly fee statement to each maker (`LEGAL.md` §3.5).
 
+### 8.1 Yearly statements (built 2026-11-19, `statements.rs`)
+
+Makers and creatives asked how to keep year-end records. Account → Money has **Yearly statements**: a summary of the money paid into their own Stripe accounts, for their records. It's **not a tax form**: every payment was a direct charge on their own Stripe account, so their Stripe dashboard has each one, Stripe sends any US 1099-K for the account, and SLAPorSLOP doesn't give tax advice. The page says all of this.
+
+- `GET /v1/me/statements` lists the years with money in them; `GET /v1/me/statements/{year}` gives, per currency and kind (donations, bounty payouts, People jobs), the year's and each month's: payments, what payers were charged, the card processing donors added on top (§5.1), **received** (charged less that processing: what payers paid toward the user), refunds, disputes, SLAPorSLOP's fee, the VAT inside it (as the fee statements show it), and **net** (received less refunds, disputes and the fee; before Stripe's own fees). `GET /v1/me/statements/{year}.csv` is the same totals as a file: one header row, a row per month, currency and kind, then the year's rows, plain numbers, nothing else.
+- **Totals only**, never payment by payment or payer by payer: the maker's donation view hides groups under 10 so no donor stands out, and a statement mustn't undo that.
+- **Whose money:** what was paid into a Stripe account that was the user's. `stripe_account_owners` (migration 0106) keeps every account a user has had, recorded by the first user it was saved for, so the history stays after a disconnect or a switch. Refunds and disputes count under the payment they were against, in the month they were recorded; SLAPorSLOP's fee isn't returned with a refund (it stays counted). Months are UTC.
+- **Real or simulated, never both:** a server taking real payments counts only real ones; one that simulates payments counts only simulated ones and says so.
+- The person's own: AI agent tokens are refused (403), as for all money.
+- The monthly fee statements (`GET /v1/me/fee-statements`, kept for older desktop apps) use the same totals, so they now include refunds, disputes, bounty payouts and accounts no longer connected. The download of a user's data (`/v1/me/export`) has the monthly totals (`money_received`) and the accounts (`stripe_accounts`).
+
 ## 9. Fraud
 
 | Threat | Mitigation |
@@ -179,7 +190,7 @@ The original mockup's (`mockup/`) Donate button (with the donor-pays-fees breakd
 - **The Donate button and form:** next to Play / Install / Add to library on the store page and in the library (since 2026-10-25): green while the viewer can donate, grey once they have, and a running server donation with Cancel beside it. `GET /v1/apps/{slug}/donate` tells a signed-in viewer their own latest paid donation and running server donation (`mine`; left out signed out). Presets around the maker's suggestion, each showing the donor's total first (PAY-10), plus any amount from $1 to $500. Processing comes from `processing_rates` (one published rate per currency: 2.9% + 30¢ / 25 c / 20 p), or out of the maker's share where `country_policies.donor_covers_fees` is off (PAY-12). An unticked box shares the donor's name and a message with the maker only. 18+, signed in, 10 starts an hour at most.
 - **Server donations:** Stripe Billing on the maker's account with `application_fee_percent` set so the fee is 5% of the donation; the exact terms are saved (`server_donations.consent_text`); cancel in two clicks next to Play (store page and library) or from the account page, with a confirmation email; reminders 7 days before the first renewal and yearly; "The servers are shut down" cancels them all and emails the donors. These emails go out whatever the donor's email choices.
 - **Records:** `donations` (one row per payment, monthly ones too) and `payments` rows (kind `donation`) mirroring Stripe; refunds from the maker's button call Stripe on the maker's account (PAY-3).
-- **The maker's view:** totals, months with at least 10 donations, server-donor counts from 10 up, names and messages only from donors who shared them, and a refund button for mistakes. **Fee statements** by month on the account page (donations and People jobs).
+- **The maker's view:** totals, months with at least 10 donations, server-donor counts from 10 up, names and messages only from donors who shared them, and a refund button for mistakes. **Fee statements** by month (donations, bounty payouts and People jobs), shown since 2026-11-19 inside the yearly statements on the account page (§8.1).
 - **Daily reconciliation** (PAY-2): yesterday's Stripe application fees per account against SLAPorSLOP's records; mismatches are logged and written to the audit log.
 - **PAY-5 test:** the app-facing code (Pulse, updates, release manifests, the desktop update feed) never mentions donations, and an app's page is identical before and after someone donates (only the donor's own Donate button says they did).
 - Webhooks also handle `invoice.paid` and `customer.subscription.deleted`.

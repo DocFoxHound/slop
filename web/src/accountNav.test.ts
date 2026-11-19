@@ -46,6 +46,7 @@ describe("account sections", () => {
     ["/account#donations", "/account/money#donations"],
     ["/account#receiving", "/account/money#receiving"],
     ["/account#fee-statements", "/account/money#fee-statements"],
+    ["/account#statements", "/account/money#statements"],
     ["/account#decisions", "/account/moderation#decisions"],
     ["/account#reports", "/account/moderation#reports"],
     ["/account#agreements", "/account/agreements#agreements"],

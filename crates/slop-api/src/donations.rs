@@ -2536,18 +2536,21 @@ async fn refresh_account(
     Ok(Json(Onboarding { url: None, status }))
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Serialize)]
 struct Statement {
     month: String,
     currency: String,
     /// donation, people_job or bounty
     kind: String,
     payments: i64,
+    /// What the payers paid toward the user, without the card processing donors added on top
+    /// (statements.rs `Totals::gross_minor`).
     received_minor: i64,
+    refunded_minor: i64,
+    disputed_minor: i64,
     slop_fee_minor: i64,
     simulated: bool,
     /// The VAT included in SLAPorSLOP's fee (LEGAL §3.5); zero under the reverse charge.
-    #[sqlx(skip)]
     vat_minor: i64,
 }
 
@@ -2559,12 +2562,12 @@ struct Statements {
 
 /// How VAT applies to SLAPorSLOP's fee for this user (LEGAL §3.5): the 5% always includes it.
 #[derive(Serialize)]
-struct VatTreatment {
+pub struct VatTreatment {
     /// none (no VAT where they are), included (SLAPorSLOP pays it out of its 5%), or reverse_charge
     /// (a VAT-registered business: they account for it).
-    kind: &'static str,
+    pub kind: &'static str,
     /// The country's standard rate, in basis points.
-    rate_bp: Option<i32>,
+    pub rate_bp: Option<i32>,
     country: String,
     vat_number: Option<String>,
     /// Whether the VAT number was confirmed with the EU's VIES service.
@@ -2578,7 +2581,7 @@ pub fn vat_included(amount_minor: i64, rate_bp: i64) -> i64 {
     (amount_minor * rate_bp * 2 + (10_000 + rate_bp)) / (2 * (10_000 + rate_bp))
 }
 
-async fn vat_treatment(state: &AppState, user: &CurrentUser) -> sqlx::Result<VatTreatment> {
+pub async fn vat_treatment(state: &AppState, user: &CurrentUser) -> sqlx::Result<VatTreatment> {
     let (rate, number, checked): (Option<i32>, Option<String>, bool) = sqlx::query_as(
         "select c.vat_rate_bp, u.vat_number, u.vat_checked_at is not null
          from users u join country_policies c on c.country_code = u.country_code where u.id = $1",
@@ -2609,30 +2612,34 @@ async fn vat_treatment(state: &AppState, user: &CurrentUser) -> sqlx::Result<Vat
 }
 
 /// Monthly fee statements (PAYMENTS §8, TAX-4): what SLAPorSLOP's fee came to on the user's donations,
-/// People jobs and bounty payouts, and the VAT included in it.
+/// People jobs and bounty payouts, and the VAT included in it, newest month first. The same
+/// totals as the yearly statements (statements.rs), money paid into every Stripe account the
+/// user has had, real or simulated as the server is. The website shows the yearly statements
+/// instead since 2026-11-19; this stays for desktop apps with an older copy of it.
 async fn fee_statements(
     State(state): State<AppState>,
     user: CurrentUser,
 ) -> ApiResult<Json<Statements>> {
     let vat = vat_treatment(&state, &user).await?;
-    let mut statements: Vec<Statement> = sqlx::query_as(
-            "select to_char(date_trunc('month', p.created_at), 'YYYY-MM') as month, p.currency, p.kind,
-                    count(*) as payments, sum(p.amount_minor)::int8 as received_minor,
-                    sum(p.slop_fee_minor)::int8 as slop_fee_minor, bool_or(p.simulated) as simulated
-             from payments p
-             where p.kind in ('donation', 'people_job', 'bounty') and p.stripe_account_id in (
-                 select stripe_account_id from donation_accounts where user_id = $1
-                 union select stripe_account_id from creatives where user_id = $1 and stripe_account_id is not null)
-             group by 1, 2, 3 order by 1 desc, 3",
-    )
-    .bind(user.id)
-    .fetch_all(&state.db)
-    .await?;
-    if let ("included", Some(rate)) = (vat.kind, vat.rate_bp) {
-        for s in &mut statements {
-            s.vat_minor = vat_included(s.slop_fee_minor, i64::from(rate));
-        }
-    }
+    let simulated = crate::statements::simulated(&state);
+    let rate = crate::statements::vat_rate(&vat);
+    let mut months = crate::statements::monthly(&state.db, user.id, None, simulated, rate).await?;
+    months.sort_by(|a, b| b.period.cmp(&a.period).then_with(|| a.kind.cmp(&b.kind)));
+    let statements = months
+        .into_iter()
+        .map(|t| Statement {
+            month: t.period,
+            currency: t.currency,
+            kind: t.kind,
+            payments: t.payments,
+            received_minor: t.gross_minor,
+            refunded_minor: t.refunded_minor,
+            disputed_minor: t.disputed_minor,
+            slop_fee_minor: t.slop_fee_minor,
+            simulated,
+            vat_minor: t.vat_minor,
+        })
+        .collect();
     Ok(Json(Statements { statements, vat }))
 }
 

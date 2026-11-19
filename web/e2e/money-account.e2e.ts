@@ -1,44 +1,48 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Money on the account page (web/src/components/AccountSections.tsx): fee statements and the VAT
-// number, and switching or disconnecting the Stripe account donations are paid to. (Cancelling a
-// server donation is in money-donate.e2e.ts, with the one it makes.) Mia's real Stripe account is
-// never changed: requests that would start its 72-hour switch are answered in the browser.
+// Money on the account page (web/src/components/AccountSections.tsx, Statements.tsx): the yearly
+// statement and the VAT number, and switching or disconnecting the Stripe account donations are
+// paid to. (Cancelling a server donation is in money-donate.e2e.ts, with the one it makes.) Mia's
+// real Stripe account is never changed: requests that would start its 72-hour switch are answered
+// in the browser.
 import type { Route } from "@playwright/test";
 
 import { expect, signIn, test } from "./fixtures";
 
 const json = (status: number, body: unknown) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
-test("fee statements show SLAPorSLOP's fee by month, and the VAT in it where there is VAT", async ({ page }) => {
+test("the yearly statement shows SLAPorSLOP's fee, and the VAT in it where there is VAT", async ({ page }) => {
   await signIn(page, "maker");
-  await page.goto("/account#fee-statements");
-  const fees = page.locator("section#fee-statements");
-  await expect(fees.getByRole("heading", { name: "Fee statements" })).toBeVisible();
-  // Mia is in the US: no VAT, so no VAT column or number.
-  await expect(fees.getByText(/There's no VAT on SLAPorSLOP's fee where you are\./)).toBeVisible();
-  const row = fees.getByRole("row").filter({ hasText: "Donations" }).first();
-  await expect(row.getByRole("cell").nth(0)).toHaveText(/^\d{4}-\d{2}$/);
-  await expect(row.getByRole("cell").nth(4)).toHaveText(/^\$\d+\.\d\d$/);
-  await expect(fees.getByRole("columnheader", { name: "VAT in the fee" })).toHaveCount(0);
-  await expect(fees.getByRole("textbox", { name: /VAT number/ })).toHaveCount(0);
+  await page.goto("/account#statements");
+  const statements = page.locator("section#statements");
+  await expect(statements.getByRole("heading", { name: "Yearly statements" })).toBeVisible();
+  // Mia is in the US: no VAT, so no VAT row or number.
+  await expect(statements.getByText(/There's no VAT on SLAPorSLOP's fee where you are\./)).toBeVisible();
+  const fee = statements.getByRole("row").filter({ hasText: "SLAPorSLOP fee" }).first();
+  await expect(fee.getByRole("cell").first()).toHaveText(/^−?\$[\d,]+\.\d\d$/);
+  await expect(statements.getByRole("rowheader", { name: "VAT in the fee" })).toHaveCount(0);
+  await expect(statements.getByRole("textbox", { name: /VAT number/ })).toHaveCount(0);
 
   // Somewhere with VAT (as a German maker would see it): the VAT inside the fee, and a VAT number.
   let saved: string | null = null;
-  await page.route("**/v1/me/fee-statements", async (route: Route) => {
+  await page.route(/\/v1\/me\/statements\/\d{4}$/, async (route: Route) => {
     const res = await route.fetch();
     const real = await res.json();
+    const withVat = (t: { slop_fee_minor: number }) => ({ ...t, vat_minor: Math.round(t.slop_fee_minor / 6) });
     return route.fulfill({
       response: res,
       json: {
-        statements: real.statements.map((s: { slop_fee_minor: number }) => ({ ...s, vat_minor: Math.round(s.slop_fee_minor / 6) })),
+        ...real,
+        totals: real.totals.map(withVat),
+        months: real.months.map(withVat),
         vat: { kind: "included", rate_bp: 1900, country: "DE", vat_number: saved, vat_number_checked: false, slop_vat_id: null },
       },
     });
   });
   await page.reload();
-  await expect(fees.getByText(/The fee includes 19% VAT, which SLAPorSLOP pays out of its 5%; it's never added on top\./)).toBeVisible();
+  const fees = page.locator("#fee-statements");
+  await expect(fees.getByText(/SLAPorSLOP's fee includes 19% VAT, which SLAPorSLOP pays out of its 5%; it's never added on top\./)).toBeVisible();
   await expect(fees.getByText(/SLAPorSLOP's VAT registration is still being set up\./)).toBeVisible();
-  await expect(fees.getByRole("columnheader", { name: "VAT in the fee" })).toBeVisible();
+  await expect(statements.getByRole("rowheader", { name: "VAT in the fee" }).first()).toBeVisible();
   const vat = fees.getByRole("textbox", { name: /VAT number, if you're a VAT-registered business/ });
   await expect(vat).toHaveAttribute("placeholder", "DE123456789");
   // SLAPorSLOP checks the number against the account's country (Mia's account is really in the US).
@@ -125,12 +129,12 @@ test("switching or disconnecting the Stripe account asks first, needs a fresh si
   await expect(notice.getByRole("button", { name: "I've finished on Stripe" })).toHaveCount(0);
 });
 
-test("someone who receives nothing has no receiving or fee sections", async ({ page }) => {
+test("someone who receives nothing has no receiving or statements sections", async ({ page }) => {
   await signIn(page, "player");
   await page.goto("/account/money");
   await expect(page.getByRole("heading", { name: "Your donations" })).toBeVisible();
   await expect(page.locator("section#receiving")).toHaveCount(0);
-  await expect(page.locator("section#fee-statements")).toHaveCount(0);
+  await expect(page.locator("section#statements")).toHaveCount(0);
   // No apps: nothing to set donations up for.
   await expect(page.locator("section#donations-setup")).toHaveCount(0);
 });

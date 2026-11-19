@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Money on the account page (components/AccountSections.tsx): your donations, where donations to
-// your apps are paid, and SLAPorSLOP's fee statements with the VAT in them.
+// your apps are paid, and the yearly statements with SLAPorSLOP's fee and the VAT in it.
 import { apiError, call, fake, tweak } from "./accounts-helpers";
 import { expect, ids, signIn, test } from "./fixtures";
 
@@ -180,37 +180,62 @@ test.describe("receiving donations", () => {
   });
 });
 
-test.describe("fee statements", () => {
-  test("show SLAPorSLOP's fee by month, with no VAT where there's none", async ({ page }) => {
+test.describe("yearly statements", () => {
+  /** "$1,234.50", as the statement shows money. */
+  const dollars = (minor: number) =>
+    `${minor < 0 ? "−" : ""}$${(Math.abs(minor) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const newestYear = async (): Promise<number> => (await call("maker", "GET", "/v1/me/statements")).years[0];
+
+  test("show the year's money by kind and month, say it isn't a tax form, and have no VAT where there's none", async ({ page }) => {
     await signIn(page, "maker");
-    await page.goto("/account#fee-statements");
-    const section = page.locator("#fee-statements");
-    await expect(section).toContainText("SLAPorSLOP's 5% fee on the donations and People payments you received, by month.");
+    await page.goto("/account#statements");
+    const section = page.locator("#statements");
+    await expect(section.getByRole("heading", { name: "Yearly statements" })).toBeVisible();
+    await expect(section).toContainText("It isn't a tax form: Stripe sends any US 1099-K for your account");
+    await expect(section).toContainText("SLAPorSLOP doesn't give tax advice.");
     await expect(section).toContainText("There's no VAT on SLAPorSLOP's fee where you are.");
-    await expect(section.getByRole("columnheader")).toHaveText(["Month", "For", "Payments", "Received", "SLAPorSLOP fee"]);
-    const statement = (await call("maker", "GET", "/v1/me/fee-statements")).statements[0];
-    const row = section.getByRole("row").filter({ hasText: statement.month });
-    await expect(row).toContainText("Donations");
-    await expect(row).toContainText(`$${(statement.received_minor / 100).toFixed(2)}`);
-    await expect(row).toContainText(`$${(statement.slop_fee_minor / 100).toFixed(2)}`);
+    const year = await newestYear();
+    await expect(section.getByRole("combobox", { name: "Year" })).toHaveValue(String(year));
+    const statement = await call("maker", "GET", `/v1/me/statements/${year}`);
+    const donations = statement.totals.find((t: { kind: string; currency: string }) => t.kind === "donation" && t.currency === "usd");
+    const table = section.getByRole("table", { name: `${year} in US dollars` });
+    await expect(table.getByRole("columnheader").first()).toHaveText("Donations");
+    await expect(table.getByRole("row").filter({ hasText: "Received" }).getByRole("cell").first()).toHaveText(dollars(donations.gross_minor));
+    await expect(table.getByRole("row").filter({ hasText: "SLAPorSLOP fee" }).getByRole("cell").first()).toHaveText(
+      dollars(-donations.slop_fee_minor),
+    );
+    await expect(table.getByRole("row").filter({ hasText: "Net" }).getByRole("cell").first()).toHaveText(dollars(donations.net_minor));
+    await expect(table.getByRole("rowheader", { name: "VAT in the fee" })).toHaveCount(0);
+    await expect(section.getByRole("table", { name: `${year} by month, in US dollars` })).toBeVisible();
     await expect(section.getByRole("textbox", { name: /VAT number/ })).toHaveCount(0);
   });
 
-  test("with VAT in the fee: the column, and a VAT number to save, which the server checks", async ({ page }) => {
-    // Mia is in the US; her statements are shown as an EU maker's would be. Saving goes to the
+  test("download a year as a CSV file", async ({ page }) => {
+    await signIn(page, "maker");
+    await page.goto("/account#statements");
+    const year = await newestYear();
+    const download = page.waitForEvent("download");
+    await page.locator("#statements").getByRole("button", { name: "Download CSV" }).click();
+    const file = await download;
+    expect(file.suggestedFilename()).toBe(`slaporslop-statement-${year}.csv`);
+  });
+
+  test("with VAT in the fee: the row, and a VAT number to save, which the server checks", async ({ page }) => {
+    // Mia is in the US; her statement is shown as an EU maker's would be. Saving goes to the
     // server, which checks the number belongs to her country.
-    await tweak(page, "/v1/me/fee-statements", (s) => ({
-      statements: [...s.statements, { ...s.statements[0], kind: "people", vat_minor: 7, simulated: true }],
+    const year = await newestYear();
+    await tweak(page, `/v1/me/statements/${year}`, (s) => ({
+      ...s,
+      totals: s.totals.map((t: Record<string, unknown>) => ({ ...t, vat_minor: 7 })),
       vat: { kind: "included", rate_bp: 2000, country: "US", vat_number: null, vat_number_checked: false, slop_vat_id: null },
     }));
     await signIn(page, "maker");
     await page.goto("/account#fee-statements");
+    const table = page.locator("#statements").getByRole("table", { name: `${year} in US dollars` });
+    await expect(table.getByRole("row").filter({ hasText: "VAT in the fee" }).getByRole("cell").first()).toHaveText("$0.07");
     const section = page.locator("#fee-statements");
-    await expect(section).toContainText("The fee includes 20% VAT, which SLAPorSLOP pays out of its 5%; it's never added on top.");
+    await expect(section).toContainText("SLAPorSLOP's fee includes 20% VAT, which SLAPorSLOP pays out of its 5%; it's never added on top.");
     await expect(section).toContainText("SLAPorSLOP's VAT registration is still being set up.");
-    await expect(section.getByRole("columnheader", { name: "VAT in the fee" })).toBeVisible();
-    await expect(section.getByRole("row").filter({ hasText: "People jobs" })).toContainText("$0.07");
-    await expect(section.getByRole("row").filter({ hasText: "People jobs" })).toContainText("simulated");
     const vat = section.getByRole("textbox", { name: /VAT number, if you're a VAT-registered business/ });
     await expect(vat).toHaveAttribute("placeholder", "US123456789");
     await vat.fill("12");
@@ -227,8 +252,9 @@ test.describe("fee statements", () => {
   });
 
   test("a confirmed number is reverse-charged; an unconfirmed one says so", async ({ page }) => {
+    const year = await newestYear();
     let vat = { kind: "included", rate_bp: 1900, country: "DE", vat_number: "DE123456789", vat_number_checked: false, slop_vat_id: "EU372000041" };
-    await tweak(page, "/v1/me/fee-statements", (s) => ({ ...s, vat }));
+    await tweak(page, `/v1/me/statements/${year}`, (s) => ({ ...s, vat }));
     const put = await fake(page, "PUT", "/v1/me/vat", () => {
       vat = { ...vat, kind: "reverse_charge", vat_number_checked: true };
       return { status: 200, body: { vat_number: "DE123456789", checked: true, note: null } };
@@ -236,7 +262,7 @@ test.describe("fee statements", () => {
     await signIn(page, "maker");
     await page.goto("/account#fee-statements");
     const section = page.locator("#fee-statements");
-    await expect(section).toContainText("The fee includes 19% VAT");
+    await expect(section).toContainText("SLAPorSLOP's fee includes 19% VAT");
     await expect(section).toContainText("SLAPorSLOP's VAT number: EU372000041.");
     await expect(section).toContainText("Not confirmed yet, so VAT is shown as included in SLAPorSLOP's fee.");
     const box = section.getByRole("textbox", { name: /VAT number/ });
@@ -244,12 +270,13 @@ test.describe("fee statements", () => {
     await section.getByRole("button", { name: "Save" }).click();
     await expect(section).toContainText("Confirmed. SLAPorSLOP's fee is reverse-charged from now on.");
     await expect(section).toContainText("Reverse charge: you account for the VAT on SLAPorSLOP's fee yourself (VAT number DE123456789).");
-    await expect(section.getByRole("row").nth(1)).toContainText("Reverse charge");
+    await expect(page.locator("#statements").getByRole("rowheader", { name: "VAT in the fee" })).toHaveCount(0);
     expect(put.calls[0].body).toEqual({ vat_number: "DE123456789" });
   });
 
   test("a number the EU can't confirm comes back with the server's note", async ({ page }) => {
-    await tweak(page, "/v1/me/fee-statements", (s) => ({
+    const year = await newestYear();
+    await tweak(page, `/v1/me/statements/${year}`, (s) => ({
       ...s,
       vat: { kind: "included", rate_bp: 2100, country: "NL", vat_number: null, vat_number_checked: false, slop_vat_id: null },
     }));
@@ -270,6 +297,6 @@ test.describe("fee statements", () => {
     await signIn(page, "bystander");
     await page.goto("/account/money");
     await expect(page.getByText(/^No donations yet\./)).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Fee statements" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Yearly statements" })).toHaveCount(0);
   });
 });
