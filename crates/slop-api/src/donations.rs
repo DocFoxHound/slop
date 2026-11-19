@@ -319,6 +319,19 @@ async fn load_target(state: &AppState, app_id: Uuid) -> ApiResult<Target> {
     })
 }
 
+/// Whether a public app takes donations right now, and in which currency: for paying an App of
+/// the Month prize (awards.rs). None for an app that isn't public.
+pub(crate) async fn donation_state(
+    state: &AppState,
+    app_id: Uuid,
+) -> ApiResult<Option<(bool, String)>> {
+    match load_target(state, app_id).await {
+        Ok(t) => Ok(Some((t.taking(&stripe::mode(state)), t.currency))),
+        Err(ApiError::NotFound) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 #[derive(Serialize)]
 struct Info {
     /// Donations are open for this app.

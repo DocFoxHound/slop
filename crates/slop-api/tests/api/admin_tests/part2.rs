@@ -970,6 +970,30 @@ fn tool_cases(ids: &ToolIds) -> Vec<(&'static str, Value, &'static str, &'static
             "review",
             &["key"],
         ),
+        (
+            "app_of_the_month",
+            json!({ "month": "2026-11" }),
+            "review",
+            &[],
+        ),
+        (
+            "nominate_app_of_the_month",
+            json!({ "slug": "game", "note": "Lovely." }),
+            "review",
+            &[],
+        ),
+        (
+            "vote_app_of_the_month",
+            json!({ "slug": "game" }),
+            "review",
+            &["slug"],
+        ),
+        (
+            "unvote_app_of_the_month",
+            json!({ "slug": "game" }),
+            "review",
+            &["slug"],
+        ),
         ("legal_documents", json!({}), "read", &[]),
         (
             "publish_legal_document",

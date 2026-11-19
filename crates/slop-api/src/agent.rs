@@ -1007,6 +1007,39 @@ const TOOLS: &[Tool] = &[
         properties: || json!({ "key": s("popular, upcoming, categories, not_slop, barely_seen, glow_ups, community, fresh or fresh_slop"), "hidden": { "type": "boolean", "description": "true hides it" } }),
         required: &["key", "hidden"],
     },
+    // App of the Month (awards.rs). Confirming winners and prizes is the owner's, signed in.
+    Tool {
+        name: "app_of_the_month",
+        description: "This month's App of the Month nominations (or an earlier month's), each with its votes and who voted, your own votes (3 a month), and the month's winners with their published awards.",
+        method: Method::GET,
+        path: "/v1/admin/awards",
+        properties: || json!({ "month": s("Optional: YYYY-MM; this month when left out") }),
+        required: &[],
+    },
+    Tool {
+        name: "nominate_app_of_the_month",
+        description: "Nominate a public app in the store (Beta or Released, not a community build or server) for this month's App of the Month, with a note for the other staff. Never an app your admin makes. Needs a review or moderate token.",
+        method: Method::POST,
+        path: "/v1/admin/awards/nominations",
+        properties: || json!({ "slug": s("App address"), "note": s("Optional: why, for staff (up to 500 characters)") }),
+        required: &["slug"],
+    },
+    Tool {
+        name: "vote_app_of_the_month",
+        description: "Vote for one of this month's App of the Month nominations (3 votes a month; never for an app your admin makes). Needs a review or moderate token.",
+        method: Method::PUT,
+        path: "/v1/admin/awards/votes/{slug}",
+        properties: || json!({ "slug": s("The nominated app's address") }),
+        required: &["slug"],
+    },
+    Tool {
+        name: "unvote_app_of_the_month",
+        description: "Take back your vote for one of this month's App of the Month nominations. Needs a review or moderate token.",
+        method: Method::DELETE,
+        path: "/v1/admin/awards/votes/{slug}",
+        properties: || json!({ "slug": s("The nominated app's address") }),
+        required: &["slug"],
+    },
     // Legal documents
     Tool {
         name: "legal_documents",

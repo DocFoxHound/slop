@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A player's public profile (crates/slop-api/src/reviews.rs): their votes and reviews when they
-// keep them public (the default; private by default in the UK under-18 view), their apps, and
-// their People page.
+// keep them public (the default; private by default in the UK under-18 view), their apps, their
+// App of the Month awards, and their People page.
 
 import { Link, useParams } from "react-router";
 
 import { api } from "../api";
 import { Avatar } from "../components/Avatar";
+import { awardAmount, MakerAwardBadge, monthLabel } from "../components/Awards";
 import { AppTile, ErrorState, Loading, Shelf } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -36,6 +37,20 @@ export function Profile() {
               </>
             )}
           </p>
+          {p.award_count > 0 && (
+            <p className="profile-awards small">
+              <MakerAwardBadge count={p.award_count} />{" "}
+              {p.awards.map((a, i) => (
+                <span key={`${a.month}-${a.slug}`}>
+                  {i > 0 && " · "}
+                  <Link to={`/app/${a.slug}`}>{a.title}</Link>{" "}
+                  <span className="muted">
+                    ({monthLabel(a.month)}, {awardAmount(a.amount_minor, a.currency)} award)
+                  </span>
+                </span>
+              ))}
+            </p>
+          )}
           <ConnectionButtons userId={id} name={p.name} />
         </div>
       </div>

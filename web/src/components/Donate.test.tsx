@@ -223,6 +223,38 @@ describe("DonateButton", () => {
     expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent?.trim())).toEqual(["Donate", "Close"]);
   });
 
+  it("opens the form with an amount from a ?donate= link (paying an App of the Month award)", async () => {
+    session.me = { id: "u1", adult_confirmed: true };
+    vi.spyOn(api.donations, "info").mockResolvedValue(signedIn);
+    const quote = vi
+      .spyOn(api.donations, "quote")
+      .mockResolvedValue({ donation: 2500, total: 2620, slop_fee: 125, processing: 120, maker_receives: 2375, donor_covers_fees: true, currency: "usd", consent: null });
+    render(
+      <MemoryRouter initialEntries={["/app/herds?donate=25.00"]}>
+        <DonateButton slug="herds" title="Angry Herds" />
+      </MemoryRouter>,
+    );
+    const panel = await screen.findByRole("dialog", { name: "Donate to Angry Herds" });
+    await waitFor(() => expect(document.activeElement).toBe(panel));
+    expect((within(panel).getByLabelText(/Or your own amount/) as HTMLInputElement).value).toBe("25.00");
+    await waitFor(() => expect(quote).toHaveBeenCalledWith("herds", 2500));
+    // The donor still sees the total and presses Donate themselves.
+    expect(await within(panel).findByRole("button", { name: "Donate $26.20" })).toBeTruthy();
+  });
+
+  it("ignores a ?donate= amount that isn't one", async () => {
+    session.me = { id: "u1", adult_confirmed: true };
+    vi.spyOn(api.donations, "info").mockResolvedValue(signedIn);
+    render(
+      <MemoryRouter initialEntries={["/app/herds?donate=lots"]}>
+        <DonateButton slug="herds" title="Angry Herds" />
+      </MemoryRouter>,
+    );
+    const panel = await screen.findByRole("dialog", { name: "Donate to Angry Herds" });
+    expect((within(panel).getByLabelText(/Or your own amount/) as HTMLInputElement).value).toBe("");
+    expect(within(panel).getByRole("button", { name: "Choose an amount" })).toBeTruthy();
+  });
+
   it("shows nothing at all for an app that isn't in the store", async () => {
     vi.spyOn(api.donations, "info").mockRejectedValue(new ApiError(404, "not_found", "not found"));
     const { container } = show();

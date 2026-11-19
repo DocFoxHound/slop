@@ -262,6 +262,9 @@ struct Profile {
     /// Apps they make, in the store.
     apps: Vec<AppSummary>,
     votes: Vec<ProfileVote>,
+    /// App of the Month awards they won, with apps in the store for the viewer (awards.rs).
+    award_count: usize,
+    awards: Vec<crate::awards::MakerAward>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -323,6 +326,7 @@ async fn profile(
     } else {
         Vec::new()
     };
+    let awards = crate::awards::of_maker(&state, id, policy).await?;
     Ok(Json(Profile {
         id,
         name,
@@ -333,6 +337,8 @@ async fn profile(
         avatar_url: crate::avatars::url_of(&state, id).await?,
         apps,
         votes,
+        award_count: awards.len(),
+        awards,
     }))
 }
 

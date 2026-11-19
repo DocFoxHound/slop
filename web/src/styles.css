@@ -157,6 +157,13 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .badge[class*=" ai-"] .store-icon { --icon-accent: currentColor; }
 .badge.soon { background: rgba(251, 191, 36, 0.16); color: var(--warn); }
 .badge.beta { background: rgba(168, 85, 247, 0.18); color: #c084fc; }
+/* App of the Month (components/Awards.tsx): a link to the awards page. */
+.badge.award { background: rgba(251, 191, 36, 0.16); color: var(--warn); text-decoration: none; }
+.badge.award:hover { background: rgba(251, 191, 36, 0.26); }
+.profile-awards { margin: 6px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.award-month { margin-bottom: 24px; }
+.award-winners { list-style: none; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.award-winners li { display: flex; flex-direction: column; gap: 6px; }
 .notice { background: rgba(96, 165, 250, 0.08); border: 1px solid rgba(96, 165, 250, 0.3); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
 /* A notice with a × to close it (Sandbox.tsx SaveSyncNotice). */
 .notice.dismissable { display: flex; align-items: flex-start; gap: 10px; }
