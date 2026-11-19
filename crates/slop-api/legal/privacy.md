@@ -1,7 +1,7 @@
 ---
 title: Privacy Policy
-version: 2026-11-11
-summary: Makers now see daily totals for their own apps (never who). If a maker switches on Results on GitHub, their releases' results are posted there. News from makers of apps you marked Interested shows under the bell. Open requests on People are public, with the display name of whoever posted them.
+version: 2026-11-19
+summary: Release files and repositories are checked for malware on a second server of ours, with another hosting provider.
 ---
 > **Draft for legal review.** This policy hasn't been reviewed by a lawyer yet.
 
@@ -31,7 +31,7 @@ IronPoint Development LLC ("SLAPorSLOP") is the controller of the personal data 
 We never sell your data, and we don't use it to train AI models.
 
 ## Who receives it
-Our hosting provider, GitHub (sign-in, apps' repositories), and Stripe (payments, as an independent controller). Makers never learn who donated unless the donor chooses to tell them.
+Our hosting providers (one runs the site; the other checks release files and repositories for malware), GitHub (sign-in, apps' repositories, and the checks makers run there), and Stripe (payments, as an independent controller). Makers never learn who donated unless the donor chooses to tell them.
 
 **Makers:** A maker, and an AI agent they connected, see totals for their own apps: for each day, how many accounts played the app, how many played it for the first time, and how many times it was added to a library. They never see who. On a day when one account played, the total is 1. When these totals began, they were filled in once for the time before, from what was still stored: first plays of accounts that had "Share my playtime" on at that moment, and adds of apps that were still in a library. Since then, your launches count in these totals only while "Share my playtime" is on: to stay out of them, switch it off on your account page. What was already counted stays, since the totals hold no account. Adding an app to your library counts as one add whatever that setting says, and removing it the same day takes the add back. Nothing is counted for a Private app or a dedicated server, and your launches and adds of your own apps aren't counted.
 
