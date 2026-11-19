@@ -48,7 +48,7 @@ async fn assert_invite_required(res: Response) {
     assert_eq!(body["error"]["code"], "invite_required", "{body}");
     assert_eq!(
         body["error"]["message"],
-        "SLAPorSLOP is in beta: going public needs an invite code. Enter it when you publish on the website."
+        "SLAPorSLOP is a closed beta for now: publishing needs an invite code. Ask for one on the SLAPorSLOP Discord, then enter it on the website."
     );
 }
 
@@ -109,7 +109,7 @@ async fn going_public_needs_the_invite_code_once_staff_switch_it_on(db: PgPool) 
     let (_, admin) = make_admin(&app, "Ada Admin").await;
     assert_eq!(
         mine(&app, &maker).await,
-        json!({ "required": false, "invited": false })
+        json!({ "required": false, "invited": false, "discord_url": "" })
     );
     let first = ready_release(&app, &maker, "1.0.0").await;
     assert_eq!(
@@ -123,7 +123,7 @@ async fn going_public_needs_the_invite_code_once_staff_switch_it_on(db: PgPool) 
     assert_eq!(view["invited"], 0);
     assert_eq!(
         mine(&app, &maker).await,
-        json!({ "required": true, "invited": false })
+        json!({ "required": true, "invited": false, "discord_url": "" })
     );
     let second = ready_release(&app, &maker, "1.1.0").await;
     assert_invite_required(app.send(publish(&second, &maker)).await).await;
@@ -153,7 +153,7 @@ async fn going_public_needs_the_invite_code_once_staff_switch_it_on(db: PgPool) 
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(
         body_json(res).await,
-        json!({ "required": true, "invited": true })
+        json!({ "required": true, "invited": true, "discord_url": "" })
     );
     assert_eq!(
         status_of(&app, publish(&second, &maker)).await,
@@ -178,7 +178,7 @@ async fn going_public_needs_the_invite_code_once_staff_switch_it_on(db: PgPool) 
     let (_, newcomer) = app.user("Nina Newcomer", "US").await;
     assert_eq!(
         mine(&app, &newcomer).await,
-        json!({ "required": false, "invited": false })
+        json!({ "required": false, "invited": false, "discord_url": "" })
     );
     private_app(&app, &newcomer, "open-tool").await;
     assert_eq!(
@@ -263,7 +263,7 @@ async fn staff_go_public_without_the_code(db: PgPool) {
     set_invite(&app, &admin, true, "beta-fox").await;
     assert_eq!(
         mine(&app, &admin).await,
-        json!({ "required": true, "invited": true })
+        json!({ "required": true, "invited": true, "discord_url": "" })
     );
     private_app(&app, &admin, "staff-tool").await;
     assert_eq!(
@@ -342,7 +342,10 @@ async fn only_staff_see_and_change_the_invite_code(db: PgPool) {
             .await
             .unwrap();
     assert!(actor.contains("Ada Admin"), "{actor}");
-    assert_eq!(detail, json!({ "required": true, "code": "beta-fox" }));
+    assert_eq!(
+        detail,
+        json!({ "required": true, "code": "beta-fox", "discord_url": null })
+    );
 }
 
 /// An AI agent can't enter the code (it isn't one of the routes a token may call, and the route
@@ -406,6 +409,79 @@ async fn invite_code_tries_are_limited(db: PgPool) {
     assert_eq!(body_json(res).await["error"]["code"], "rate_limited");
     assert_eq!(
         mine(&app, &maker).await,
-        json!({ "required": true, "invited": false })
+        json!({ "required": true, "invited": false, "discord_url": "" })
+    );
+}
+
+/// Staff set the Discord's invite link next to the code; makers see it on their banner. Left out
+/// keeps it, empty clears it, and only an https link is taken.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_set_the_discord_link_makers_ask_on(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    let put = |body: Value| {
+        app.send(
+            req(Method::PUT, "/v1/admin/publish-invite")
+                .cookie(&admin)
+                .json(body),
+        )
+    };
+    let res = put(
+        json!({ "required": true, "code": "beta-fox", "discord_url": " https://discord.gg/slap " }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(res).await["discord_url"],
+        "https://discord.gg/slap"
+    );
+    assert_eq!(
+        mine(&app, &maker).await,
+        json!({ "required": true, "invited": false, "discord_url": "https://discord.gg/slap" })
+    );
+    // Left out (the admin tool's older callers): kept.
+    set_invite(&app, &admin, true, "beta-wolf").await;
+    assert_eq!(
+        mine(&app, &maker).await["discord_url"],
+        "https://discord.gg/slap"
+    );
+    for bad in [
+        "http://discord.gg/slap",
+        "discord.gg/slap",
+        "javascript:alert(1)",
+    ] {
+        let res = put(json!({ "required": true, "code": "beta-fox", "discord_url": bad })).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+        assert_eq!(body_json(res).await["error"]["field"], "discord_url");
+    }
+    assert_eq!(
+        mine(&app, &maker).await["discord_url"],
+        "https://discord.gg/slap"
+    );
+    let res = put(json!({ "required": true, "code": "beta-fox", "discord_url": "" })).await;
+    assert_eq!(body_json(res).await["discord_url"], "");
+}
+
+/// Entered once, kept for good: switching the invite off and on, and changing the code twice,
+/// never takes it away.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_entered_code_lets_the_account_publish_for_good(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    set_invite(&app, &admin, true, "beta-fox").await;
+    assert_eq!(
+        enter(&app, &maker, "beta-fox").await.status(),
+        StatusCode::OK
+    );
+    set_invite(&app, &admin, false, "").await;
+    set_invite(&app, &admin, true, "beta-wolf").await;
+    set_invite(&app, &admin, true, "beta-bear").await;
+    assert_eq!(mine(&app, &maker).await["invited"], true);
+    let release = ready_release(&app, &maker, "1.0.0").await;
+    assert_eq!(
+        status_of(&app, publish(&release, &maker)).await,
+        StatusCode::OK
     );
 }

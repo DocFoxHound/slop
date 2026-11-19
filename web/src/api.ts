@@ -162,7 +162,13 @@ export interface AppSummary {
 export type ReleasePrecision = "day" | "month";
 
 /** An app on the front page's Hot reel (crates/slop-api/src/hot.rs): this week's numbers. */
-export type HotApp = AppSummary & { adds_week: number; slaps_week: number; players_week: number };
+export type HotApp = AppSummary & {
+  adds_week: number;
+  slaps_week: number;
+  players_week: number;
+  /** The store page's approved gallery, which the reel cycles through (hot.rs). */
+  gallery?: GalleryItem[];
+};
 
 /** Donations (crates/slop-api/src/donations.rs). Amounts are in minor units (cents). */
 export interface DonationQuote {
@@ -1984,6 +1990,8 @@ export interface AdminFeatured {
 export interface AdminPublishInvite {
   required: boolean;
   code: string;
+  /** The SLAPorSLOP Discord's invite link, where makers ask for the code; "" when not set. */
+  discord_url: string;
   updated_at: string;
   /** Accounts that can go public: entered a code, or published before it existed. */
   invited: number;
@@ -1996,6 +2004,8 @@ export interface PublishInvite {
   required: boolean;
   /** Entered it before (any earlier code counts), or SLAPorSLOP staff. */
   invited: boolean;
+  /** The SLAPorSLOP Discord, where makers ask for the code; "" when staff haven't set it. */
+  discord_url: string;
 }
 
 export interface AdminQueue {
@@ -3697,8 +3707,8 @@ export const api = {
         { reason },
       ),
     publishInvite: () => request<AdminPublishInvite>("GET", "/v1/admin/publish-invite"),
-    setPublishInvite: (required: boolean, code: string) =>
-      request<AdminPublishInvite>("PUT", "/v1/admin/publish-invite", { required, code }),
+    setPublishInvite: (required: boolean, code: string, discord_url: string) =>
+      request<AdminPublishInvite>("PUT", "/v1/admin/publish-invite", { required, code, discord_url }),
     /** App of the Month (awards.rs): a month's nominations, votes and winners. */
     awards: (month?: string) => request<AdminAwards>("GET", `/v1/admin/awards${query({ month })}`),
     nominateAward: (slug: string, note: string) =>

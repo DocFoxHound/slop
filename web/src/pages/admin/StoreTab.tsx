@@ -27,25 +27,30 @@ export function PublishInviteEditor() {
   const current = useLoad(() => api.admin.publishInvite(), []);
   const [required, setRequired] = useState(false);
   const [code, setCode] = useState("");
+  const [discord, setDiscord] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError>();
   const [saved, setSaved] = useState(false);
   const hintId = useId();
   const errorId = useId();
+  const discordHintId = useId();
   const data: AdminPublishInvite | undefined = current.data;
   useEffect(() => {
     if (!data) return;
     setRequired(data.required);
     setCode(data.code);
+    setDiscord(data.discord_url);
   }, [data]);
-  const changed = data !== undefined && (required !== data.required || code.trim() !== data.code);
+  const changed =
+    data !== undefined &&
+    (required !== data.required || code.trim() !== data.code || discord.trim() !== data.discord_url);
   const save = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(undefined);
     setSaved(false);
     try {
-      await api.admin.setPublishInvite(required, code);
+      await api.admin.setPublishInvite(required, code, discord.trim());
       setSaved(true);
       current.reload();
     } catch (err) {
@@ -55,6 +60,7 @@ export function PublishInviteEditor() {
     }
   };
   const onCode = error?.field === "code";
+  const onDiscord = error?.field === "discord_url";
   return (
     <details className="panel panel-pad" open>
       <summary>
@@ -99,6 +105,27 @@ export function PublishInviteEditor() {
           </label>
           <p id={hintId} className="faint small">
             4 to 64 characters. Letter case and spaces around it don't matter.
+          </p>
+          <label>
+            Discord invite link
+            <input
+              type="url"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={300}
+              placeholder="https://discord.gg/…"
+              value={discord}
+              onChange={(e) => {
+                setDiscord(e.target.value);
+                setSaved(false);
+              }}
+              aria-describedby={`${discordHintId}${onDiscord ? ` ${errorId}` : ""}`}
+              aria-invalid={onDiscord || undefined}
+            />
+          </label>
+          <p id={discordHintId} className="faint small">
+            Where makers ask for the code: the closed-beta notice on their pages links here. Empty: it names the Discord
+            without a link.
           </p>
           {error && (
             <p id={errorId} className="form-error" role="alert">

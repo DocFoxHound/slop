@@ -53,7 +53,7 @@ and links, in plain words.
 `release_date` (`YYYY-MM-DD`) with `release_date_precision` `day` (the default) or `month` (only
 the month counts) in `create_store_page` or `update_store_page`; `null` clears it. Only a date your
 maker gave you: players see it on tiles, the store page and the front page's Releasing soon shelf
-(the 60 days before). From today to three years ahead. Once it has passed, players stop seeing it
+(the 14 days before). From today to three years ahead. Once it has passed, players stop seeing it
 and `get_store_page` says `release_date_passed: true`: ask your maker for a new date, or clear it.
 Moving to Released clears it.
 
@@ -113,11 +113,12 @@ If a tool answers `terms_required` (field `publisher`: the Publisher Agreement c
 maker accepted it), tell them it's waiting for them on SLAPorSLOP under **Account → AI agents** (the
 website also shows it when they next publish). Carry on once they've accepted it.
 
-SLAPorSLOP is in beta: while its staff require an invite code, going public (Publish, putting an app
-in the store, making a private app public) answers `invite_required` until your maker has entered
-the code. You can't enter it, and you never need it to make store pages or send releases. Tell
-them to enter it on the website: SLAPorSLOP asks for it when they press Publish, and `whats_left`
-lists it until they have. Once entered, their account keeps it when the code changes.
+SLAPorSLOP is a closed beta for now: while its staff require an invite code, going public (Publish,
+putting an app in the store, making a private app public) answers `invite_required` until your
+maker has entered the code. You can't enter it, and you never need it to make store pages or send
+releases. Tell them to ask for a code on the SLAPorSLOP Discord and enter it on the website (the
+banner on Your apps, or when they press Publish); `whats_left` lists it until they have. Once
+entered, their account keeps it for good, whatever the code becomes later.
 
 ## Every release
 

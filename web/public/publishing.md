@@ -538,11 +538,12 @@ steps: see [Browser games](#browser-games)):
    store** on its Manage page (or its publishing progress). Later releases go out when you
    publish them.
 
-**During the beta:** SLAPorSLOP may ask for an invite code before you go public: publishing,
-putting an app in the store, or asking for a private app to go public. Everything before that
-(store pages, releases and their checks) works without one. When it's needed, the website asks for
-the code when you press the button, then carries on; you enter it once, and your account keeps it
-even if the code changes. An AI agent can't enter it (its tools answer `invite_required`).
+**During the closed beta:** SLAPorSLOP may ask for an invite code before you go public:
+publishing, putting an app in the store, or asking for a private app to go public. Everything
+before that (store pages, releases and their checks) works without one. Ask for a code on the
+SLAPorSLOP Discord, then enter it in the banner on Your apps, or when the website asks as you press
+the button (it then carries on). You enter it once, and your account keeps it for good, even if the
+code changes. An AI agent can't enter it (its tools answer `invite_required`).
 
 #### On hold
 

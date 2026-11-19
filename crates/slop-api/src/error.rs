@@ -36,7 +36,7 @@ pub enum ApiError {
     TermsRequired(&'static str),
     /// Going public needs the beta's invite code, and the user hasn't entered it (invites.rs).
     #[error(
-        "SLAPorSLOP is in beta: going public needs an invite code. Enter it when you publish on the website."
+        "SLAPorSLOP is a closed beta for now: publishing needs an invite code. Ask for one on the SLAPorSLOP Discord, then enter it on the website."
     )]
     InviteRequired,
     #[error("your account is suspended: see the decision on your account page")]

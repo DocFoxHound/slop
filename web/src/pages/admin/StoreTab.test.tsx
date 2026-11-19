@@ -14,6 +14,7 @@ afterEach(() => {
 const off: AdminPublishInvite = {
   required: false,
   code: "",
+  discord_url: "",
   updated_at: "2026-11-19T10:00:00Z",
   invited: 12,
   invited_since_update: 0,
@@ -34,7 +35,7 @@ describe("Publishing invite", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Invite code" }), { target: { value: "beta-fox" } });
     fireEvent.click(save);
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Saved."));
-    expect(set).toHaveBeenCalledWith(true, "beta-fox");
+    expect(set).toHaveBeenCalledWith(true, "beta-fox", "");
   });
 
   it("puts a refused code's reason on the field", async () => {
@@ -51,5 +52,17 @@ describe("Publishing invite", () => {
     expect(error.textContent).toBe("Make the code 4 to 64 characters.");
     expect(field.getAttribute("aria-invalid")).toBe("true");
     expect(field.getAttribute("aria-describedby")).toContain(error.id);
+  });
+
+  it("sets the Discord link makers ask for a code on", async () => {
+    vi.spyOn(api.admin, "publishInvite").mockResolvedValue({ ...off, required: true, code: "beta-fox" });
+    const set = vi
+      .spyOn(api.admin, "setPublishInvite")
+      .mockResolvedValue({ ...off, required: true, code: "beta-fox", discord_url: "https://discord.gg/slap" });
+    render(<PublishInviteEditor />);
+    const field = await screen.findByRole("textbox", { name: "Discord invite link" });
+    fireEvent.change(field, { target: { value: " https://discord.gg/slap " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(set).toHaveBeenCalledWith(true, "beta-fox", "https://discord.gg/slap"));
   });
 });

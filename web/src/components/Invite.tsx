@@ -4,10 +4,11 @@
 // app to go public answer "invite_required" until the account has entered it. The page then asks
 // for the code, and the action runs again once it's entered; nothing they did is lost.
 
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 
 import { api, ApiError } from "../api";
 import { useLoad } from "../hooks";
+import { ExternalLink } from "./ui";
 
 /** Sent on `window` once the code is entered, so notices on the page go away. */
 const ENTERED = "slop:invite-entered";
@@ -48,23 +49,47 @@ export function useInviteGate(): { guard: <T>(fn: () => Promise<T>) => Promise<T
   return { guard, prompt };
 }
 
-/** The invite code, asked for in a dialog: one labelled field, its error said out loud. */
-export function EnterInvite({ onEntered, onCancel }: { onEntered: () => void; onCancel: () => void }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const field = useRef<HTMLInputElement>(null);
+/** Why publishing waits, in the same words on the banner and in the dialog. */
+function ClosedBeta({ discordUrl, id }: { discordUrl: string; id?: string }) {
+  const discord = discordUrl ? <ExternalLink href={discordUrl}>SLAPorSLOP Discord</ExternalLink> : "SLAPorSLOP Discord";
+  return (
+    <div id={id}>
+      <p>
+        SLAPorSLOP is a closed-beta test at the moment, so publishing is invite-only while a small group of makers tries
+        it out. You can make store pages and send releases through the checks now. Publishing a release, putting an app
+        in the store or making a private app public needs an invite code.
+      </p>
+      <p>
+        To get a code, ask on the {discord}. You enter it once: your account can publish from then on, even after the code
+        changes.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The code field and its button. `onEntered` runs once the code is right; a wrong one is said
+ * out loud next to the field, which keeps focus.
+ */
+function CodeForm({
+  onEntered,
+  describedBy,
+  submitLabel,
+  field,
+  children,
+}: {
+  onEntered: () => void;
+  describedBy?: string;
+  submitLabel: string;
+  field?: RefObject<HTMLInputElement | null>;
+  children?: ReactNode;
+}) {
+  const own = useRef<HTMLInputElement>(null);
+  const input = field ?? own;
   const [code, setCode] = useState("");
   const [error, setError] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
-  const titleId = useId();
-  const hintId = useId();
   const errorId = useId();
-  useEffect(() => {
-    // Focus goes back where it was (the button that led here) once the dialog closes.
-    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog.current?.showModal();
-    field.current?.focus();
-    return () => before?.focus();
-  }, []);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -77,59 +102,83 @@ export function EnterInvite({ onEntered, onCancel }: { onEntered: () => void; on
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
       setBusy(false);
-      field.current?.focus();
+      input.current?.focus();
     }
   };
   const onField = error?.field === "code";
+  const described = [describedBy, onField ? errorId : undefined].filter(Boolean).join(" ") || undefined;
 
   return (
-    <dialog ref={dialog} className="dialog" aria-labelledby={titleId} onCancel={onCancel}>
-      <form className="form" onSubmit={(e) => void submit(e)}>
-        <h2 id={titleId}>Enter your invite code</h2>
-        <p id={hintId} className="small">
-          SLAPorSLOP is in beta: going public needs an invite code. You enter it once; your account keeps it even when the
-          code changes.
+    <form className="form invite-form" onSubmit={(e) => void submit(e)}>
+      <label>
+        Invite code
+        <input
+          ref={input}
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={200}
+          required
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          aria-describedby={described}
+          aria-invalid={onField || undefined}
+        />
+      </label>
+      {error && (
+        <p id={errorId} className="form-error" role="alert">
+          {error.message}
         </p>
-        <label>
-          Invite code
-          <input
-            ref={field}
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            maxLength={200}
-            required
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            aria-describedby={`${hintId}${onField ? ` ${errorId}` : ""}`}
-            aria-invalid={onField || undefined}
-          />
-        </label>
-        {error && (
-          <p id={errorId} className="form-error" role="alert">
-            {error.message}
-          </p>
-        )}
-        <div className="row-actions">
-          <button type="submit" className="btn slime" disabled={busy || !code.trim()}>
-            {busy ? "Checking…" : "Enter and continue"}
-          </button>
-          <button type="button" className="btn ghost" onClick={onCancel}>
-            Not now
-          </button>
-        </div>
-      </form>
+      )}
+      <div className="row-actions">
+        <button type="submit" className="btn slime" disabled={busy || !code.trim()}>
+          {busy ? "Checking…" : submitLabel}
+        </button>
+        {children}
+      </div>
+    </form>
+  );
+}
+
+/** The invite code, asked for in a dialog when going public is refused for want of it. */
+export function EnterInvite({ onEntered, onCancel }: { onEntered: () => void; onCancel: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+  const status = useLoad(() => api.publishInvite(), []);
+  const titleId = useId();
+  const hintId = useId();
+  useEffect(() => {
+    // Focus goes back where it was (the button that led here) once the dialog closes.
+    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.current?.showModal();
+    field.current?.focus();
+    return () => before?.focus();
+  }, []);
+
+  return (
+    <dialog ref={dialog} className="dialog" aria-labelledby={titleId} aria-describedby={hintId} onCancel={onCancel}>
+      <h2 id={titleId}>Publishing is invite-only for now</h2>
+      <div className="small">
+        <ClosedBeta id={hintId} discordUrl={status.data?.discord_url ?? ""} />
+      </div>
+      <CodeForm field={field} describedBy={hintId} submitLabel="Enter and continue" onEntered={onEntered}>
+        <button type="button" className="btn ghost" onClick={onCancel}>
+          Not now
+        </button>
+      </CodeForm>
     </dialog>
   );
 }
 
 /**
- * Where makers publish: a short note while the code is needed and not yet entered, so it isn't a
- * surprise at Publish, with a button to enter it now. Nothing otherwise.
+ * The closed-beta banner on the maker's pages (Your apps, a new store page, and each app's maker
+ * tabs) while the code is needed and this account hasn't entered it: why publishing waits, where to
+ * ask for a code, and the field to enter it right there. Nothing otherwise.
  */
 export function InviteNotice() {
   const status = useLoad(() => api.publishInvite(), []);
-  const [asking, setAsking] = useState(false);
+  const titleId = useId();
+  const textId = useId();
   const { reload } = status;
   useEffect(() => {
     window.addEventListener(ENTERED, reload);
@@ -137,15 +186,12 @@ export function InviteNotice() {
   }, [reload]);
   if (!status.data?.required || status.data.invited) return null;
   return (
-    <div className="notice small invite-notice">
-      <p>
-        <b>SLAPorSLOP is in beta:</b> going public needs an invite code. You can make store pages and send releases through
-        the checks now; enter the code before you publish or put an app in the store.
-      </p>
-      <button type="button" className="btn small" aria-haspopup="dialog" onClick={() => setAsking(true)}>
-        Enter invite code
-      </button>
-      {asking && <EnterInvite onEntered={() => setAsking(false)} onCancel={() => setAsking(false)} />}
-    </div>
+    <section className="notice invite-notice" aria-labelledby={titleId}>
+      <h2 id={titleId}>Closed beta: publishing is invite-only for now</h2>
+      <div className="small">
+        <ClosedBeta id={textId} discordUrl={status.data.discord_url} />
+      </div>
+      <CodeForm describedBy={textId} submitLabel="Enter code" onEntered={reload} />
+    </section>
   );
 }

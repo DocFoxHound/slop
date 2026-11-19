@@ -10,6 +10,8 @@
 //! - **Entered once:** an account that entered it (`users.publish_invited_at`) keeps going public
 //!   after the code changes. Makers who had an app in the store, or a published release, before
 //!   the code existed count as invited (migration 0103). Staff never need it.
+//! - **Where to ask:** staff set the SLAPorSLOP Discord's invite link next to the code
+//!   (`discord_url`, migration 0107); the closed-beta notice on the maker's pages links to it.
 //! - **Only the person** enters it, signed in on the website (never an AI agent's token), at most
 //!   `limits::Action::InviteCode` times an hour. A wrong code is a 422 on `code`.
 
@@ -30,6 +32,8 @@ use crate::{
 
 /// The code's length when it's required.
 const CODE_CHARS: std::ops::RangeInclusive<usize> = 4..=64;
+/// The Discord link's longest.
+const URL_CHARS: usize = 300;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -60,11 +64,13 @@ struct Mine {
     required: bool,
     /// This account can go public without entering it: it entered it before, or it's staff's.
     invited: bool,
+    /// The SLAPorSLOP Discord, where makers ask for the code; empty when staff haven't set it.
+    discord_url: String,
 }
 
 async fn load_mine(db: &PgPool, user_id: Uuid) -> sqlx::Result<Mine> {
     sqlx::query_as(
-        "select i.required, (u.publish_invited_at is not null or u.is_admin) as invited
+        "select i.required, (u.publish_invited_at is not null or u.is_admin) as invited, i.discord_url
          from publish_invite i, users u where u.id = $1",
     )
     .bind(user_id)
@@ -126,6 +132,7 @@ async fn enter(
 struct AdminView {
     required: bool,
     code: String,
+    discord_url: String,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
     /// Accounts that can go public without entering it again (entered it, or made apps public
@@ -137,7 +144,7 @@ struct AdminView {
 
 async fn admin_view(db: &PgPool) -> sqlx::Result<AdminView> {
     sqlx::query_as(
-        "select i.required, i.code, i.updated_at,
+        "select i.required, i.code, i.discord_url, i.updated_at,
                 (select count(*) from users where publish_invited_at is not null) as invited,
                 (select count(*) from users where publish_invited_at >= i.updated_at) as invited_since_update
          from publish_invite i",
@@ -156,6 +163,9 @@ struct SetBody {
     required: bool,
     #[serde(default)]
     code: String,
+    /// The Discord's invite link (`https://…`); left out keeps it, empty clears it.
+    #[serde(default)]
+    discord_url: Option<String>,
 }
 
 /// Switches the code on or off, and sets it. Accounts that entered an earlier code keep going
@@ -177,13 +187,26 @@ async fn admin_set(
             ),
         ));
     }
+    let discord_url = body.discord_url.as_deref().map(str::trim);
+    if let Some(url) = discord_url.filter(|u| !u.is_empty()) {
+        let ok = url.chars().count() <= URL_CHARS
+            && url::Url::parse(url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some());
+        if !ok {
+            return Err(ApiError::invalid(
+                "discord_url",
+                "Give the Discord's invite link, starting https://.",
+            ));
+        }
+    }
     let mut tx = state.db.begin().await?;
     sqlx::query(
-        "update publish_invite set required = $1, code = $2, updated_at = now(), updated_by = $3",
+        "update publish_invite set required = $1, code = $2, discord_url = coalesce($4, discord_url),
+                updated_at = now(), updated_by = $3",
     )
     .bind(body.required)
     .bind(code)
     .bind(admin.user_id)
+    .bind(discord_url)
     .execute(&mut *tx)
     .await?;
     crate::admin::audit(
@@ -191,7 +214,7 @@ async fn admin_set(
         &admin.actor,
         "publish_invite.set",
         "publishing invite",
-        json!({ "required": body.required, "code": code }),
+        json!({ "required": body.required, "code": code, "discord_url": discord_url }),
     )
     .await
     .map_err(ApiError::Internal)?;

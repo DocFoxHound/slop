@@ -17,10 +17,14 @@
 //! Only Beta and Released apps (Coming soon can't be played yet) in the store for the viewer
 //! (`push_store_visible`: their age view, hidden, private and delisted apps, missed
 //! deadlines), never community branches, dedicated servers or dead projects.
+//!
+//! Each comes with its approved gallery (screenshots, and videos by their posters), which the reel
+//! cycles through while the app is on screen.
 
 use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};
 use serde::Serialize;
 use sqlx::QueryBuilder;
+use uuid::Uuid;
 
 use crate::{
     AppState,
@@ -50,6 +54,11 @@ struct HotApp {
     slaps_week: i64,
     /// Games: the most playing at once in the last 7 days.
     players_week: i64,
+    #[serde(skip)]
+    hot_id: Uuid,
+    /// The store page's approved gallery, in the maker's order.
+    #[sqlx(skip)]
+    gallery: Vec<crate::media::GalleryItem>,
 }
 
 async fn hot(
@@ -95,7 +104,7 @@ async fn hot(
     catalog::push_summary_columns_with(
         &mut qb,
         &state.config,
-        ", h.adds_week, h.slaps_week, h.players_week",
+        ", h.adds_week, h.slaps_week, h.players_week, h.id as hot_id",
     );
     qb.push(" join counted h on h.id = a.id where h.activity >= ")
         .push_bind(MIN_ACTIVITY)
@@ -104,5 +113,9 @@ async fn hot(
               limit ",
         )
         .push_bind(HOT_APPS);
-    Ok(Json(qb.build_query_as().fetch_all(&state.db).await?))
+    let mut apps: Vec<HotApp> = qb.build_query_as().fetch_all(&state.db).await?;
+    for app in &mut apps {
+        app.gallery = crate::media::gallery(&state, app.hot_id).await?;
+    }
+    Ok(Json(apps))
 }

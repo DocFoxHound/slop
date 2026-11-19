@@ -132,13 +132,14 @@ describe("Publish", () => {
     const published = release({ status: "approved" });
     const publish = vi
       .spyOn(api, "publishRelease")
-      .mockRejectedValueOnce(new ApiError(409, "invite_required", "SLAPorSLOP is in beta: going public needs an invite code."))
+      .mockRejectedValueOnce(new ApiError(409, "invite_required", "SLAPorSLOP is a closed beta for now: publishing needs an invite code."))
       .mockResolvedValue(published);
-    const enter = vi.spyOn(api, "enterPublishInvite").mockResolvedValue({ required: true, invited: true });
+    const enter = vi.spyOn(api, "enterPublishInvite").mockResolvedValue({ required: true, invited: true, discord_url: "" });
+    vi.spyOn(api, "publishInvite").mockResolvedValue({ required: true, invited: false, discord_url: "" });
     const props = show();
     fireEvent.click(screen.getByRole("button", { name: "Publish version 1.4…" }));
     fireEvent.click(screen.getByRole("button", { name: "Yes, publish it" }));
-    await screen.findByRole("dialog", { name: "Enter your invite code" });
+    await screen.findByRole("dialog", { name: "Publishing is invite-only for now" });
     fireEvent.change(screen.getByRole("textbox", { name: "Invite code" }), { target: { value: "beta-fox" } });
     fireEvent.click(screen.getByRole("button", { name: "Enter and continue" }));
     await waitFor(() => expect(props.onPublished).toHaveBeenCalledWith(published));

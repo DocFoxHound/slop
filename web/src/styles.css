@@ -167,8 +167,12 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .notice { background: rgba(96, 165, 250, 0.08); border: 1px solid rgba(96, 165, 250, 0.3); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
 /* A notice with a × to close it (Sandbox.tsx SaveSyncNotice). */
 .notice.dismissable { display: flex; align-items: flex-start; gap: 10px; }
-.invite-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
-.invite-notice > p { flex: 1 1 260px; margin: 0; }
+.invite-notice { border-left: 4px solid var(--slime); }
+.invite-notice h2 { font-size: 1.05rem; margin: 0 0 6px; }
+.invite-notice p { margin: 0 0 6px; }
+.invite-form { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
+.invite-form label { flex: 0 1 260px; }
+.invite-form .form-error { flex-basis: 100%; margin: 0; }
 .notice.dismissable > :first-child { flex: 1; margin: 0; }
 .notice-dismiss { flex: none; margin: -4px -8px -4px 0; font-size: 16px; line-height: 1; }
 /* A form filled in from an AI assistant's handoff link (components/Handoff.tsx). */
@@ -1302,6 +1306,14 @@ label.check.news-switch input { flex: none; width: 18px; height: 18px; margin: 0
 .hot-head { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; padding: 10px 20px; border-bottom: 1px solid var(--line); }
 .hot-head h2 { margin: 0; font-size: 18px; }
 .hot-pause { margin-left: auto; }
+.hot-art { position: relative; overflow: hidden; }
+.hot-art .art img { animation: hot-fade 300ms ease-out; }
+.hot-video { position: absolute; top: 10px; left: 10px; padding: 2px 8px; border-radius: 999px; background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 12px; }
+/* Fills up until the next app shows; paused with the reel. */
+.hot-timer { position: absolute; left: 0; bottom: 0; width: 100%; height: 3px; background: rgba(255, 255, 255, 0.85); transform: scaleX(0); transform-origin: left; animation-name: hot-fill; animation-timing-function: linear; animation-fill-mode: forwards; pointer-events: none; }
+@keyframes hot-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes hot-fade { from { opacity: 0.4; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .hot-timer { display: none; } .hot-art .art img { animation: none; } }
 .featured-text h3 { margin: 0; font-size: 22px; }
 .featured-text h3 a { color: inherit; }
 /* A Coming soon or Beta app's release date ("Releases Dec 5"), beside its stage. */

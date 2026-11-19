@@ -939,6 +939,7 @@ function EditorForm({
         <Link to="/publish">Your apps</Link> › New app
       </div>
       <h1 className="page-title">New app</h1>
+      <InviteNotice />
       {body}
     </div>
   );

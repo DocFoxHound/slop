@@ -962,7 +962,7 @@ const TOOLS: &[Tool] = &[
     // The beta's invite code (invites.rs)
     Tool {
         name: "publish_invite",
-        description: "The beta's invite code for going public: whether it's required, the code, when it was last changed, and how many accounts can go public (entered a code, or published before it existed).",
+        description: "The beta's invite code for going public: whether it's required, the code, the Discord link where makers ask for it, when it was last changed, and how many accounts can go public (entered a code, or published before it existed).",
         method: Method::GET,
         path: "/v1/admin/publish-invite",
         properties: || json!({}),
@@ -973,7 +973,7 @@ const TOOLS: &[Tool] = &[
         description: "Switch the beta's invite code on or off and set it (4 to 64 characters when it's on; letter case and spaces around it don't matter). Accounts that entered an earlier code keep going public.",
         method: Method::PUT,
         path: "/v1/admin/publish-invite",
-        properties: || json!({ "required": { "type": "boolean", "description": "true: publishing, putting an app in the store and making a private app public need the code" }, "code": s("The code; optional when it's off") }),
+        properties: || json!({ "required": { "type": "boolean", "description": "true: publishing, putting an app in the store and making a private app public need the code" }, "code": s("The code; optional when it's off"), "discord_url": s("Optional: the SLAPorSLOP Discord's invite link (https://…), where makers ask for the code; left out keeps it, empty clears it") }),
         required: &["required"],
     },
     Tool {

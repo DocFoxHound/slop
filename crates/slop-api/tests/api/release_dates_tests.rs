@@ -419,12 +419,12 @@ async fn passed_release_dates_are_hidden_from_players_but_not_their_maker(db: Pg
     );
 }
 
-/// Releasing soon: listed public Coming soon and Beta apps with a date in the next 60 days (a
+/// Releasing soon: listed public Coming soon and Beta apps with a date in the next 14 days (a
 /// month that starts by then counts), by the first day each may come (a month before an exact day
 /// on its 1st), in the store for the viewer and never dead. The /upcoming sort puts dated apps
 /// first.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn releasing_soon_is_the_next_60_days_soonest_first(db: PgPool) {
+async fn releasing_soon_is_the_next_14_days_soonest_first(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, _) = app.user("Maker", "US").await;
     let today = "(now() at time zone 'utc')::date";
@@ -434,22 +434,22 @@ async fn releasing_soon_is_the_next_60_days_soonest_first(db: PgPool) {
     };
     let cases: Vec<(&str, &str, String)> = vec![
         ("in-5-days", "beta", on(5)),
-        ("in-60-days", "coming_soon", on(60)),
+        ("in-14-days", "coming_soon", on(14)),
         ("this-month", "coming_soon", in_month(today)),
-        // The month the 60th day is in starts within the window.
+        // The month the 14th day is in starts within the window.
         (
-            "month-of-day-60",
+            "month-of-day-14",
             "coming_soon",
-            in_month(&format!("{today} + 60")),
+            in_month(&format!("{today} + 14")),
         ),
         ("today", "coming_soon", on(0)),
         // Left out:
-        ("in-61-days", "beta", on(61)),
+        ("in-15-days", "beta", on(15)),
         (
             "month-after",
             "coming_soon",
             in_month(&format!(
-                "(date_trunc('month', {today} + 60) + interval '1 month')"
+                "(date_trunc('month', {today} + 14) + interval '1 month')"
             )),
         ),
         ("yesterday", "beta", on(-1)),
@@ -491,26 +491,42 @@ async fn releasing_soon_is_the_next_60_days_soonest_first(db: PgPool) {
         )
     };
     // On the 1st, this-month and today share a first day: the month comes first.
+    // In the first half of a month, day 14 is still this month: the two month cases share a first
+    // day and go by title.
+    let same_month: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select date_trunc('month', {today} + 14) = date_trunc('month', {today})"
+    )))
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    let in_order = |slugs: &[&'static str]| -> Vec<&'static str> {
+        let mut v = slugs.to_vec();
+        if same_month {
+            v.retain(|s| *s != "month-of-day-14");
+            v.insert(0, "month-of-day-14");
+        }
+        v
+    };
     assert_eq!(
         soon("US").await,
-        [
+        in_order(&[
             "this-month",
             "today",
             "adult",
             "in-5-days",
-            "month-of-day-60",
-            "in-60-days"
-        ]
+            "month-of-day-14",
+            "in-14-days"
+        ])
     );
     assert_eq!(
         soon("GB").await,
-        [
+        in_order(&[
             "this-month",
             "today",
             "in-5-days",
-            "month-of-day-60",
-            "in-60-days"
-        ]
+            "month-of-day-14",
+            "in-14-days"
+        ])
     );
     let page = get_json(
         &app,
@@ -528,14 +544,14 @@ async fn releasing_soon_is_the_next_60_days_soonest_first(db: PgPool) {
     .await;
     assert_eq!(
         by_date,
-        [
+        in_order(&[
             "this-month",
             "today",
-            "month-of-day-60",
-            "in-60-days",
+            "month-of-day-14",
+            "in-14-days",
             "month-after",
             "no-date"
-        ]
+        ])
     );
 }
 
@@ -740,6 +756,13 @@ async fn hot_is_whats_taking_off_this_week(db: PgPool) {
     );
     assert_eq!(us[3]["players_week"], 8);
     assert_eq!(us[1]["stage"], "beta");
+    // Each with its gallery for the reel to go through (none approved here), and no inner id.
+    assert!(
+        us.as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["gallery"] == json!([]) && a.get("hot_id").is_none())
+    );
     assert_eq!(
         slugs(&hot("GB").await),
         ["slapped", "rising", "played", "steady"]

@@ -156,7 +156,7 @@ export function Store() {
 
       {show("releasing_soon") && releasingSoon.data && releasingSoon.data.length > 0 && (
         <>
-          <SectionHeader title="Releasing soon" sub="Release dates their makers gave, in the next 60 days, soonest first">
+          <SectionHeader title="Releasing soon" sub="Release dates their makers gave, in the next 14 days, soonest first">
             <Link to="/upcoming?sort=release_date" className="sub">
               See all →
             </Link>

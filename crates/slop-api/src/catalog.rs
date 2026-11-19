@@ -363,7 +363,7 @@ enum Sort {
     /// Released in the last 60 days and in few libraries so far, in an order that changes every
     /// day, so each new app gets seen ("New and barely seen", DESIGN §5).
     BarelySeen,
-    /// Coming soon and Beta apps whose release date falls in the next 60 days (a month that
+    /// Coming soon and Beta apps whose release date falls in the next 14 days (a month that
     /// overlaps them counts), by the first day each may come (a month: its 1st); never dead
     /// projects ("Releasing soon", DESIGN §5).
     ReleasingSoon,
@@ -410,7 +410,7 @@ const MAX_PAGE: i64 = 50;
 const BARELY_SEEN_LIBRARIES: i64 = 25;
 
 /// "Releasing soon": a release date within this many days from today.
-pub(crate) const RELEASING_SOON_DAYS: i32 = 60;
+pub(crate) const RELEASING_SOON_DAYS: i32 = 14;
 
 /// Most players at once over the last 7 days (Slop Pulse). `a` is `apps`.
 pub(crate) const PLAYERS_THIS_WEEK: &str = "(select coalesce(max(p.players), 0) from pulse_counts p

@@ -145,7 +145,7 @@ async fn next_steps(
             Err(ApiError::InviteRequired) => step(
                 Who::You,
                 None,
-                "SLAPorSLOP is in beta: going public needs an invite code. Enter it on the website before you publish: SLAPorSLOP asks for it when you press Publish or Put it in the store. Store pages and releases can be made and checked without it.".into(),
+                "SLAPorSLOP is a closed beta for now: publishing needs an invite code. Ask for one on the SLAPorSLOP Discord, then enter it on the website (the banner on Your apps, or when you press Publish or Put it in the store). Store pages and releases can be made and checked without it.".into(),
                 site("/publish"),
                 false,
             ),
