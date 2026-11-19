@@ -302,16 +302,39 @@ export interface DonationSummary {
   }>;
 }
 
-export interface FeeStatement {
-  month: string;
+/**
+ * Totals of the money paid into the user's own Stripe accounts for one period (statements.rs):
+ * a month (YYYY-MM) or a year (YYYY), per currency and kind. Never payment by payment.
+ */
+export interface StatementTotals {
+  period: string;
   currency: string;
-  kind: "donation" | "people_job";
+  kind: "donation" | "bounty" | "people_job";
+  /** Payments received; refunds and disputes aren't counted. */
   payments: number;
-  received_minor: number;
+  /** What the payers were charged in all. */
+  charged_minor: number;
+  /** Card processing donors added on top of their donation, which went toward Stripe's fee. */
+  processing_covered_minor: number;
+  /** What the payers paid toward the user: charged, less the processing added. */
+  gross_minor: number;
+  refunded_minor: number;
+  disputed_minor: number;
   slop_fee_minor: number;
-  simulated: boolean;
-  /** The VAT included in SLAPorSLOP's fee; zero under the reverse charge. */
+  /** The VAT included in SLAPorSLOP's fee; zero where there's none or it's reverse-charged. */
   vat_minor: number;
+  /** Gross, less refunds, disputes and SLAPorSLOP's fee; before Stripe's own fees. */
+  net_minor: number;
+}
+
+export interface YearStatement {
+  year: number;
+  /** Simulated payments on a server that takes no real ones (never mixed with real ones). */
+  simulated: boolean;
+  totals: StatementTotals[];
+  /** Months with money in them, oldest first. */
+  months: StatementTotals[];
+  vat: VatTreatment;
 }
 
 /** How VAT applies to SLAPorSLOP's fee for this user (LEGAL §3.5): the 5% always includes it. */
@@ -4403,11 +4426,15 @@ export const api = {
         "POST",
         "/v1/me/donation-account/refresh",
       ),
-    feeStatements: () =>
-      request<{ statements: FeeStatement[]; vat: VatTreatment }>(
-        "GET",
-        "/v1/me/fee-statements",
-      ),
+  },
+  /** Yearly money statements (statements.rs): the signed-in person's own, never an agent's. */
+  statements: {
+    /** Years with money in them, newest first. */
+    years: () =>
+      request<{ years: number[]; simulated: boolean }>("GET", "/v1/me/statements"),
+    year: (year: number) => request<YearStatement>("GET", `/v1/me/statements/${year}`),
+    /** The same totals as a CSV file's text. */
+    csv: (year: number) => requestText("GET", `/v1/me/statements/${year}.csv`),
   },
   interested: {
     mine: () =>

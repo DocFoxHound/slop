@@ -70,9 +70,9 @@ export const ACCOUNT_SECTIONS: AccountSection[] = [
   {
     id: "money",
     label: "Money",
-    intro: "Donations you give and receive, and SLAPorSLOP's fee statements.",
+    intro: "Donations you give and receive, and yearly statements of the money you receive.",
     group: "Publishing & money",
-    parts: ["money", "donations", "receiving", "fee-statements"],
+    parts: ["money", "donations", "receiving", "statements", "fee-statements"],
   },
   {
     id: "moderation",

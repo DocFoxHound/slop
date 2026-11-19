@@ -243,6 +243,13 @@ const EXPORT: &[(&str, &str)] = &[
         "select to_jsonb(d) - 'user_id' from donation_accounts d where d.user_id = $1",
     ),
     (
+        // Every Stripe account the user has received money in (statements.rs).
+        "stripe_accounts",
+        "select coalesce(jsonb_agg(jsonb_build_object('account', stripe_account_id, 'first_used_at', created_at)
+                order by created_at), '[]')
+         from stripe_account_owners where user_id = $1",
+    ),
+    (
         "friends",
         "select coalesce(jsonb_agg(jsonb_build_object('user', case when f.user_a = $1 then f.user_b else f.user_a end,
                 'since', f.since)), '[]')
@@ -359,6 +366,21 @@ async fn export(State(state): State<AppState>, user: CurrentUser) -> ApiResult<R
             .await?;
         out.insert((*name).into(), value.unwrap_or(Value::Null));
     }
+    // Money received, as the yearly statements total it: by month, currency and kind, never
+    // payment by payment (statements.rs).
+    let vat = crate::donations::vat_treatment(&state, &user).await?;
+    let received = crate::statements::monthly(
+        &state.db,
+        user.id,
+        None,
+        crate::statements::simulated(&state),
+        crate::statements::vat_rate(&vat),
+    )
+    .await?;
+    out.insert(
+        "money_received".into(),
+        serde_json::to_value(received).map_err(anyhow::Error::from)?,
+    );
     // Encrypted fields, as the person entered them (fields.rs).
     if let Some(vat) = out
         .get_mut("account")

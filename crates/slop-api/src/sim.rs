@@ -720,6 +720,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         "donations",
         "server_donations",
         "donation_accounts",
+        "stripe_account_owners",
         "job_payments",
         "jobs",
         "stripe_events",
