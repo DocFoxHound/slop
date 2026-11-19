@@ -63,7 +63,7 @@ jobs:
       - name: Build them in
         run: |
           printf 'FROM slop-scanner\nCOPY --chown=900 db /baked-db\nENV SLOP_SCAN_DB=/baked-db\n' > ctx/Containerfile
-          docker build -q -t "$IMAGE:latest" ctx
+          docker build -q -t "$IMAGE:latest" -f ctx/Containerfile ctx
           # A plain file scans clean with the image as built, or it isn't published.
           echo "SLAPorSLOP scanner image check" > ctx/check.txt
           docker run --rm -i --network=none --read-only --tmpfs /tmp:rw,size=1g,mode=1777 \
