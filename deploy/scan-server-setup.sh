@@ -33,7 +33,6 @@ say "The token production sends"
 ENV="$HOME/.config/slop/scan-server.env"
 if ! grep -q '^SLOP_SCAN_TOKEN=' "$ENV" 2>/dev/null; then
   (umask 077; echo "SLOP_SCAN_TOKEN=$(openssl rand -hex 32)" >>"$ENV")
-  NEW_TOKEN=1
 fi
 chmod 600 "$ENV"
 
@@ -49,7 +48,7 @@ systemctl --user enable -q slop-scan-server.service slop-deploy.timer slop-scan-
 
 say "Today's signatures and rules (a few minutes)"
 if ! podman volume exists slop-scan-db; then
-  podman volume create -q slop-scan-db >/dev/null
+  podman volume create slop-scan-db >/dev/null
   podman run --rm --user 0 -v slop-scan-db:/db --entrypoint sh slop-scanner -c 'chown -R 900 /db'
 fi
 systemctl --user start slop-scan-update.service
@@ -62,11 +61,13 @@ if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8095/healthz)" =
 else
   say "It isn't answering yet: journalctl --user -u slop-deploy -u slop-scan-server"
 fi
-if [ "${NEW_TOKEN:-}" = 1 ]; then
+# Shown until a run gets this far, so a run that stopped halfway doesn't lose it.
+if [ ! -e "$ROOT/token-shown" ]; then
   echo
   echo "Put these in production's slop.env (/home/slop/.config/slop/slop.env), then restart slop-api there:"
   echo "  SLOP_SCANNER=remote"
   echo "  SLOP_SCAN_URL=https://scan.188-68-41-241.sslip.io/"
   grep '^SLOP_SCAN_TOKEN=' "$ENV" | sed 's/^/  /'
   echo "The token is shown this once; it's kept in $ENV."
+  touch "$ROOT/token-shown"
 fi
