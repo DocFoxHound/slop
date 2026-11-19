@@ -99,10 +99,11 @@ async fn only_reviewing_staff_nominate_and_vote_and_never_for_their_own_apps(db:
         listed_with(&app, mia, slug, "released", "").await;
     }
     listed_with(&app, mia, "soon", "coming_soon", "").await;
+    listed_with(&app, mia, "betty", "beta", "").await;
     listed_with(&app, mia, "drafty", "released", "status = 'draft'").await;
     listed_with(&app, mia, "gone", "released", "status = 'delisted'").await;
     listed_with(&app, mia, "secret", "released", "visibility = 'private'").await;
-    listed_with(&app, rita_id, "ritas-game", "beta", "").await;
+    listed_with(&app, rita_id, "ritas-game", "released", "").await;
 
     // Not staff: nothing here. Staff who only look: refused.
     for r in [
@@ -135,12 +136,12 @@ async fn only_reviewing_staff_nominate_and_vote_and_never_for_their_own_apps(db:
         .await;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 
-    // Only public apps in the store, in Beta or Released.
+    // Only finished (Released) public apps in the store: never Coming soon or Beta.
     assert_eq!(
         nominate(&app, &rita, "nowhere").await.status(),
         StatusCode::NOT_FOUND
     );
-    for slug in ["soon", "drafty", "gone", "secret"] {
+    for slug in ["soon", "betty", "drafty", "gone", "secret"] {
         let res = nominate(&app, &rita, slug).await;
         assert_eq!(res.status(), StatusCode::CONFLICT, "{slug}");
     }
@@ -281,7 +282,7 @@ async fn the_owner_confirms_up_to_three_winners_and_their_makers_are_told(db: Pg
     let (mia, _) = app.user("Mia Maker", "US").await;
     let (max, _) = app.user("Max Maker", "US").await;
     listed_with(&app, mia, "tea-shop", "released", "").await;
-    listed_with(&app, mia, "moss", "beta", "").await;
+    listed_with(&app, mia, "moss", "released", "").await;
     listed_with(&app, max, "lanterns", "released", "").await;
     listed_with(&app, max, "kites", "released", "").await;
     listed_with(&app, max, "unnominated", "released", "").await;

@@ -33,7 +33,7 @@ export function AwardsTab() {
       <section>
         <h2 className="section-title">App of the Month</h2>
         <p className="muted small">
-          Staff nominate public apps in the store (Beta or Released) and vote: {d.max_votes} votes each a month, never for
+          Staff nominate finished public apps in the store (Released only) and vote: {d.max_votes} votes each a month, never for
           an app you make. The owner confirms up to {d.max_winners} winners. Each gets a published award that the owner
           pays by hand as a donation to the app. Shown on the app's page, its maker's profile and{" "}
           <Link to="/awards">/awards</Link>.

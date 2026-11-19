@@ -1035,7 +1035,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "nominate_app_of_the_month",
-        description: "Nominate a public app in the store (Beta or Released, not a community build or server) for this month's App of the Month, with a note for the other staff. Never an app your admin makes. Needs a review or moderate token.",
+        description: "Nominate a finished public app in the store (Released only, never Coming soon or Beta; not a community build or server) for this month's App of the Month, with a note for the other staff. Never an app your admin makes. Needs a review or moderate token.",
         method: Method::POST,
         path: "/v1/admin/awards/nominations",
         properties: || json!({ "slug": s("App address"), "note": s("Optional: why, for staff (up to 500 characters)") }),

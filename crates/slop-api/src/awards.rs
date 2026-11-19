@@ -44,11 +44,12 @@ pub const DEFAULT_AMOUNT_MINOR: i64 = 2500;
 pub const DEFAULT_CURRENCY: &str = "usd";
 const CURRENCIES: [&str; 3] = ["usd", "eur", "gbp"];
 
-/// SQL: app `a` can be nominated or win: public, listed, in Beta or Released (so it has a Donate
-/// button for the prize), and an app of its own (not a community build or a dedicated server).
+/// SQL: app `a` can be nominated or win: public, listed, Released (a finished app, owner decision
+/// 2026-11-19; it has a Donate button for the prize), and an app of its own (not a community build
+/// or a dedicated server).
 const ELIGIBLE: &str =
     "(a.status = 'listed' and a.visibility = 'public' and a.parent_app_id is null
-                         and a.stage in ('beta', 'released'))";
+                         and a.stage = 'released')";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -217,7 +218,7 @@ fn owner_in_person(admin: &AdminUser) -> ApiResult<()> {
 struct Nomination {
     slug: String,
     title: String,
-    /// Still eligible (public, listed, Beta or Released).
+    /// Still eligible (public, listed, Released).
     eligible: bool,
     /// The viewing staff member makes it: they can't vote for it.
     mine: bool,
@@ -371,7 +372,7 @@ async fn candidate<'c>(db: impl sqlx::PgExecutor<'c>, slug: &str) -> ApiResult<C
 
 const OWN_APP: &str = "you make this app, so you can't nominate, vote for or confirm it";
 const NOT_ELIGIBLE: &str =
-    "only a public app in the store, in Beta or Released, can be App of the Month";
+    "only a finished app (Released) that's public and in the store can be App of the Month";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
