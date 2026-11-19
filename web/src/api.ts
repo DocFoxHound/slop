@@ -77,6 +77,77 @@ export interface AppHistory {
   days: HistoryDay[];
 }
 
+/** Donations in one currency (crates/slop-api/src/maker_stats.rs). */
+export interface StatsMoney {
+  currency: string;
+  /** Paid donations, refunded ones included. */
+  donations: number;
+  /** What the donors chose for the maker, before SLAPorSLOP's fee. */
+  donated_minor: number;
+  refunded_minor: number;
+}
+
+/** One of the maker's apps on the Stats tab. Library adds and plays are null when they aren't counted for it. */
+export interface AppStats {
+  slug: string;
+  title: string;
+  kind: "game" | "app";
+  stage: AppStage;
+  status: AppStatus;
+  private: boolean;
+  branch_of: string | null;
+  server_for: string | null;
+  /** Library adds and plays are counted for it: not for a private app or a dedicated server. */
+  counted: boolean;
+  library_adds: number | null;
+  library_adds_7d: number | null;
+  library_adds_30d: number | null;
+  /** Each of the last 30 UTC days (MakerStats.days), oldest first; null before counting began. Empty when not counted. */
+  daily_library_adds: Array<number | null>;
+  first_plays_30d: number | null;
+  /** The most playing at once in 30 days (Slop Pulse); null without Pulse counts. */
+  peak_players_30d: number | null;
+  /** Libraries it's in now, besides the maker's. */
+  in_libraries: number;
+  not_slop: number;
+  slop: number;
+  /** Weighted % Slaps; null below the minimum number of votes. */
+  not_slop_percent: number | null;
+  interested: number;
+  releases_published: number;
+  open_bounties: number;
+  reviews: number;
+  donations: StatsMoney[];
+  /** App of the Month, newest first. */
+  awards: Array<{ month: string; position: number }>;
+}
+
+/** The maker's Stats tab: every app they make and their account overall (GET /v1/me/maker-stats). */
+export interface MakerStats {
+  /** The donation figures are simulated payments. */
+  simulated: boolean;
+  /** The 30 UTC days of each app's daily series, oldest first. */
+  days: string[];
+  account: {
+    apps: number;
+    counts: Record<AppStatus | AppStage | "private", number>;
+    library_adds: number;
+    library_adds_30d: number;
+    first_plays_30d: number;
+    in_libraries: number;
+    not_slop: number;
+    slop: number;
+    not_slop_percent: number | null;
+    interested: number;
+    releases_published: number;
+    awards: number;
+    donations: StatsMoney[];
+    donations_this_year: StatsMoney[];
+    busiest: { slug: string; title: string; library_adds_30d: number; peak_players_30d: number | null } | null;
+  };
+  apps: AppStats[];
+}
+
 /** Updates for an installed app (crates/slop-api/src/library.rs). */
 export interface AppUpdate {
   slug: string;
@@ -4571,6 +4642,8 @@ export const api = {
         "/v1/me/donation-account/refresh",
       ),
   },
+  /** The maker's Stats tab (maker_stats.rs): the signed-in person's own, never an agent's. */
+  makerStats: () => request<MakerStats>("GET", "/v1/me/maker-stats"),
   /** Yearly money statements (statements.rs): the signed-in person's own, never an agent's. */
   statements: {
     /** Years with money in them, newest first. */

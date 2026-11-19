@@ -41,7 +41,8 @@ pub enum Action {
     SourceCheck,
     /// Adding an app to the library: each real add counts in its maker's History (history.rs).
     LibraryAdd,
-    /// Reading an app's History (history.rs): up to a year of days each time.
+    /// Reading an app's History (history.rs): up to a year of days each time. Also the maker's
+    /// Stats (maker_stats.rs), which reads every one of their apps' last 30 days.
     History,
     /// Switching results on GitHub or checking again: each one asks GitHub for a token.
     CommitStatus,

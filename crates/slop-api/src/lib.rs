@@ -50,6 +50,7 @@ pub mod library;
 pub mod limits;
 pub mod maker_agents;
 pub mod maker_keys;
+pub mod maker_stats;
 pub mod manage;
 pub mod media;
 pub mod moderation;
@@ -329,6 +330,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(ops::routes())
         .merge(donations::routes())
         .merge(statements::routes())
+        .merge(maker_stats::routes())
         .merge(donation_holds::routes())
         .merge(reviews::routes())
         .merge(branches::routes())

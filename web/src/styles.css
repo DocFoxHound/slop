@@ -1147,6 +1147,24 @@ label.check.news-switch input { flex: none; width: 18px; height: 18px; margin: 0
 .statement-table caption { text-align: left; font-weight: 600; padding: 4px 0 6px; }
 .statement-table td, .statement-table thead th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+/* Publish → Stats (pages/MakerStats.tsx): the account's cards, then a row per app. */
+.stats-h { font-size: 16px; margin: 18px 0 10px; }
+.stat-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin: 0 0 8px; }
+.stat-card { padding: 12px 14px; margin: 0; }
+.stat-card dd { margin: 0; }
+.stat-value { font-size: 22px; font-weight: 700; margin: 2px 0 4px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.stats-table caption { text-align: left; font-weight: 600; padding: 4px 0 6px; }
+.stats-table th[scope="row"] { color: var(--text); font-weight: 600; min-width: 160px; }
+.stats-table th[scope="row"] .muted { font-weight: 400; }
+.stats-table td { font-variant-numeric: tabular-nums; vertical-align: top; }
+.spark-cell { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.spark { display: block; flex: none; }
+.spark polyline { fill: none; stroke: var(--slime); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.spark circle { fill: var(--slime); }
+.spark-base { stroke: var(--line); stroke-width: 1; }
+.spark-hit { fill: transparent; }
+.spark-hit:hover { fill: var(--slime-soft); }
+
 /* Chat (pages/Chat.tsx): a list of chats beside the open one, filling the window. */
 .chat-layout { display: grid; grid-template-columns: 300px 1fr; height: 100%; min-height: 0; }
 .chat-list { border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }

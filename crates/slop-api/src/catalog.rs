@@ -1831,6 +1831,16 @@ async fn address_available(
     _user: CurrentUser,
     Path(slug): Path<String>,
 ) -> ApiResult<Json<AddressCheck>> {
+    // Kept for the website's own pages: not free, with one like it that is.
+    if RESERVED_SLUGS.contains(&slug.as_str()) {
+        let like = format!("{slug}-2");
+        let suggestion = free_address(&state.db, &like).await?.unwrap_or(like);
+        return Ok(Json(AddressCheck {
+            available: false,
+            slug,
+            suggestion: Some(suggestion),
+        }));
+    }
     validate_slug(&slug)?;
     let suggestion = free_address(&state.db, &slug).await?;
     Ok(Json(AddressCheck {
@@ -1864,7 +1874,17 @@ pub(crate) async fn free_address(db: &sqlx::PgPool, slug: &str) -> sqlx::Result<
     }))
 }
 
+/// Addresses the website uses for its own pages under `/publish/` (web/src/main.tsx), so no app
+/// can have them: its pages there would be the website's instead.
+pub const RESERVED_SLUGS: &[&str] = &["new", "guide", "stats"];
+
 pub(crate) fn validate_slug(slug: &str) -> ApiResult<()> {
+    if RESERVED_SLUGS.contains(&slug) {
+        return Err(ApiError::invalid(
+            "slug",
+            "that address is kept for SLAPorSLOP's own pages: choose another",
+        ));
+    }
     let ok = (3..=60).contains(&slug.len())
         && slug.split('-').all(|part| {
             !part.is_empty()
@@ -2636,7 +2656,9 @@ mod tests {
         for ok in ["abc", "pixel-dungeon-2", "a1b"] {
             assert!(validate_slug(ok).is_ok(), "{ok}");
         }
-        for bad in ["ab", "Abc", "a--b", "-abc", "abc-", "a_b", "ünï"] {
+        for bad in [
+            "ab", "Abc", "a--b", "-abc", "abc-", "a_b", "ünï", "stats", "guide",
+        ] {
             assert!(validate_slug(bad).is_err(), "{bad}");
         }
     }
