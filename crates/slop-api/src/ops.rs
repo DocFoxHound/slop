@@ -8,7 +8,7 @@
 //! - deploys (`SLOP_OPS_DEPLOY_DIR`): a commit that failed to deploy, and known-vulnerable
 //!   dependencies in the running build (OSV, checked on every deploy);
 //! - free disk space;
-//! - the scanner failing on a release;
+//! - the scanner failing on a release, and a bad-link list not loading for two days;
 //! - urgent or serious reports as they arrive, and any report past its deadline;
 //! - releases waiting more than a day for review;
 //! - revocations, admin rights or staff roles granted, admin rights removed, payment records not
@@ -331,6 +331,18 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
             "Releases wait for their scans until it does. Check it: systemctl --user status slop-scan-server as slopscan on the scanning server, its Caddy site, and SLOP_SCAN_URL and SLOP_SCAN_TOKEN here.",
             "/admin",
             true,
+        ));
+    }
+
+    // A bad-link list not downloaded for two days: links aren't checked against it.
+    let stale = crate::bad_links::stale(state).await?;
+    if !stale.is_empty() {
+        out.push(alert(
+            "bad-link-lists-stale",
+            format!("Bad-link list not loading: {}", stale.join(", ")),
+            "Links on store pages, profiles and play addresses aren't checked against it. The reason is in journalctl --user -u slop-api (\"couldn't refresh a bad-link list\"); the lists are SLOP_BAD_LINK_FEEDS.",
+            "/admin",
+            false,
         ));
     }
 

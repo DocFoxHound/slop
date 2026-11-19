@@ -500,7 +500,9 @@ impl Config {
         let migrate_database_url = env::var("SLOP_MIGRATE_DATABASE_URL")
             .ok()
             .filter(|s| !s.is_empty());
-        // URLhaus (abuse.ch, public domain) by default; "off" for none.
+        // phishunt.io (CC0) and PhishDestroy's destroylist (MIT) by default, both free for
+        // commercial use; "off" for none. (URLhaus was the default until 2026-11-19: abuse.ch's
+        // lists need a key now and aren't for commercial use, SECURITY §5.)
         let bad_link_feeds = match env::var("SLOP_BAD_LINK_FEEDS") {
             Ok(v) if v.trim() == "off" => vec![],
             Ok(v) if !v.trim().is_empty() => v
@@ -508,7 +510,11 @@ impl Config {
                 .map(|s| s.trim().parse())
                 .collect::<Result<_, _>>()
                 .context("SLOP_BAD_LINK_FEEDS: addresses separated by commas")?,
-            _ => vec!["https://urlhaus.abuse.ch/downloads/text_online/".parse()?],
+            _ => vec![
+                "https://phishunt.io/feed.txt".parse()?,
+                "https://huggingface.co/datasets/phishdestroy/destroylist/resolve/main/urls.txt"
+                    .parse()?,
+            ],
         };
         let public_url: Url = var_or("SLOP_PUBLIC_URL", "http://localhost:8080")
             .parse()

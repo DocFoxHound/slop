@@ -5880,6 +5880,82 @@ async fn a_bad_link_list_that_cannot_be_fetched_does_not_stop_the_other_checks(d
     assert_eq!(lists, 0);
 }
 
+/// Each bad-link list refreshes on its own: one that can't be downloaded keeps its last copy, is
+/// tried again on the next run and tells the admins, and a list no longer used goes.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_failing_bad_link_list_keeps_its_copy_and_the_admins_hear(db: PgPool) {
+    put_raw(
+        "admin-1-good-feed",
+        "bad.txt",
+        b"https://evil.example/steal\n".to_vec(),
+    );
+    let fake = fake_github().await;
+    let app = test_app_with(db, move |c| {
+        c.bad_link_feeds = vec![
+            format!("{fake}raw/octo/game/admin-1-good-feed/.slop/bad.txt")
+                .parse()
+                .unwrap(),
+            format!("{fake}raw/octo/game/no-such-feed/.slop/bad.txt")
+                .parse()
+                .unwrap(),
+        ]
+    })
+    .await;
+    let names = slop_api::bad_links::list_names(&app.state.config.bad_link_feeds);
+    assert_ne!(
+        names[0], names[1],
+        "two lists on one site keep separate copies"
+    );
+    sqlx::query(
+        "insert into bad_links (url, host, source, listed_at) values
+           ('old.example/x', 'old.example', 'URLhaus', now() - interval '3 days'),
+           ('kept.example/x', 'kept.example', $1, now() - interval '3 days')",
+    )
+    .bind(&names[1])
+    .execute(&app.db)
+    .await
+    .unwrap();
+
+    slop_api::abuse::run_once(&app.state).await.unwrap();
+    let lists = || async {
+        sqlx::query_as::<_, (String, String)>("select url, source from bad_links order by url")
+            .fetch_all(&app.db)
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        lists().await,
+        [
+            ("evil.example/steal".to_string(), names[0].clone()),
+            ("kept.example/x".to_string(), names[1].clone()),
+        ],
+        "the list that loaded is new, the one that didn't keeps its copy, URLhaus's is gone"
+    );
+    let alerts: Vec<(String, String)> = slop_api::ops::collect(&app.state)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.key == "bad-link-lists-stale")
+        .map(|a| (a.key, a.title))
+        .collect();
+    assert_eq!(
+        alerts,
+        [(
+            "bad-link-lists-stale".to_string(),
+            format!("Bad-link list not loading: {}", names[1])
+        )]
+    );
+
+    // The next run tries the failing list again, but not the one that's a day fresh.
+    put_raw(
+        "admin-1-good-feed",
+        "bad.txt",
+        b"https://other.example/steal\n".to_vec(),
+    );
+    slop_api::abuse::run_once(&app.state).await.unwrap();
+    assert_eq!(lists().await[0].0, "evil.example/steal");
+}
+
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn an_abuse_signal_is_closed_with_a_note(db: PgPool) {
     let app = test_app(db).await;
