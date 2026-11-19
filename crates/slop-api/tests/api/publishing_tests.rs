@@ -6787,11 +6787,14 @@ fn the_scanner_update_replaces_yara_rules_only_when_new_ones_compile() {
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     };
     stub("freshclam", "#!/bin/sh\necho freshclam >> /db/calls\n");
-    // The GitHub API answers with $TAG; the release download is the zip the test put in /db.
+    // github.com's "latest" page leads to $TAG's (none when $TAG is empty: no answer); the release
+    // download is the zip the test put in /db.
     stub(
         "curl",
         "#!/bin/sh\necho \"curl $*\" >> /db/calls\nout=\"\"\nwhile [ $# -gt 0 ]; do case \"$1\" in -o) out=$2; shift;; esac; shift; done\n\
-         if [ -n \"$out\" ]; then cp /db/release.zip \"$out\"; else printf '{\"tag_name\": \"%s\"}' \"$TAG\"; fi\n",
+         if [ -n \"$out\" ]; then cp /db/release.zip \"$out\"; \
+         elif [ -n \"$TAG\" ]; then printf 'HTTP/2 302\\r\\nlocation: https://github.com/YARAHQ/yara-forge/releases/tag/%s\\r\\n\\r\\n' \"$TAG\"; \
+         else exit 22; fi\n",
     );
     let release = |rule: &str| {
         std::fs::write(
@@ -6874,6 +6877,13 @@ fn the_scanner_update_replaces_yara_rules_only_when_new_ones_compile() {
     assert!(ok, "{out}");
     assert_eq!(version(), "v2");
     assert_ne!(compiled().as_ref(), Some(&first));
+    let second = compiled();
+
+    // GitHub not answering: the rules there are stay.
+    let (ok, out) = update("");
+    assert!(ok, "{out}");
+    assert_eq!(version(), "v2");
+    assert_eq!(compiled(), second);
     remove_scanner_dir(&dir);
 }
 
