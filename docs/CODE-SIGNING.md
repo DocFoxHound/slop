@@ -37,7 +37,8 @@ The build scripts and pipeline are in this repository and are reviewed like any 
 ## The signing allowance
 
 Azure Artifact Signing's plan allows a set number of signatures a month (Basic: 5,000), and each
-release signs about three files (the program, its uninstaller and the installer). `deploy/signing.conf` holds
+release signs eight files (the program, its uninstaller, the installer and the installer's five NSIS
+plugin DLLs). `deploy/signing.conf` holds
 the numbers; `deploy/signing-allowance.sh` counts the pipeline's runs on `main` since the allowance
 last started again. `deploy/promote.sh` shows the count before every release and, once signing is
 on (`SIGNING_ON=1`), refuses a release that would go over it. The pipeline's Windows build checks

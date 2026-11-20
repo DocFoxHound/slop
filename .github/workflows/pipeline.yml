@@ -195,7 +195,8 @@ jobs:
     timeout-minutes: 60
     # On main this build is signed, so it waits for a release approver like production does
     # (docs/CODE-SIGNING.md: nothing is signed until a person approves it). The Azure signing
-    # account trusts exactly this: repo:DocFoxHound/slop:environment:production.
+    # account trusts exactly this subject, which GitHub gives with the owner's and repository's IDs:
+    # repo:DocFoxHound@86894115/slop@1422899541:environment:production.
     environment: ${{ github.ref == 'refs/heads/main' && 'production' || '' }}
     permissions:
       contents: read
@@ -341,10 +342,20 @@ jobs:
       - name: Check the signatures
         if: steps.allowance.outputs.sign == '1'
         run: |
-          # The program (named by its crate, whatever the installer calls it) and the installer.
-          for f in target/release/*.exe "target/release/bundle/nsis/Slop_${VERSION}_x64-setup.exe"; do
-            "$SIGNTOOL" verify //pa //v "$f" | grep -E 'Issued to|Expires|Timestamp|Successfully verified' || { echo "::error::$f isn't signed"; exit 1; }
+          # The installer and the app in it. Not target/release's program: Tauri signs a copy for the
+          # installer and puts the unsigned one back. The uninstaller is signed too, but 7-Zip may not
+          # unpack it byte for byte, so it only gets a warning.
+          installer="target/release/bundle/nsis/Slop_${VERSION}_x64-setup.exe"
+          inside="$(cygpath -u "$RUNNER_TEMP")/installer"
+          rm -rf "$inside"
+          7z x -y -o"$(cygpath -w "$inside")" "$installer" >/dev/null
+          app=$(find "$inside" -maxdepth 1 -iname '*.exe' ! -iname uninstall.exe)
+          [ -n "$app" ] && [ "$(printf '%s\n' "$app" | wc -l)" -eq 1 ] || { echo "::error::the installer doesn't hold one app"; ls -la "$inside"; exit 1; }
+          verify() { "$SIGNTOOL" verify //pa //v "$(cygpath -w "$1")" | grep -E 'Issued to|Expires|Timestamp|Successfully verified'; }
+          for f in "$installer" "$app"; do
+            verify "$f" || { echo "::error::$(basename "$f") isn't signed"; exit 1; }
           done
+          verify "$inside/uninstall.exe" || echo "::warning::uninstall.exe, as 7-Zip unpacks it, isn't signed"
 
       - name: Check the installer
         run: |
