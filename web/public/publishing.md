@@ -301,8 +301,12 @@ your main branch (or every `v*` tag) builds your app for Windows and Linux, pack
 for Windows; a `.tar.gz`, `.deb` and `.rpm` for Linux), signs every file, attaches them to a release on your repository, and sends the release to SLAPorSLOP. No keys
 or secrets.
 
-On the Releases page, choose **Add to my repository on GitHub**: it opens GitHub with the file
-filled in, and you click **Commit**. The file looks like this:
+On your app's **Builds** tab, choose **Add to my repository on GitHub**: it opens GitHub with the
+file filled in, and you click **Commit**. SLAPorSLOP looks in your repository's `.github/workflows`
+first: if a workflow there already uses Slop Build, whatever its name, the tab says **Slop Build is
+set up** and links to it, with nothing to add; if a workflow of your own is already called
+`slop.yml`, it suggests another name (`slop-build.yml`), as GitHub won't make a second file with
+the same name. The file looks like this:
 
 ```yaml
 # .github/workflows/slop.yml
@@ -398,7 +402,7 @@ Actions, so your Unity licence stays in your repository: SLAPorSLOP never sees i
 2. In your repository: Settings → Secrets and variables → Actions → New repository secret. Add
    `UNITY_LICENSE` (the `.ulf` file's contents), `UNITY_EMAIL` and `UNITY_PASSWORD`. Plus or Pro
    licences use `UNITY_SERIAL` instead of `UNITY_LICENSE`.
-3. Add Slop Build from your Releases page; the file it fills in passes those secrets on.
+3. Add Slop Build from your app's Builds tab; the file it fills in passes those secrets on.
 
 Builds use the Mono scripting backend on Linux runners. Large projects take a while the first
 time; the `Library` folder is cached after that. Commit with Git LFS if your assets need it.
@@ -445,7 +449,7 @@ Leaving `runtimes` out keeps the last release's list; `runtimes = []` clears it.
 isn't listed? Ask us.
 
 **Build now.** Every push to your main branch builds. To build without pushing, open the
-workflow on GitHub (the **Build now** button on your Releases page) and press **Run workflow**.
+workflow on GitHub (the **Build now** button on your app's Builds tab) and press **Run workflow**.
 
 Builds made by Slop Build are labelled **Built by Slop Build from source**.
 
@@ -523,7 +527,7 @@ steps: see [Browser games](#browser-games)):
    the bell, and by email):
    - **Passed, not published:** every check passed. Nothing reaches players yet.
    - **On hold:** something needs a look first (below).
-   - **Failed:** the reason is on the release, and **To fix** on the Releases page (or `get_fixes`
+   - **Failed:** the reason is on the release, and your app's **To fix** tab (or `get_fixes`
      for your AI agent) says what to change. Fix it and send a new version, or press **Ask
      SLAPorSLOP staff** if you think the checks got it wrong.
 8. **Publish:** you press **Publish** on the release, on the Releases page. Only then does
@@ -1769,8 +1773,9 @@ accept agreements or offers, change where money goes, or change your account: th
 you. Releases it submits are checked like any other, and only you can publish them. Remove a token any time
 (Account → AI agents, or sign it out like a device).
 
-**Fixes:** every problem SLAPorSLOP's checks find comes with exact instructions, on your Releases page
-("Copy for your AI") and from the agent tool `get_fixes`.
+**Fixes:** every problem SLAPorSLOP's checks find comes with exact instructions, on your app's
+**To fix** tab ("Copy for your AI"; the tab shows how many must or should be fixed on every one of
+your app's pages) and from the agent tool `get_fixes`.
 
 **Before a release:** your agent can run SLAPorSLOP's source check on what you've pushed without
 submitting anything (`check_source`). It reads the repository at that commit and lists what a
@@ -1882,7 +1887,8 @@ installing. Your Releases page shows **SIGNED BY YOUR KEY**.
 ### Slop Check
 
 For apps on GitHub not built with Slop Build: add it to every such repository (your AI agent can
-commit the file; nothing needs clicking). When you publish a GitHub release, Slop Check runs
+commit the file; nothing needs clicking, and your app's **Builds** tab has it ready to add, or says
+it's set up once a workflow in the repository uses it). When you publish a GitHub release, Slop Check runs
 SLAPorSLOP's checks on your own GitHub Actions minutes, so SLAPorSLOP's servers don't have to:
 
 - **Malware scan:** every file of the release (files in parts are joined back) with SLAPorSLOP's

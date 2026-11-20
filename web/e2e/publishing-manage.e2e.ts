@@ -48,6 +48,8 @@ test("what players get: hold them at a release, then follow the newest again", a
   await expect(tabs.getByRole("link", { name: "Manage" })).toHaveAttribute("aria-current", "page");
   await expect(tabs.getByRole("link", { name: "Edit store page" })).toHaveAttribute("href", `/publish/${slug}`);
   await expect(tabs.getByRole("link", { name: "Releases" })).toHaveAttribute("href", `/publish/${slug}/releases`);
+  await expect(tabs.getByRole("link", { name: /^Builds/ })).toHaveAttribute("href", `/publish/${slug}/builds`);
+  await expect(tabs.getByRole("link", { name: /^To fix/ })).toHaveAttribute("href", `/publish/${slug}/fixes`);
   const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "What players get" }) });
   await expect(section).toContainText("Players get v1.1.0 NEWEST PUBLISHED");
   const choice = section.getByRole("radiogroup", { name: "Release players get" });

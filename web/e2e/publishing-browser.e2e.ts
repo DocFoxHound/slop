@@ -132,6 +132,8 @@ test("a new game that plays in the browser: Runs on is one choice, and its play 
     await expect(page.getByRole("heading", { name: gone })).toHaveCount(0);
   }
   await expect(page.getByText("Or build and sign it yourself")).toHaveCount(0);
+  // Nor a Builds tab: there's nothing to build.
+  await expect(page.getByRole("navigation", { name: /maker pages/ }).getByRole("link", { name: /^Builds/ })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: /Pick up new GitHub releases/ })).toHaveCount(0);
   // Nothing to set about updates: every address is published by its maker.
   await expect(page.locator(".updates-panel")).toHaveCount(0);

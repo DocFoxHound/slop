@@ -266,7 +266,7 @@ async fn next_steps(
                             "{name} {v} didn't go through ({why}). Fix what SLAPorSLOP found (get_fixes lists each problem with exact instructions), then submit a new release. To ask SLAPorSLOP staff about it, write to them on the Releases page."
                         )
                     },
-                    site(&format!("/publish/{}/releases#fixes", a.slug)),
+                    site(&format!("/publish/{}/fixes", a.slug)),
                     false,
                 );
             }

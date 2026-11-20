@@ -171,8 +171,10 @@ production (`slaporslop.games`, its own server set up the same way) runs only co
 main branch and `v*` tags, signs with `actions/attest-build-provenance`, uploads to a release on
 the maker's repo, and submits to `POST /v1/slop-build/releases` with the run's GitHub OIDC token:
 SLAPorSLOP accepts it only from the recipe (`job_workflow_ref`), in the app's repository, at the commit
-being released. The **Add Slop Build** button opens GitHub's create-file page with the workflow
-filled in. The SLAPorSLOP GitHub App (`github_app.rs`: release webhooks, private repositories) is built
+being released. The **Add Slop Build** button (the app's Builds tab) opens GitHub's create-file
+page with the workflow filled in, unless a workflow in the repository already calls the recipe
+(then the tab says it's set up) or a file of the maker's own has the name (then it suggests
+another). The SLAPorSLOP GitHub App (`github_app.rs`: release webhooks, private repositories) is built
 but switched off until its GitHub registration is set up; without it, detection uses GitHub's
 public API.
 

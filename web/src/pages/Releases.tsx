@@ -5,6 +5,8 @@
 // A release the checks hold shows what holds it and the conversation with staff (ReleaseHold.tsx).
 // A browser game's release is a play address instead (§6.8): SLAPorSLOP checks the address, and
 // Play opens it once its maker publishes it. Nothing is built, signed or scanned.
+// What the checks found to fix is on the To fix tab (Fixes.tsx), and Slop Build, Slop Check and
+// signing on the Builds tab (Builds.tsx).
 
 import {
   AddressCheckList,
@@ -21,7 +23,6 @@ import {
   type AppPlatform,
   type BuildPlatform,
   type FileKind,
-  type Fix,
   type GithubRelease,
   type NewRelease,
   type Platform,
@@ -289,6 +290,11 @@ export function Releases() {
   const media = useLoad(() => (me && anyReady ? api.media(slug) : Promise.resolve(undefined)), [slug, me?.id, anyReady]);
   const overview = useLoad(() => (me && anyReady ? api.manage(slug) : Promise.resolve(undefined)), [slug, me?.id, anyReady]);
   const [published, setPublished] = useState<string>();
+  // Older links to what moved to its own tab (2026-11-20): "#fixes" and "#slop-check".
+  useEffect(() => {
+    if (location.hash === "#fixes") navigate(`/publish/${slug}/fixes`, { replace: true });
+    else if (location.hash === "#slop-check") navigate(`/publish/${slug}/builds#slop-check`, { replace: true });
+  }, [location.hash, slug, navigate]);
   // "#release-…" (from the progress panel or Manage): scroll to that release once it's shown.
   const loaded = Boolean(releases.data);
   useEffect(() => {
@@ -349,8 +355,12 @@ export function Releases() {
   const comingSoon = app.data.stage === "coming_soon";
   const playsNow = app.data.play_address;
 
+  // The tab's To fix count follows the newest release's checks.
+  const newest = releases.data?.[0];
+  const fixesKey = newest && `${newest.id}:${newest.status}:${newest.repo_scan?.status ?? ""}`;
+
   return (
-    <MakerFrame app={app.data} tab="releases" onStageMoved={app.reload}>
+    <MakerFrame app={app.data} tab="releases" fixesKey={fixesKey} onStageMoved={app.reload}>
       <div className="maker-cols">
         <div className="maker-main">
           {browser ? (
@@ -433,7 +443,11 @@ export function Releases() {
             </details>
           )}
 
-          <FixesPanel slug={slug} nonce={releases.data?.[0]?.status ?? ""} />
+          {Boolean(releases.data?.length) && (
+            <p className="muted small">
+              What SLAPorSLOP's checks found to fix, ready to copy for your AI: <Link to={`/publish/${slug}/fixes`}>To fix</Link>.
+            </p>
+          )}
 
           <h2 className="section-title">History</h2>
           {published && (
@@ -568,8 +582,11 @@ export function Releases() {
           )}
           <UpdatesPanel key={settingsNonce} slug={slug} browser={browser} />
           {/* Slop Build makes downloads, and nothing of a browser game is signed. */}
-          {!browser && <SlopBuildSetup slug={slug} />}
-          {!browser && <SigningHelp />}
+          {!browser && (
+            <p className="panel panel-pad small">
+              Build automatically with Slop Build, add Slop Check, or sign builds yourself: <Link to={`/publish/${slug}/builds`}>Builds</Link>.
+            </p>
+          )}
         </div>
       </div>
     </MakerFrame>
@@ -655,158 +672,6 @@ function FileDetail({ file }: { file: Release["files"][number] }) {
         )}
       </dd>
     </>
-  );
-}
-
-const WORKFLOW_SNIPPET = `permissions:
-  contents: write        # upload to your release
-  id-token: write        # get a signing certificate from Sigstore
-  attestations: write    # store the attestation on GitHub
-
-steps:
-  # … build your app into dist/ …
-  - uses: actions/attest-build-provenance@v2
-    with:
-      subject-path: dist/*`;
-
-const PROJECT_LABEL: Record<string, string> = {
-  rust: "Rust",
-  go: "Go",
-  godot: "Godot",
-  "godot-dotnet": "Godot (C#)",
-  dotnet: ".NET",
-  unity: "Unity",
-  web: "web (HTML5)",
-  electron: "Electron",
-  tauri: "Tauri",
-  python: "Python",
-  custom: "custom",
-};
-
-/** Slop Build: one file in the maker's repo, and releases arrive by themselves (ARCHITECTURE §6.2). */
-function SlopBuildSetup({ slug }: { slug: string }) {
-  const setup = useLoad(() => api.slopBuildSetup(slug), [slug]);
-  if (setup.error?.status === 503) return null; // not set up on this server
-  return (
-    <section className="panel panel-pad help slop-build">
-      <h2>Let Slop Build do it</h2>
-      <p>
-        Add one file to your repository and every push to your main branch, or
-        every <code>v*</code> tag, builds your app (Rust, Go, .NET, Godot,
-        Unity, Python, Electron, Tauri, a website, or your own build command)
-        for Windows and Linux on GitHub Actions (a .zip, a .tar.gz and .deb/.rpm
-        packages), signs it, attaches it to a release, and sends it here. No
-        keys or secrets to set up.
-      </p>
-      {setup.loading && <p className="muted">Looking at your repository…</p>}
-      {setup.error && (
-        <p className="form-error" role="alert">
-          {setup.error.message}
-        </p>
-      )}
-      {setup.data && (
-        <>
-          {setup.data.note && <p className="notice">{setup.data.note}</p>}
-          {!setup.data.note && setup.data.supported && (
-            <p className="muted small">
-              Detected a <b>{PROJECT_LABEL[setup.data.project_type]}</b>{" "}
-              project.
-            </p>
-          )}
-          {setup.data.supported && (
-            <>
-            <p className="muted small">
-              <code>{setup.data.file_path}</code>
-            </p>
-            <pre>
-              <code>{setup.data.workflow}</code>
-            </pre>
-            {setup.data.create_url && (
-              <p>
-                <ExternalLink href={setup.data.create_url}>
-                  <span className="btn slime">
-                    Add to my repository on GitHub
-                  </span>
-                </ExternalLink>{" "}
-                <span className="muted small">
-                  Opens GitHub with the file filled in; you just commit it.
-                </span>
-              </p>
-            )}
-            {setup.data.build_now_url && (
-              <p>
-                <ExternalLink href={setup.data.build_now_url}>
-                  <span className="btn">Build now</span>
-                </ExternalLink>{" "}
-                <span className="muted small">
-                  Once the file is in your repository: opens it on GitHub, where
-                  Run workflow builds your main branch straight away.
-                </span>
-              </p>
-            )}
-            <details id="slop-check">
-              <summary>
-                <b>Building somewhere else?</b>{" "}
-                <span className="muted">
-                  Add Slop Check so SLAPorSLOP's checks run on your GitHub Actions
-                </span>
-              </summary>
-              <p className="muted small">
-                Whenever you publish a release, Slop Check runs SLAPorSLOP's
-                malware scan of every file, its source check and (for Windows
-                builds) Microsoft Defender on your repository's own GitHub Actions,
-                so your release isn't waiting for SLAPorSLOP's servers. Slop Build
-                does all of this for you.{" "}
-                <Link to="/publish/guide#slop-check">More about it</Link>.
-              </p>
-              <p className="muted small">
-                <code>{setup.data.check_file_path}</code>
-              </p>
-              <pre>
-                <code>{setup.data.check_workflow}</code>
-              </pre>
-              {setup.data.check_create_url && (
-                <p>
-                  <ExternalLink href={setup.data.check_create_url}>
-                    <span className="btn">Add Slop Check to my repository</span>
-                  </ExternalLink>
-                </p>
-              )}
-            </details>
-            </>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
-/** Every build needs its maker's signature (docs/SECURITY.md §5.3). */
-function SigningHelp() {
-  return (
-    <details className="panel panel-pad help">
-      <summary>
-        <b>Or build and sign it yourself</b>{" "}
-        <span className="muted">
-          — every build needs your signature before it can be published
-        </span>
-      </summary>
-      <p>
-        Build your release files in GitHub Actions and add GitHub's attestation
-        step. It signs each file with a short-lived certificate tied to your
-        repository, workflow and commit, and records it in Sigstore's public
-        log. There's no key for you to manage, and nobody who only has your SLAPorSLOP
-        password can fake it.
-      </p>
-      <pre>
-        <code>{WORKFLOW_SNIPPET}</code>
-      </pre>
-      <p className="muted small">
-        SLAPorSLOP finds the attestation by each file's hash. The commit you enter
-        below must be the one the workflow built. Slop Build will set this up
-        for you automatically. Only GitHub repositories are supported so far.
-      </p>
-    </details>
   );
 }
 
@@ -1733,41 +1598,5 @@ function NotesField({ value, onChange, fromGithub }: { value: string; onChange: 
         onChange={(e) => onChange(e.target.value)}
       />
     </label>
-  );
-}
-
-/** Problems SLAPorSLOP's checks found in the newest release, each with a fix to hand to an AI agent. */
-function FixesPanel({ slug, nonce }: { slug: string; nonce: string }) {
-  const fixes = useLoad(() => api.fixes(slug), [slug, nonce]);
-  const list = fixes.data?.fixes ?? [];
-  if (list.length === 0) return null;
-  const prompt = (f: Fix) =>
-    `SLAPorSLOP's checks of my app found this. ${f.problem}\nFix it in the repository: ${f.instruction}` +
-    (f.guide_section ? `\n(SLAPorSLOP's publishing guide, section "${f.guide_section}", has the details.)` : "");
-  const all = list.map(prompt).join("\n\n") + `\n\n${fixes.data?.next ?? ""}`;
-  return (
-    <section className="panel panel-pad" id="fixes" aria-labelledby="fixes-title">
-      <h2 id="fixes-title">To fix in {fixes.data?.release?.version}</h2>
-      <p className="muted small">
-        Copy these to your AI coding agent, or connect it to SLAPorSLOP (Account → AI agents) and ask it to run get_fixes.
-      </p>
-      <ul className="fix-list">
-        {list.map((f, i) => (
-          <li key={`${f.kind}-${i}`}>
-            <span className={`badge ${f.severity === "must" ? "bad" : "warn"}`}>
-              {f.severity === "must" ? "MUST FIX" : "SHOULD FIX"}
-            </span>{" "}
-            {f.problem}
-            <p className="small">{f.instruction}</p>
-            <button className="btn small ghost" type="button" onClick={() => void navigator.clipboard.writeText(prompt(f))}>
-              Copy for your AI
-            </button>
-          </li>
-        ))}
-      </ul>
-      <button className="btn small" type="button" onClick={() => void navigator.clipboard.writeText(all)}>
-        Copy all for your AI
-      </button>
-    </section>
   );
 }

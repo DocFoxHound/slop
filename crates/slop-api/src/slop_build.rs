@@ -602,22 +602,56 @@ struct Setup {
     /// What the repository looks like, when it's something Slop Build can't build on its own yet.
     detected: Option<String>,
     note: Option<String>,
-    file_path: &'static str,
+    /// Where to commit `workflow`: `.github/workflows/slop.yml`, or another free name when the
+    /// repository has a workflow of its own there (`taken`).
+    file_path: String,
     /// The workflow file to commit.
     workflow: String,
     /// GitHub's "create file" page with the workflow filled in. The maker only clicks Commit.
+    /// None once Slop Build is in the repository (`existing`): GitHub would refuse the name.
     create_url: Option<String>,
     /// Slop Check, for GitHub repositories that build elsewhere: SLAPorSLOP's malware scan, source
     /// check and Microsoft Defender on the repository's own GitHub Actions.
-    check_file_path: &'static str,
+    check_file_path: String,
     check_workflow: String,
     check_create_url: Option<String>,
     /// "Build now": the workflow's page on GitHub, whose Run workflow button starts a build.
     build_now_url: Option<String>,
+    /// The repository's workflow that already uses Slop Build, if one does: then nothing needs
+    /// adding (`create_url` is None) and Build now opens it.
+    existing: Option<Found>,
+    /// The same for Slop Check.
+    check_existing: Option<Found>,
+    /// A workflow of the maker's own at Slop Build's usual path that isn't Slop Build:
+    /// `file_path` is then another name, as GitHub won't create a file over it.
+    taken: Option<Found>,
+    /// The same for Slop Check's usual path.
+    check_taken: Option<Found>,
+    /// Whether SLAPorSLOP could look in `.github/workflows`. False when GitHub didn't answer:
+    /// then Slop Build or Slop Check may already be there.
+    workflows_checked: bool,
+}
+
+/// A workflow file in the maker's repository.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+struct Found {
+    path: String,
+    /// Its page on GitHub.
+    html_url: String,
 }
 
 const WORKFLOW_PATH: &str = ".github/workflows/slop.yml";
 const CHECK_PATH: &str = ".github/workflows/slop-check.yml";
+const WORKFLOWS_DIR: &str = ".github/workflows";
+/// Workflow files read to find Slop Build and Slop Check, at most, and the largest read.
+/// GitHub's API allowance is small (60 an hour without a token, shared by this server), so files
+/// are read from raw.githubusercontent.com, which doesn't count against it; only when that can't
+/// read one (a private repository) is it read through the API, `MAX_API_READS` at most. The
+/// likeliest files go first: `slop.yml` and `slop-check.yml` (the names SLAPorSLOP suggests),
+/// then any with "slop" in the name, then the rest, smallest first.
+const MAX_WORKFLOWS_READ: usize = 6;
+const MAX_API_READS: usize = 2;
+const MAX_WORKFLOW_BYTES: u64 = 64 * 1024;
 
 /// Slop Check's workflow file: it sits next to the build recipe in the same repository.
 fn check_yaml(recipe: &str, version: &str, slug: &str, site: &str) -> String {
@@ -657,6 +691,207 @@ fn create_file_url(repo_path: &str, branch: &str, file: &str, value: &str) -> Ap
         .append_pair("filename", file)
         .append_pair("value", value);
     Ok(url.into())
+}
+
+/// What `.github/workflows` already holds (`setup`).
+#[derive(Default, Debug)]
+struct Workflows {
+    /// GitHub answered: the folder's files, or that there's no such folder.
+    checked: bool,
+    /// The first workflow that calls Slop Build's recipe, and Slop Check's.
+    build: Option<Found>,
+    check: Option<Found>,
+    /// The files at Slop Build's and Slop Check's usual paths when they're something else, or
+    /// couldn't be read (then they're left alone too).
+    build_taken: Option<Found>,
+    check_taken: Option<Found>,
+    /// Every file name there, so a suggested name is never one in use.
+    names: Vec<String>,
+}
+
+/// Whether a workflow calls `recipe` (`owner/repo/.github/workflows/x.yml`): a `uses:` line naming
+/// it at some version. By plain reading, as checks.rs reads workflows, ignoring case as GitHub's
+/// names do.
+fn calls(text: &str, recipe: &str) -> bool {
+    let want = format!("{}@", recipe.to_ascii_lowercase());
+    text.lines().any(|line| {
+        let line = line.trim_start();
+        let line = line.strip_prefix("- ").unwrap_or(line).trim_start();
+        line.strip_prefix("uses:").is_some_and(|rest| {
+            rest.trim()
+                .trim_matches(['"', '\''])
+                .to_ascii_lowercase()
+                .starts_with(&want)
+        })
+    })
+}
+
+/// Which workflow files to read first (`MAX_WORKFLOWS_READ`).
+fn read_order(name: &str) -> u8 {
+    match name.to_ascii_lowercase().as_str() {
+        "slop.yml" => 0,
+        "slop-check.yml" => 1,
+        n if n.contains("slop") => 2,
+        _ => 3,
+    }
+}
+
+/// The first name in `first`, then `{stem}-2.yml`, `{stem}-3.yml`…, that isn't in `names`, as a
+/// path in `.github/workflows`.
+fn free_path(first: &[&str], stem: &str, names: &[String]) -> String {
+    let free = |n: &str| !names.iter().any(|x| x.eq_ignore_ascii_case(n));
+    let name = first
+        .iter()
+        .map(|n| n.to_string())
+        .chain((2..).map(|i| format!("{stem}-{i}.yml")))
+        .find(|n| free(n))
+        .expect("there's always a free name");
+    format!("{WORKFLOWS_DIR}/{name}")
+}
+
+/// A file's content as the contents API gives it: base64, wrapped at 60 characters.
+fn decode_content(content: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(content.replace('\n', ""))
+        .ok()
+}
+
+/// Lists `.github/workflows` (one API request; GitHub's 404 means there's none) and reads the
+/// likeliest files for Slop Build's and Slop Check's recipes (`MAX_WORKFLOWS_READ`).
+async fn find_workflows(
+    state: &AppState,
+    repo_path: &str,
+    recipe: &str,
+    check_recipe: &str,
+) -> Workflows {
+    #[derive(Deserialize)]
+    struct Entry {
+        name: String,
+        path: String,
+        #[serde(default)]
+        size: u64,
+        #[serde(default)]
+        html_url: Option<String>,
+        #[serde(rename = "type")]
+        kind: String,
+    }
+    let Ok(url) = state
+        .config
+        .releases
+        .github_api_base
+        .join(&format!("repos/{repo_path}/contents/{WORKFLOWS_DIR}"))
+    else {
+        return Workflows::default();
+    };
+    let entries: Vec<Entry> = match releases::github_get(state, url).await.send().await {
+        Ok(res) if res.status() == reqwest::StatusCode::NOT_FOUND => {
+            return Workflows {
+                checked: true,
+                ..Workflows::default()
+            };
+        }
+        Ok(res) if res.status().is_success() => match res.json().await {
+            Ok(entries) => entries,
+            Err(_) => return Workflows::default(),
+        },
+        Ok(res) => {
+            tracing::info!(status = %res.status(), repo_path, "GitHub didn't list the workflows");
+            return Workflows::default();
+        }
+        Err(e) => {
+            tracing::info!(error = %e, repo_path, "GitHub didn't list the workflows");
+            return Workflows::default();
+        }
+    };
+    let found_of = |e: &Entry| Found {
+        path: e.path.clone(),
+        html_url: e
+            .html_url
+            .clone()
+            .unwrap_or_else(|| format!("https://github.com/{repo_path}/blob/HEAD/{}", e.path)),
+    };
+    let mut files: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| {
+            let name = e.name.to_ascii_lowercase();
+            e.kind == "file"
+                && (name.ends_with(".yml") || name.ends_with(".yaml"))
+                && e.size <= MAX_WORKFLOW_BYTES
+        })
+        .collect();
+    files.sort_by_key(|e| (read_order(&e.name), e.size));
+    let mut found = Workflows {
+        checked: true,
+        names: entries.iter().map(|e| e.name.clone()).collect(),
+        ..Workflows::default()
+    };
+    let mut api_reads = 0;
+    for e in files.into_iter().take(MAX_WORKFLOWS_READ) {
+        if found.build.is_some() && found.check.is_some() {
+            break;
+        }
+        let Some(text) = read_workflow(state, repo_path, &e.path, &mut api_reads).await else {
+            continue;
+        };
+        if found.build.is_none() && calls(&text, recipe) {
+            found.build = Some(found_of(e));
+        }
+        if found.check.is_none() && calls(&text, check_recipe) {
+            found.check = Some(found_of(e));
+        }
+    }
+    // A file at the usual path that isn't the one found is the maker's own (or unread).
+    let at = |path: &str, mine: &Option<Found>| {
+        entries
+            .iter()
+            .find(|e| e.path.eq_ignore_ascii_case(path))
+            .filter(|e| mine.as_ref().is_none_or(|f| f.path != e.path))
+            .map(found_of)
+    };
+    found.build_taken = at(WORKFLOW_PATH, &found.build);
+    found.check_taken = at(CHECK_PATH, &found.check);
+    found
+}
+
+/// A workflow file's text from the default branch: from raw.githubusercontent.com, else (a
+/// private repository) through the API while `api_reads` allows.
+async fn read_workflow(
+    state: &AppState,
+    repo_path: &str,
+    path: &str,
+    api_reads: &mut usize,
+) -> Option<String> {
+    let encoded = path
+        .split('/')
+        .map(path_segment)
+        .collect::<Vec<_>>()
+        .join("/");
+    if let Ok(url) = state
+        .config
+        .media
+        .github_raw_base
+        .join(&format!("{repo_path}/HEAD/{encoded}"))
+        && let Ok(Some(bytes)) = crate::media::download(state, url, MAX_WORKFLOW_BYTES).await
+    {
+        return Some(String::from_utf8_lossy(&bytes).into_owned());
+    }
+    if *api_reads >= MAX_API_READS {
+        return None;
+    }
+    *api_reads += 1;
+    #[derive(Deserialize)]
+    struct File {
+        content: String,
+    }
+    let file: File = github_json(
+        state,
+        &format!("repos/{repo_path}/contents/{encoded}"),
+        repo_path,
+    )
+    .await
+    .ok()?;
+    decode_content(&file.content).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
 fn workflow_yaml(
@@ -904,13 +1139,18 @@ async fn setup(
                 } else {
                     OFF_GITHUB.into()
                 }),
-                file_path: WORKFLOW_PATH,
+                file_path: WORKFLOW_PATH.into(),
                 workflow: workflow_yaml(&recipe, version, &slug, &site, "custom", "main"),
                 create_url: None,
-                check_file_path: CHECK_PATH,
+                check_file_path: CHECK_PATH.into(),
                 check_workflow: check_yaml(&recipe, version, &slug, &site),
                 check_create_url: None,
                 build_now_url: None,
+                existing: None,
+                check_existing: None,
+                taken: None,
+                check_taken: None,
+                workflows_checked: false,
             }));
         }
     };
@@ -940,18 +1180,13 @@ async fn setup(
         )
         .await
         .ok();
-        file.and_then(|f| {
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD
-                .decode(f.content.replace('\n', ""))
-                .ok()
-        })
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .is_some_and(|pkg| {
-            ["dependencies", "devDependencies"]
-                .iter()
-                .any(|k| pkg[k].get("electron").is_some())
-        })
+        file.and_then(|f| decode_content(&f.content))
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .is_some_and(|pkg| {
+                ["dependencies", "devDependencies"]
+                    .iter()
+                    .any(|k| pkg[k].get("electron").is_some())
+            })
     } else {
         false
     };
@@ -976,14 +1211,41 @@ async fn setup(
         project_type,
         &repo.default_branch,
     );
-    let create = create_file_url(&repo_path, &repo.default_branch, WORKFLOW_PATH, &workflow)?;
     let check_workflow = check_yaml(&recipe, version, &slug, &site);
-    let check_create = create_file_url(
-        &repo_path,
-        &repo.default_branch,
-        CHECK_PATH,
-        &check_workflow,
-    )?;
+    let check_recipe = format!(
+        "{}/check.yml",
+        recipe.rsplit_once('/').map_or(recipe.as_str(), |(d, _)| d)
+    );
+    // Only a repository with a .github folder can have workflows: no request otherwise.
+    let found = if names.iter().any(|n| n == ".github") {
+        find_workflows(&state, &repo_path, &recipe, &check_recipe).await
+    } else {
+        Workflows {
+            checked: true,
+            ..Workflows::default()
+        }
+    };
+    // Already there: nothing to add. Otherwise a name GitHub will take.
+    let (file_path, create_url) = match &found.build {
+        Some(f) => (f.path.clone(), None),
+        None => {
+            let path = free_path(&["slop.yml", "slop-build.yml"], "slop-build", &found.names);
+            let url = create_file_url(&repo_path, &repo.default_branch, &path, &workflow)?;
+            (path, Some(url))
+        }
+    };
+    let (check_file_path, check_create_url) = match &found.check {
+        Some(f) => (f.path.clone(), None),
+        None => {
+            let path = free_path(&["slop-check.yml"], "slop-check", &found.names);
+            let url = create_file_url(&repo_path, &repo.default_branch, &path, &check_workflow)?;
+            (path, Some(url))
+        }
+    };
+    let build_now_url = Some(format!(
+        "https://github.com/{repo_path}/actions/workflows/{}",
+        file_path.rsplit('/').next().unwrap_or("slop.yml")
+    ));
     Ok(Json(Setup {
         host,
         checks_run_on: "github_actions",
@@ -991,16 +1253,18 @@ async fn setup(
         project_type: project_type.into(),
         detected: detected.map(String::from),
         note,
-        file_path: WORKFLOW_PATH,
+        file_path,
         workflow,
-        create_url: Some(create),
-        check_file_path: CHECK_PATH,
+        create_url,
+        check_file_path,
         check_workflow,
-        check_create_url: Some(check_create),
-        build_now_url: Some(format!(
-            "https://github.com/{repo_path}/actions/workflows/{}",
-            WORKFLOW_PATH.rsplit('/').next().unwrap_or("slop.yml")
-        )),
+        check_create_url,
+        build_now_url,
+        taken: found.build.is_none().then_some(found.build_taken).flatten(),
+        check_taken: found.check.is_none().then_some(found.check_taken).flatten(),
+        existing: found.build,
+        check_existing: found.check,
+        workflows_checked: found.checked,
     }))
 }
 
@@ -1068,6 +1332,64 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn a_workflow_calls_the_recipe_only_on_a_uses_line() {
+        let recipe = "DocFoxHound/slop-build/.github/workflows/build.yml";
+        assert!(calls(
+            "jobs:\n  build:\n    uses: DocFoxHound/slop-build/.github/workflows/build.yml@v1\n",
+            recipe
+        ));
+        // In a step list, quoted, and in another case.
+        assert!(calls(
+            "    - uses: 'docfoxhound/slop-build/.github/workflows/build.yml@v2'",
+            recipe
+        ));
+        // A comment, another recipe, a fork, or no version: not Slop Build.
+        assert!(!calls(
+            "# like DocFoxHound/slop-build/.github/workflows/build.yml@v1",
+            recipe
+        ));
+        assert!(!calls(
+            "    uses: DocFoxHound/slop-build/.github/workflows/check.yml@v1",
+            recipe
+        ));
+        assert!(!calls(
+            "    uses: someone/slop-build/.github/workflows/build.yml@v1",
+            recipe
+        ));
+        assert!(!calls(
+            "    uses: DocFoxHound/slop-build/.github/workflows/build.yml",
+            recipe
+        ));
+    }
+
+    #[test]
+    fn suggested_names_are_never_taken() {
+        let n = |v: &[&str]| names(v);
+        let build =
+            |taken: &[&str]| free_path(&["slop.yml", "slop-build.yml"], "slop-build", &n(taken));
+        assert_eq!(build(&[]), ".github/workflows/slop.yml");
+        assert_eq!(
+            build(&["ci.yml", "Slop.yml"]),
+            ".github/workflows/slop-build.yml"
+        );
+        assert_eq!(
+            build(&["slop.yml", "slop-build.yml", "slop-build-2.yml"]),
+            ".github/workflows/slop-build-3.yml"
+        );
+        assert_eq!(
+            free_path(&["slop-check.yml"], "slop-check", &n(&["slop-check.yml"])),
+            ".github/workflows/slop-check-2.yml"
+        );
+        // Slop's own names are read first.
+        let mut order = vec!["ci.yml", "build-slop.yaml", "slop-check.yml", "slop.yml"];
+        order.sort_by_key(|n| read_order(n));
+        assert_eq!(
+            order,
+            ["slop.yml", "slop-check.yml", "build-slop.yaml", "ci.yml"]
+        );
     }
 
     #[test]

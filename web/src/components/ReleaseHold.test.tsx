@@ -236,7 +236,7 @@ describe("a release on hold, for its maker", () => {
     expect(box.getAttribute("aria-describedby")?.split(" ")).toContain(error.id);
   });
 
-  it("explains a missing Defender check, with Slop Check to add right here; staff have nothing to do yet", async () => {
+  it("explains a missing Defender check, with Slop Check to add on the Builds tab; staff have nothing to do yet", async () => {
     vi.spyOn(api, "releaseHold").mockResolvedValue(
       hold({
         kinds: ["defender_missing"],
@@ -260,7 +260,7 @@ describe("a release on hold, for its maker", () => {
     expect(section.textContent).toContain("Run Slop Check in your repository. This release goes on by itself");
     expect(section.textContent).not.toContain("/publish/guide#slop-check)");
     expect(within(section).getByRole("link", { name: "How Slop Check works" }).getAttribute("href")).toBe("/publish/guide#slop-check");
-    expect(within(section).getByRole("link", { name: "Add Slop Check to your repository" }).getAttribute("href")).toBe("#slop-check");
+    expect(within(section).getByRole("link", { name: "Add Slop Check to your repository" }).getAttribute("href")).toBe("/publish/pocket-golf/builds#slop-check");
     expect(section.textContent).toContain("Nothing for SLAPorSLOP staff to do yet");
     expect(within(section).queryByRole("button", { name: "Scan again" })).toBeNull();
   });

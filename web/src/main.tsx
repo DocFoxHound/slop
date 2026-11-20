@@ -16,6 +16,8 @@ import { Library } from "./pages/Library";
 import { Notifications } from "./pages/Notifications";
 import { Profile } from "./pages/Profile";
 import { Releases } from "./pages/Releases";
+import { Builds } from "./pages/Builds";
+import { Fixes } from "./pages/Fixes";
 import { Manage } from "./pages/Manage";
 import { MakerStats } from "./pages/MakerStats";
 import { Download } from "./pages/Download";
@@ -66,6 +68,8 @@ const router = createBrowserRouter([
       { path: "/publish/stats", element: <MakerStats /> },
       { path: "/publish/:slug", element: <AppEditor /> },
       { path: "/publish/:slug/releases", element: <Releases /> },
+      { path: "/publish/:slug/builds", element: <Builds /> },
+      { path: "/publish/:slug/fixes", element: <Fixes /> },
       { path: "/publish/:slug/manage", element: <Manage /> },
       { path: "/library/:slug?", element: <Library /> },
       { path: "/download", element: <Download /> },
