@@ -41,6 +41,7 @@ mod invites_tests;
 mod maker_stats_tests;
 mod messages_tests;
 mod money_tests;
+mod must_fix_tests;
 mod news_tests;
 mod oauth_tests;
 mod people_tests;

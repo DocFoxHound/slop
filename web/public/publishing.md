@@ -515,22 +515,35 @@ steps: see [Browser games](#browser-games)):
    matches the store page's licence; anything that looks like selling in the app (payment
    libraries, in-app purchase APIs, checkout links, loot boxes, premium currencies), which SLAPorSLOP
    doesn't allow; code that loads code from outside SLAPorSLOP, updates itself, or uses an unsafe data
-   format (see [Online play and mods](#online-play-and-mods)); and the packages in your lockfiles. Notes don't stop a release: one
-   the last published release didn't have is shown to you before you publish, and logged. After that, SLAPorSLOP checks those packages against
+   format (see [Online play and mods](#online-play-and-mods)); and the packages in your lockfiles. What it finds is listed
+   under **To fix**, each marked **MUST FIX** or **SHOULD FIX**: a MUST FIX stops you publishing the release
+   (step 8), a SHOULD FIX doesn't. Anything the last published release didn't have is also shown to you before you publish, and
+   logged. After that, SLAPorSLOP checks those packages against
    [OSV](https://osv.dev) every day and tells you when a new security advisory affects your live
    release.
 7. **Checks:** the checks end in one of three ways, and you get a notification each time (under
    the bell, and by email):
-   - **Passed, not published:** every check passed. Nothing reaches players yet.
+   - **Passed, not published:** every check passed. Nothing reaches players yet. If **To fix**
+     has a MUST FIX for it, the notification says so: you can publish it once that's fixed.
    - **On hold:** something needs a look first (below).
    - **Failed:** the reason is on the release, and **To fix** on the Releases page (or `get_fixes`
      for your AI agent) says what to change. Fix it and send a new version, or press **Ask
      SLAPorSLOP staff** if you think the checks got it wrong.
 8. **Publish:** you press **Publish** on the release, on the Releases page. Only then does
-   SLAPorSLOP sign it, and players get it. The Publish panel shows, as information, anything the
+   SLAPorSLOP sign it, and it becomes the version players get. Publishing doesn't put a draft in the
+   store, and doesn't move a Coming soon page to Beta: nobody can download a Coming soon page's
+   builds, so players get it once you move the page to Beta (**Move to Beta**, at the top of its
+   Manage, Edit store page and Releases pages). The Publish panel shows, as information, anything the
    source check found that your last published release didn't have, and, for a browser game, when
    the play address is a new site. Publish waits while your app's new store pictures are being
-   reviewed, and until the source check has a result. Publishing is for you, signed in on the
+   reviewed, and until the source check has a result.
+   **While a release has a MUST FIX, Publish is unavailable for it**, and the panel lists what must
+   be fixed, with a link to **To fix**. What the store page decides (going online without saying
+   so, "Works in sandbox mode") counts as soon as you change the page: no new release needed. The
+   rest is fixed in the repository and sent as a new version. If you think one is wrong (a
+   "possible secret" that isn't one, say), press **Ask SLAPorSLOP staff** on the release: a person
+   looks at it, and can allow publishing that release anyway (a new version is checked afresh). A
+   SHOULD FIX never stops Publish. Publishing is for you, signed in on the
    website: an AI agent can't publish, so a stolen agent token or a compromised repository can't
    put a build in front of players. Publishing a release also withdraws older releases that were
    never published, and ends a hold at an older release (see [Managing your app](#5-managing-your-app)).
@@ -2273,7 +2286,9 @@ address with `submit_play_address` (or, in a [handoff link](#hand-the-person-one
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
 9. **(token)** Follow the first release (`list_releases`, `get_fixes`; on the website **Publish**
    or **Releases & progress**) until it has passed its checks (status `ready`), and fix what
-   SLAPorSLOP's checks find. If it's on hold, `release_hold` says why in plain words and what can be
+   SLAPorSLOP's checks find: a release with anything in its `must_fix` can't be published until
+   that's fixed (or SLAPorSLOP staff allow it, after the owner asks them with
+   `write_to_staff_about_release`). If it's on hold, `release_hold` says why in plain words and what can be
    done (`rescan_release`, or `write_to_staff_about_release` with what the owner agrees to say).
    Then tell the owner to press **Publish** on the Releases page and, the first time, **Put it in
    the store** on its Manage page: an agent can't do either. Later releases go the same way.

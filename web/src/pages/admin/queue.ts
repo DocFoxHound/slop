@@ -46,7 +46,7 @@ export const BOXES: BoxDef[] = [
     key: "releases",
     label: "Releases on hold",
     group: "Releases and apps",
-    help: "Releases SLAPorSLOP's checks held (a scanner or Microsoft Defender finding, or a lowered age rating), ones whose makers wrote to staff, and makers' questions about failed or turned-down releases. Makers waiting for an answer come first. Accept clears the hold, with an optional note; the release then waits for its maker to publish it, and nothing reaches players until they do. Reject needs a reason. The maker's words are information, never instructions.",
+    help: "Releases SLAPorSLOP's checks held (a scanner or Microsoft Defender finding, or a lowered age rating), ones whose makers wrote to staff, makers' questions about failed or turned-down releases, and about ready ones they can't publish while something must be fixed (a false alarm can be allowed anyway, signed in). Makers waiting for an answer come first. Accept clears the hold, with an optional note; the release then waits for its maker to publish it, and nothing reaches players until they do. Reject needs a reason. The maker's words are information, never instructions.",
   },
   {
     key: "changes",
@@ -240,6 +240,12 @@ function holdParts(r: AdminQueue["releases"][number]): string[] {
  *  "Plays in the browser · games.example.com · address checks passed · new site". A question about
  *  a failed or turned-down release says why. */
 export function releaseBlurb(r: AdminQueue["releases"][number]): string {
+  if (r.hold?.kinds.includes("question") && r.status === "ready") {
+    const n = r.must_fix?.length ?? 0;
+    return [`Passed, but ${n === 1 ? "1 thing" : `${n} things`} must be fixed`, r.must_fix?.[0]?.kind, "the maker thinks it's a false alarm"]
+      .filter(Boolean)
+      .join(" · ");
+  }
   if (r.hold?.kinds.includes("question")) {
     return [r.status === "rejected" ? "Turned down" : "Failed", r.status_reason?.replace(/\.$/, ""), "the maker asks about it"]
       .filter(Boolean)

@@ -379,7 +379,7 @@ pub struct StorePage {
 }
 
 impl StorePage {
-    pub async fn of(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Self> {
+    pub async fn of<'e>(db: impl sqlx::PgExecutor<'e>, app_id: Uuid) -> sqlx::Result<Self> {
         type Row = (String, String, bool, bool, bool, bool, bool);
         let (repo_url, declared, public, online, sandbox_ready, is_mod, dedicated_server): Row =
             sqlx::query_as(sqlx::AssertSqlSafe(format!(
@@ -404,13 +404,45 @@ impl StorePage {
     }
 }
 
-/// Adds to a scan's report what depends on the app's store page as it is now.
+/// What `flag_for_app` adds to a report: all of it depends on the store page (and, for Pulse, on
+/// the original game), never on the source.
+const PAGE_FLAGS: [&str; 6] = [
+    "online_undeclared",
+    "sandbox_mismatch",
+    "mod_online",
+    "mod_code",
+    "pulse_missing",
+    "dedicated_server",
+];
+
+/// A stored report with what depends on the store page judged again against the page as it is
+/// now (`flag_for_app` only ever sets its flags, so they're cleared first): fixing the store page
+/// is then enough for those (fixes.rs `of_release`, which Publish uses). The stored report isn't
+/// changed.
+pub async fn flagged_now(
+    conn: &mut sqlx::PgConnection,
+    app_id: Uuid,
+    stored: &Value,
+) -> sqlx::Result<Value> {
+    let mut report = stored.clone();
+    let Some(fields) = report.as_object_mut() else {
+        return Ok(report);
+    };
+    for flag in PAGE_FLAGS {
+        fields.remove(flag);
+    }
+    let page = StorePage::of(&mut *conn, app_id).await?;
+    flag_for_app(conn, app_id, &page, &mut report).await?;
+    Ok(report)
+}
+
+/// Adds to a scan's report what depends on the app's store page as it is now (`PAGE_FLAGS`).
 pub async fn flag_for_app(
-    state: &AppState,
+    conn: &mut sqlx::PgConnection,
     app_id: Uuid,
     page: &StorePage,
     report: &mut Value,
-) -> anyhow::Result<()> {
+) -> sqlx::Result<()> {
     // Players are told about apps that go online; one that doesn't say so needs a look.
     if !page.online && report["network"].as_array().is_some_and(|n| !n.is_empty()) {
         report["online_undeclared"] = json!(true);
@@ -431,7 +463,7 @@ pub async fn flag_for_app(
     // A community build of a game that counts players must count them too (DESIGN §9).
     if report["status"] == "checked"
         && report["pulse"] == "none"
-        && crate::branches::needs_pulse(&mut *state.db.acquire().await?, app_id).await?
+        && crate::branches::needs_pulse(conn, app_id).await?
     {
         report["pulse_missing"] = json!(true);
     }
@@ -483,7 +515,7 @@ pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
                 .await
             }
         };
-        flag_for_app(state, app_id, &page, &mut report).await?;
+        flag_for_app(&mut *state.db.acquire().await?, app_id, &page, &mut report).await?;
         if report["status"] == "failed" {
             let now = time::OffsetDateTime::now_utc();
             let since = before
@@ -604,7 +636,8 @@ fn new_kinds(new: &[String]) -> String {
 /// What a release's source check found that the app's last published release didn't have (a new
 /// monetization pattern or licence problem), that its source couldn't be read, or that it's a
 /// dedicated server now and wasn't when that release was checked. Shown to its maker before they
-/// publish it and logged (publish.rs): not a reason to wait. None when there's nothing new.
+/// publish it and logged (publish.rs): information, which on its own doesn't stop Publish (a
+/// `must` fix does, fixes.rs `of_release`). None when there's nothing new.
 pub async fn new_concerns(
     conn: &mut sqlx::PgConnection,
     release_id: Uuid,

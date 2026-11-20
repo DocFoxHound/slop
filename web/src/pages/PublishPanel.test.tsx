@@ -100,15 +100,110 @@ describe("Publish", () => {
     expect(button.getAttribute("aria-describedby")).toBe(wait.id);
   });
 
-  it("a draft: players get it once its maker puts it in the store", () => {
+  it("a draft: publishing doesn't put it in the store, and players get it once its maker does", () => {
     show({ draft: true });
     expect(screen.getByRole("region", { name: "Publish version 1.4" }).textContent).toContain(
-      "It passed SLAPorSLOP's checks. Once you publish it, SLAPorSLOP signs it. Players can get it once you put the app in the store.",
+      "It passed SLAPorSLOP's checks. Once you publish it, SLAPorSLOP signs it and it's the version players will get. Publishing doesn't put the app in the store: Put it in the store, on its Manage page, does.",
     );
     fireEvent.click(screen.getByRole("button", { name: "Publish version 1.4…" }));
     expect(screen.getByRole("group", { name: "Publish version 1.4" }).textContent).toContain(
       "Players can get it once you put the app in the store.",
     );
+  });
+
+  it("Coming soon: it's the version players will get, but only Beta lets them get it", () => {
+    show({ comingSoon: true });
+    const panel = screen.getByRole("region", { name: "Publish version 1.4" }).textContent;
+    expect(panel).toContain(
+      "Once you publish it, SLAPorSLOP signs it and it's the version players will get. Nobody can download a Coming soon page's builds: moving the page to Beta (Move to Beta, at the top of this page) is what lets players get it.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Publish version 1.4…" }));
+    const confirm = screen.getByRole("group", { name: "Publish version 1.4" }).textContent;
+    expect(confirm).toContain("Players can get it once the page is in Beta. Publishing doesn't change the page's stage.");
+    // Never "straight away" for a page nobody can download from.
+    expect(confirm).not.toContain("straight away");
+  });
+
+  it("a Coming soon draft, and a Coming soon browser game, say both steps", () => {
+    show({ comingSoon: true, draft: true });
+    const panel = screen.getByRole("region", { name: "Publish version 1.4" }).textContent;
+    expect(panel).toContain("Publishing doesn't put the app in the store");
+    expect(panel).toContain("Nobody can download a Coming soon page's builds");
+    cleanup();
+    show({ comingSoon: true, browser: true });
+    expect(screen.getByRole("region", { name: "Publish version 1.4" }).textContent).toContain(
+      "Once you publish it, it's the address Play will open. Play opens nothing on a Coming soon page: moving the game to Beta (Move to Beta, at the top of this page) is what lets players play it.",
+    );
+  });
+
+  it("while something must be fixed, Publish is unavailable and says why, with the list, the fixes and staff", async () => {
+    const publish = vi.spyOn(api, "publishRelease");
+    show({
+      release: release({
+        must_fix: [
+          { kind: "secret", problem: "A possible secret (aws-access-token) is in .env:3." },
+          { kind: "online_undeclared", problem: "The code goes online (HTTP requests), but the store page doesn't say so." },
+        ],
+        should_fix: [{ kind: "pulse", problem: "The app starts Slop Pulse but never sends heartbeats." }],
+      }),
+    });
+    const panel = screen.getByRole("region", { name: "Publish version 1.4" });
+    expect(panel.textContent).toContain("It passed SLAPorSLOP's checks, but 2 things must be fixed before you can publish it:");
+    const list = screen.getByRole("list", { name: "Must be fixed before publishing" });
+    expect(list.querySelectorAll("li")).toHaveLength(2);
+    expect(list.textContent).toContain("MUST FIX A possible secret (aws-access-token) is in .env:3.");
+    expect(screen.getByRole("link", { name: "See how to fix them" }).getAttribute("href")).toBe("/publish/harbour/fixes");
+    const button = screen.getByRole("button", { name: "Publish version 1.4…" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    const why = document.getElementById(button.getAttribute("aria-describedby") ?? "");
+    expect(why?.textContent).toBe("You can publish it once they're fixed.");
+    fireEvent.click(button);
+    expect(screen.queryByRole("group", { name: "Publish version 1.4" })).toBeNull();
+    expect(publish).not.toHaveBeenCalled();
+    // A false alarm: the conversation with staff opens right here.
+    vi.spyOn(api, "releaseHold").mockResolvedValue({
+      release_id: "rel4",
+      version: "1.4",
+      release_status: "ready",
+      status: null,
+      kinds: [],
+      needs_staff: false,
+      problems: [],
+      you_can: ["write_to_staff", "new_release", "withdraw"],
+      rescans_left: 3,
+      next_rescan_at: null,
+      rescan_requested: false,
+      rescan_running: false,
+      asked_staff_at: null,
+      unanswered: false,
+      messages: [],
+    });
+    expect(panel.textContent).toContain("Think one is wrong?");
+    fireEvent.click(screen.getByRole("button", { name: "Ask SLAPorSLOP staff" }));
+    const box = await screen.findByRole("textbox", { name: "Your question for SLAPorSLOP staff" });
+    expect(box.getAttribute("placeholder")).toBe("Which one you think is wrong, and why");
+    expect(screen.getByRole("form", { name: "Ask SLAPorSLOP staff about version 1.4" })).toBeTruthy();
+  });
+
+  it("what should be fixed is a note: Publish stays available", () => {
+    show({ release: release({ must_fix: [], should_fix: [{ kind: "pulse", problem: "No heartbeats." }] }) });
+    const panel = screen.getByRole("region", { name: "Publish version 1.4" });
+    expect(panel.textContent).toContain("1 thing should be fixed: see what and how. You can publish it anyway.");
+    expect(screen.getByRole("link", { name: "see what and how" }).getAttribute("href")).toBe("/publish/harbour/fixes");
+    expect((screen.getByRole("button", { name: "Publish version 1.4…" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("staff allowed it anyway: Publish is available, and says what was allowed", () => {
+    show({
+      release: release({
+        must_fix: [{ kind: "secret", problem: "A possible secret (generic-api-key) is in test/fixture.json:4." }],
+        must_fix_waived_at: "2026-11-20T10:00:00Z",
+      }),
+    });
+    expect(screen.getByRole("region", { name: "Publish version 1.4" }).textContent).toContain(
+      "SLAPorSLOP staff allowed publishing it on",
+    );
+    expect((screen.getByRole("button", { name: "Publish version 1.4…" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("shows new source-check concerns and a new site as information, not as something to confirm", () => {

@@ -11,7 +11,7 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { addressCheckItems } from "../addressChecks";
-import { api, ApiError, type AppSummary, type FileCheckStage, type Release, type ReleaseFile } from "../api";
+import { api, ApiError, publishBlocked, type AppSummary, type FileCheckStage, type Release, type ReleaseFile } from "../api";
 import { formatDate, isDedicatedServer } from "../format";
 import { useConfirmStep, useNow } from "../hooks";
 import { useInviteGate } from "./Invite";
@@ -260,13 +260,35 @@ function publishStep(app: ProgressApp, latest: Release, published: Release | und
       : "players can get it once you put the app in the store"
     : address
       ? "Play opens its address"
-      : "players get it";
+      : app.stage === "coming_soon"
+        ? "players can get it once you move the app to Beta"
+        : "players get it";
   if (latest.status === "approved") {
     return {
       title: "Publish",
       state: "done",
       detail: `You published version ${latest.version}${latest.published_at ? ` on ${formatDate(latest.published_at)}` : ""}.`,
       more: address ? latest.progress?.summary : undefined,
+    };
+  }
+  // Something must be fixed before it can be published (publish.rs): the way on, not Publish.
+  if (latest.status === "ready" && publishBlocked(latest)) {
+    const n = latest.must_fix?.length ?? 0;
+    return {
+      title: "Publish",
+      state: "active",
+      stateLabel: "Fix first",
+      detail: (
+        <>
+          Version {latest.version} passed its checks, but {n === 1 ? "1 thing" : `${n} things`} must be fixed before you can
+          publish it. <Link to={`/publish/${app.slug}/fixes`}>See what to fix</Link>, or{" "}
+          <ReleaseLink slug={app.slug} release={latest}>
+            ask SLAPorSLOP staff
+          </ReleaseLink>{" "}
+          if you think one is wrong.
+        </>
+      ),
+      more: latest.progress?.summary,
     };
   }
   if (latest.status === "ready") {

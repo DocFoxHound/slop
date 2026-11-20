@@ -110,7 +110,9 @@ test("a new game that plays in the browser: Runs on is one choice, and its play 
   await expect(release.getByText("It passed the checks. Play opens this address once you publish it.")).toBeVisible();
   // Nobody opens it for Mia: she publishes it, when she wants, from here.
   const publish = release.getByRole("region", { name: "Publish version 1.0.0" });
-  await expect(publish).toContainText("It passed SLAPorSLOP's checks. Once you publish it, players can play it as soon as you put the game in the store.");
+  await expect(publish).toContainText(
+    "It passed SLAPorSLOP's checks. Once you publish it, it's the address Play will open. Publishing doesn't put the game in the store: Put it in the store, on its Manage page, does.",
+  );
   await expect(publish.getByRole("list", { name: "Before you publish" })).toHaveText(`A new address: Play will open ${playPage(lamp)}.`);
   await expect(release.getByRole("link", { name: playPage(lamp) })).toHaveAttribute("rel", "noopener noreferrer");
   // Each check in words: this test server allows plain http and doesn't look up where a site is,

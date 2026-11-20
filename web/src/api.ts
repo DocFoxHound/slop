@@ -2752,6 +2752,15 @@ export interface Release {
   new_concerns?: string;
   /** For its maker, before it's published: how it lowers the last published release's rating. */
   rating_change?: RatingChange;
+  /**
+   * For its maker (and staff), before it's published: what its checks found that must be fixed.
+   * While there's any and `must_fix_waived_at` is unset, it can't be published (publish.rs).
+   */
+  must_fix?: FixBrief[];
+  /** What should be fixed: it can be published anyway. */
+  should_fix?: FixBrief[];
+  /** When SLAPorSLOP staff allowed publishing it with what must be fixed in it. */
+  must_fix_waived_at?: string;
   /** For its maker, a browser game's release that passed: whether its address is a new site. */
   new_play_address?: boolean;
   /** For its maker: its hold in brief, when it's on hold or was, or they asked staff about it. */
@@ -2786,6 +2795,17 @@ export interface Release {
   progress?: ReleaseProgress;
 }
 
+/** A fix in brief, on a release (fixes.rs `FixBrief`). */
+export interface FixBrief {
+  kind: string;
+  problem: string;
+}
+
+/** Whether release `r` can't be published because something must be fixed in it (and staff
+ *  haven't allowed it anyway). */
+export const publishBlocked = (r: Pick<Release, "must_fix" | "must_fix_waived_at">) =>
+  (r.must_fix?.length ?? 0) > 0 && !r.must_fix_waived_at;
+
 /** How a release lowers the last published release's rating (AGE-7). */
 export interface RatingChange {
   from_age: number;
@@ -2812,7 +2832,8 @@ export interface HoldSummary {
 
 /** One thing holding a release, or why its checks failed, in plain words (holds.rs `Problem`). */
 export interface HoldProblem {
-  kind: "scan" | "defender" | "defender_missing" | "rating_lowered" | "failed" | "rejected";
+  /** must_fix: a ready release has something that must be fixed before it's published. */
+  kind: "scan" | "defender" | "defender_missing" | "rating_lowered" | "failed" | "rejected" | "must_fix";
   platform?: string;
   /** "Windows (.zip)". */
   file_label?: string;
@@ -3877,6 +3898,13 @@ export const api = {
         `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/waive-defender`,
         reason?.trim() ? { reason: reason.trim() } : {},
       ),
+    /**
+     * Allows a ready release to be published although its checks found something that must be
+     * fixed (a false alarm). Only a staff member signed in themselves; the note for the maker is
+     * optional (logged).
+     */
+    allowPublish: (id: string, reason?: string) =>
+      request<void>("POST", `/v1/admin/releases/${id}/allow-publish`, reason?.trim() ? { reason: reason.trim() } : {}),
     approveChange: (id: string) =>
       request<void>("POST", `/v1/admin/changes/${id}/approve`),
     rejectChange: (id: string, reason: string) =>
@@ -4773,8 +4801,10 @@ export const api = {
   /** Fixes for the problems in an app's newest release. */
   fixes: (slug: string) =>
     request<{
-      release: { id: string; version: string; status: string } | null;
+      release: { id: string; version: string; status: string; must_fix_waived_at?: string } | null;
       fixes: Fix[];
+      /** The release's `must` items stop its maker publishing it. */
+      publish_blocked: boolean;
       recommendations: Fix[];
       next: string;
     }>(

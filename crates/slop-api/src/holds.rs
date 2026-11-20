@@ -13,14 +13,19 @@
 //!   scanner's hold: Defender can't be run here, and a lowered rating waits for staff. The fetcher
 //!   runs re-runs when no release is waiting (`rescan_next`), one at a time, sharing the scanner.
 //! - **A conversation with SLAPorSLOP staff** (`release_hold_messages`): the maker (or their
-//!   agent, which staff see) says why a finding is a false positive, or asks about a failed
-//!   release (CON-16: a person looks at an automated refusal on request); staff answer, accept
-//!   or reject. Plain text, as admin_messages.rs: no control characters but new lines, at most 3
+//!   agent, which staff see) says why a finding is a false positive, asks about a failed
+//!   release (CON-16: a person looks at an automated refusal on request), or about a ready
+//!   release that has something that must be fixed, which stops Publish (fixes.rs, publish.rs),
+//!   when they think it's a false alarm; staff answer, accept or reject, and for the last,
+//!   **allow publishing it anyway** (`allow_publish`: a staff member signed in, recorded on that
+//!   release only, audited, and the maker is told). Neither the maker's agent nor staff's can
+//!   publish. Plain text, as admin_messages.rs: no control characters but new lines, at most 3
 //!   links, shown as text and handed to staff agents as `untrusted_text`. 5 a day per release,
 //!   20 a day per account. Staff notices never quote the maker.
 //! - **The staff queue** is the open holds that need staff: a scanner or Defender finding, a
 //!   lowered age rating, or a maker who wrote to staff (a missing Defender check is the maker's
-//!   to fix until then). Makers waiting for an answer come first, then the oldest.
+//!   to fix until then), and makers' questions about failed, turned-down or blocked releases.
+//!   Makers waiting for an answer come first, then the oldest.
 //!
 //! The conversation is kept with its release and deleted with the app; when the maker's account
 //! closes, their own messages are blanked (account.rs).
@@ -119,6 +124,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/admin/releases/{id}/hold", get(staff_hold))
         .route("/admin/releases/{id}/hold/messages", post(staff_answer))
+        .route(
+            "/admin/releases/{id}/allow-publish",
+            post(allow_publish_route),
+        )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -127,7 +136,8 @@ pub fn routes() -> Router<AppState> {
 /// One thing holding a release (or why its checks failed), for its maker and their agent.
 #[derive(Debug, Serialize)]
 pub struct Problem {
-    /// scan, defender, defender_missing, rating_lowered, failed or rejected.
+    /// scan, defender, defender_missing, rating_lowered, failed, rejected, or must_fix (a ready
+    /// release's check found something that must be fixed before it's published).
     pub kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
@@ -361,9 +371,34 @@ fn rating_problem(r: &RatingChange) -> Problem {
     }
 }
 
-/// Everything holding release `release_id` (as its hold's `kinds` last found it), or why its
-/// checks failed or staff turned it down, in plain words. Empty for a release that's none of
-/// these.
+/// What must be fixed in a ready release before it's published (fixes.rs), one problem each;
+/// none once SLAPorSLOP staff allowed publishing it anyway.
+async fn must_fix_problems(
+    conn: &mut PgConnection,
+    release_id: Uuid,
+) -> sqlx::Result<Vec<Problem>> {
+    let found = crate::fixes::of_release(conn, release_id).await?;
+    if found.waived_at.is_some() {
+        return Ok(Vec::new());
+    }
+    Ok(found
+        .fixes
+        .into_iter()
+        .filter(|f| f.severity == "must")
+        .map(|f| Problem {
+            kind: "must_fix",
+            platform: None,
+            file_label: None,
+            what: f.problem,
+            explained: f.instruction,
+            you_can: vec!["write_to_staff", "new_release"],
+        })
+        .collect())
+}
+
+/// Everything holding release `release_id` (as its hold's `kinds` last found it), why its checks
+/// failed or staff turned it down, or what must be fixed before a ready one can be published, in
+/// plain words. Empty for a release that's none of these.
 pub async fn problems(conn: &mut PgConnection, release_id: Uuid) -> anyhow::Result<Vec<Problem>> {
     let (status, reason, repo_url): (String, Option<String>, String) = sqlx::query_as(
         "select r.status::text, r.status_reason, a.repo_url
@@ -386,6 +421,9 @@ pub async fn problems(conn: &mut PgConnection, release_id: Uuid) -> anyhow::Resu
             explained: reason.unwrap_or_else(|| "No reason was recorded.".into()),
             you_can: vec!["new_release", "write_to_staff"],
         }]);
+    }
+    if status == "ready" {
+        return Ok(must_fix_problems(conn, release_id).await?);
     }
     if status != "awaiting_review" {
         return Ok(Vec::new());
@@ -448,10 +486,9 @@ struct HoldRow {
 }
 
 /// The holds in SLAPorSLOP staff's queue, as SQL on `release_holds h` joined to `releases r`:
-/// open and needing staff, on a release on hold or a failed or turned-down one its maker asked
-/// about.
-pub(crate) const NEEDS_STAFF: &str =
-    "h.status = 'open' and h.needs_staff and r.status in ('awaiting_review', 'failed', 'rejected')";
+/// open and needing staff, on a release on hold, or a failed, turned-down or ready (blocked by
+/// what must be fixed) one its maker asked about. Once published, a release is out of it.
+pub(crate) const NEEDS_STAFF: &str = "h.status = 'open' and h.needs_staff and r.status in ('awaiting_review', 'failed', 'rejected', 'ready')";
 
 /// The staff queue's order, with `UNANSWERED` selected as `unanswered`: makers waiting for an
 /// answer first (the newest question first), then the oldest hold.
@@ -691,6 +728,7 @@ async fn hold_info<M>(
             }
         }
     }
+    // (A ready release has it from its must_fix problems, while something must be fixed in it.)
     if (open || matches!(release_status.as_str(), "failed" | "rejected"))
         && !you_can.contains(&"write_to_staff")
     {
@@ -939,8 +977,10 @@ struct Write {
 
 /// The maker (or their agent with a publish token) writes to SLAPorSLOP staff about a release on
 /// hold, saying why a finding is a false positive, or asks about a release whose checks failed or
-/// that staff turned down (CON-16: a person looks again on request). That puts it in staff's
-/// queue; a missing Defender check becomes a staff item this way.
+/// that staff turned down (CON-16: a person looks again on request), or about a ready one that
+/// has something that must be fixed, which stops Publish (a false alarm: staff can allow
+/// publishing it anyway, `allow_publish`). That puts it in staff's queue; a missing Defender
+/// check becomes a staff item this way.
 async fn maker_write(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -960,12 +1000,18 @@ async fn maker_write(
             .bind(release_id)
             .fetch_optional(&mut *tx)
             .await?;
+    let blocked = status == "ready"
+        && !crate::fixes::of_release(&mut tx, release_id)
+            .await?
+            .blocking()
+            .is_empty();
     let question = match (hold.as_deref(), status.as_str()) {
         (Some("open"), _) => false,
         (_, "failed" | "rejected") => true,
+        (_, "ready") if blocked => true,
         _ => {
             return Err(ApiError::Conflict(
-                "You can write to SLAPorSLOP staff about a release on hold, one whose checks failed, or one they turned down."
+                "You can write to SLAPorSLOP staff about a release on hold, one whose checks failed, one they turned down, or one that has something that must be fixed before it's published."
                     .into(),
             ));
         }
@@ -1038,6 +1084,7 @@ async fn maker_write(
         release_id,
         match (question, status.as_str()) {
             (true, "rejected") => "the maker asks about a release staff turned down",
+            (true, "ready") => "the maker asks about what must be fixed before publishing",
             (true, _) => "the maker asks about a failed release",
             _ => "the maker wrote",
         },
@@ -1129,6 +1176,150 @@ async fn staff_answer(
     releases::tell_maker(&mut tx, id, ReleaseEvent::StaffReplied).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Allowing publishing anyway
+
+/// Allowing publishing despite a MUST FIX is a staff member's own call, signed in: never an AI
+/// agent's token, as publishing is never the maker's agent's.
+pub(crate) const ALLOW_NEEDS_A_PERSON: &str = "Allowing a release to be published with what must be fixed in it is for a SLAPorSLOP staff member signed in themselves, not an AI agent's token. Answer the maker, or leave a note for staff.";
+
+/// `POST /admin/releases/{id}/allow-publish`, with an optional note for the maker
+/// (`{"reason"}`, plain text, up to 1,000 characters, as other staff decisions' notes).
+async fn allow_publish_route(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+    body: Option<Json<AllowPublish>>,
+) -> ApiResult<StatusCode> {
+    admin.need(crate::staff::Perm::Review)?;
+    if admin.token.is_some() {
+        return Err(ApiError::Refused(ALLOW_NEEDS_A_PERSON));
+    }
+    let note = match body.and_then(|Json(b)| b.reason) {
+        Some(note) if !note.trim().is_empty() => Some(admin_messages::clean(
+            "reason",
+            note.trim(),
+            MAX_DECISION_NOTE,
+            false,
+        )?),
+        _ => None,
+    };
+    allow_publish(
+        &state.db,
+        id,
+        &admin.actor,
+        Some(admin.user_id),
+        note.as_deref(),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A staff decision's note for the maker, as when accepting a hold (admin.rs).
+const MAX_DECISION_NOTE: usize = 1000;
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct AllowPublish {
+    /// For the maker, in the release's conversation.
+    reason: Option<String>,
+}
+
+/// SLAPorSLOP staff allow release `release_id` to be published although its checks found
+/// something that must be fixed (a false alarm: a "possible secret" that isn't one): recorded on
+/// the release (`must_fix_waived_at`, `must_fix_waived_by` = `reviewer`), audited
+/// `release.must_fix_waived` with what was waived, said in its conversation (with the note from
+/// `staff`, if any), which closes the maker's question, and the maker is told. Only a ready
+/// release with `must` items; a newer release is checked afresh and isn't covered. Publishing is
+/// still its maker's.
+pub async fn allow_publish(
+    db: &sqlx::PgPool,
+    release_id: Uuid,
+    reviewer: &str,
+    staff: Option<Uuid>,
+    note: Option<&str>,
+) -> ApiResult<()> {
+    let mut tx = db.begin().await?;
+    // The release first, then its hold, as everywhere else.
+    let row: Option<(String, String, Option<OffsetDateTime>)> = sqlx::query_as(
+        "select r.status::text, r.version, r.must_fix_waived_at from releases r where r.id = $1 for update",
+    )
+    .bind(release_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((status, version, waived)) = row else {
+        return Err(ApiError::NotFound);
+    };
+    if status != "ready" {
+        return Err(ApiError::Conflict(
+            "Only a release that passed its checks and waits for its maker can be allowed this way."
+                .into(),
+        ));
+    }
+    if waived.is_some() {
+        return Err(ApiError::Conflict(
+            "Publishing this release is allowed already.".into(),
+        ));
+    }
+    let must = crate::fixes::of_release(&mut tx, release_id)
+        .await?
+        .blocking();
+    if must.is_empty() {
+        return Err(ApiError::Conflict(
+            "Nothing in this release must be fixed, so there's nothing to allow: its maker can publish it."
+                .into(),
+        ));
+    }
+    sqlx::query(
+        "update releases set must_fix_waived_at = now(), must_fix_waived_by = $2 where id = $1",
+    )
+    .bind(release_id)
+    .bind(reviewer)
+    .execute(&mut *tx)
+    .await?;
+    let kinds: Vec<&str> = must.iter().map(|f| f.kind.as_str()).collect();
+    admin::audit(
+        &mut tx,
+        reviewer,
+        "release.must_fix_waived",
+        &release_id.to_string(),
+        json!({ "release": release_id, "version": version, "kinds": kinds, "note": note }),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    // Said in the release's conversation, which there may not be yet (staff found it before its
+    // maker asked): then it's one that's closed already, so the note has somewhere to stay.
+    sqlx::query(
+        "insert into release_holds (release_id, app_id, kinds, needs_staff, status, closed_at, closed_by)
+         select id, app_id, array['question'], false, 'cleared', now(), $2 from releases where id = $1
+         on conflict (release_id) do nothing",
+    )
+    .bind(release_id)
+    .bind(reviewer)
+    .execute(&mut *tx)
+    .await?;
+    publish::system_line(
+        &mut tx,
+        release_id,
+        &format!(
+            "SLAPorSLOP staff allowed publishing it anyway, with what must be fixed in it: {}",
+            must.iter()
+                .map(|f| f.problem.trim())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        Some(json!({ "kinds": kinds })),
+    )
+    .await?;
+    if let Some(note) = note {
+        add_message(&mut tx, release_id, staff, true, false, note).await?;
+    }
+    publish::close_hold(&mut tx, release_id, "cleared", reviewer).await?;
+    releases::tell_maker(&mut tx, release_id, ReleaseEvent::PublishAllowed).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
