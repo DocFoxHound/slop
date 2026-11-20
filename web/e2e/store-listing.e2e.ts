@@ -189,7 +189,7 @@ test("Coming soon & beta: the tabs switch stages, with their own sorts", async (
   await expect(tabs.getByRole("tab", { name: "Coming soon" })).toHaveAttribute("aria-selected", "true");
   await expect(tile(page, soon)).toHaveCount(1);
   await expect(tile(page, beta)).toHaveCount(0);
-  await expect(select(page, "Sort").locator("option")).toHaveText(["Most anticipated", "Recently updated", "A–Z"]);
+  await expect(select(page, "Sort").locator("option")).toHaveText(["Most anticipated", "Release date (soonest first)", "Recently updated", "A–Z"]);
   // The stage is the tab's: no Show filter here.
   await expect(page.locator(".filters label").filter({ hasText: "Show" })).toHaveCount(0);
 

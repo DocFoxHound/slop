@@ -25,11 +25,14 @@ export async function openDonateForm(page: Page): Promise<Locator> {
   return donateForm(page);
 }
 
-/** The two are side by side: their middles at the same height. */
+/** The two are side by side: their middles at the same height (once the page has settled). */
 export async function expectSameRow(a: Locator, b: Locator) {
-  const [x, y] = [await a.boundingBox(), await b.boundingBox()];
-  expect(x && y, "both on screen").toBeTruthy();
-  expect(Math.abs(x!.y + x!.height / 2 - (y!.y + y!.height / 2))).toBeLessThan(4);
+  await expect
+    .poll(async () => {
+      const [x, y] = [await a.boundingBox(), await b.boundingBox()];
+      return x && y ? Math.abs(x.y + x.height / 2 - (y.y + y.height / 2)) : Infinity;
+    }, { message: "both on screen, side by side" })
+    .toBeLessThan(4);
 }
 
 export async function noSeriousAxeViolations(page: Page) {
