@@ -399,6 +399,61 @@ describe("a release on hold in the review queue", () => {
     expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Answer the maker" })).toBeTruthy();
   });
+
+  it("a maker's question about what must be fixed: answer it, or allow publishing anyway after a confirm", async () => {
+    const allow = vi.spyOn(api.admin, "allowPublish").mockResolvedValue(undefined);
+    const onDone = vi.fn();
+    const secret = "A possible secret (generic-api-key) is in test/fixture.json:4.";
+    render(
+      <MemoryRouter>
+        <ul>
+          <ReleaseCard
+            r={download({
+              status: "ready",
+              status_reason: null,
+              must_fix: [{ kind: "secret", problem: secret }],
+              hold: hold({
+                kinds: ["question"],
+                release_status: "ready",
+                problems: [{ kind: "must_fix", what: secret, explained: "If it's a real key, revoke it…", you_can: ["write_to_staff"] }],
+                messages: [{ id: "m1", from: "maker", author: "Bo Builder", by_agent: false, untrusted_text: "It's a test value.", at: "2026-11-20T11:00:00Z" }],
+              }),
+            })}
+            onDone={onDone}
+          />
+        </ul>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("PASSED, MUST FIX FIRST")).toBeTruthy();
+    expect(screen.getByText(/The maker asks about what must be fixed in this release\./)).toBeTruthy();
+    expect(screen.getByText(secret)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Answer the maker" })).toBeTruthy();
+    // Allowing it takes a confirm, and Not yet goes back.
+    fireEvent.click(screen.getByRole("button", { name: "Allow publishing anyway…" }));
+    const confirm = screen.getByRole("group", { name: "Allow publishing version 1.1.0 anyway" });
+    expect(confirm.textContent).toContain("Only for this version: a new one is checked afresh.");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Not yet" }));
+    expect(allow).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Allow publishing anyway…" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Note for the maker (optional)" }), { target: { value: "A test value: fine." } });
+    fireEvent.click(screen.getByRole("button", { name: "Yes, allow publishing" }));
+    await waitFor(() => expect(allow).toHaveBeenCalledWith("rel2", "A test value: fine."));
+    expect(onDone).toHaveBeenCalled();
+  });
+
+  it("offers nothing to allow once staff allowed it", () => {
+    show(
+      download({
+        status: "ready",
+        status_reason: null,
+        must_fix: [{ kind: "secret", problem: "A possible secret." }],
+        must_fix_waived_at: "2026-11-20T12:00:00Z",
+        hold: hold({ kinds: ["question"], release_status: "ready", status: "cleared" }),
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Allow publishing anyway…" })).toBeNull();
+  });
 });
 
 describe("a browser game waiting to be listed", () => {

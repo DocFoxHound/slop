@@ -1006,7 +1006,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_releases",
-        description: "An app's releases, newest first, each with its status and the reason: fetching (being checked), awaiting_review (on hold: release_hold says what holds it and what can be done), ready (passed every check and waits for your maker to publish it), approved (published: players get it), rejected, failed, revoked or withdrawn. Publishing is for your maker: tell them to press Publish on the Releases page; you can't publish. Each release has its files and SLAPorSLOP's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds. A browser game's release has no files: `play_address`, and `address_checks` (https, public_host and public_host_skipped, bad_links, status, final_address, redirects, hops, content_type, ok, problem); its `progress.stage` is checking_address while SLAPorSLOP checks it, which takes seconds. Each release is long: to follow the one you just submitted, ask for `limit` 1.",
+        description: "An app's releases, newest first, each with its status and the reason: fetching (being checked), awaiting_review (on hold: release_hold says what holds it and what can be done), ready (passed every check and waits for your maker to publish it), approved (published: players get it), rejected, failed, revoked or withdrawn. Publishing is for your maker: tell them to press Publish on the Releases page; you can't publish. A ready or held release's `must_fix` lists what must be fixed first: while it has any and `must_fix_waived_at` is null, it can't be published (get_fixes says how to fix each; what the store page says, like going online, counts as soon as it's changed). `should_fix` never stops it. Each release has its files and SLAPorSLOP's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds. A browser game's release has no files: `play_address`, and `address_checks` (https, public_host and public_host_skipped, bad_links, status, final_address, redirects, hops, content_type, ok, problem); its `progress.stage` is checking_address while SLAPorSLOP checks it, which takes seconds. Each release is long: to follow the one you just submitted, ask for `limit` 1.",
         method: Method::GET,
         path: "/v1/apps/{slug}/releases",
         properties: || {
@@ -1019,7 +1019,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "get_fixes",
-        description: "Every problem SLAPorSLOP's checks found in the app's newest release, each with why it matters and exact instructions to fix it in the repository. Fix them, push, and submit a new release (a browser game: give its play address again). `recommendations` lists what's worth adding that never blocks a release (e.g. the app has no icon yet), with the same kind of instructions.",
+        description: "Every problem SLAPorSLOP's checks found in the app's newest release, each with why it matters and exact instructions to fix it in the repository. A `must` item stops your maker publishing that release (`publish_blocked`), a `should` item doesn't. What depends on the store page (going online without saying so, sandbox mode) is judged against the page as it is now, so fixing the page (update_store_page) is enough for those; for the rest, fix them, push, and submit a new release (a browser game: give its play address again). If a `must` item is wrong (a \"possible secret\" that isn't one), your maker can ask SLAPorSLOP staff (write_to_staff_about_release), who can allow publishing that release anyway. `recommendations` lists what's worth adding that never blocks a release (e.g. the app has no icon yet), with the same kind of instructions.",
         method: Method::GET,
         path: "/v1/apps/{slug}/fixes",
         properties: slug_only,
@@ -1402,7 +1402,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "release_hold",
-        description: "What's holding a release (status awaiting_review), or why one failed or was turned down: each problem in plain words (`problems`: `what`, `explained`, and `you_can`), what can be done (`you_can`: rescan, write_to_staff, run_slop_check, new_release, withdraw), the conversation with SLAPorSLOP staff (`messages`, `from` you, staff or slaporslop; `unanswered` when staff haven't answered yet), and how many scan re-runs are left (`rescans_left`, `next_rescan_at`, `rescan_requested`, `rescan_running`). `kinds`: scan (SLAPorSLOP's scanner flagged a file), defender (Microsoft Defender flagged the Windows build), defender_missing (the Windows build needs Defender's check: on GitHub, run Slop Check and it goes on by itself once the result arrives; Slop Check can't run for a repository outside GitHub, so there SLAPorSLOP staff check the build by hand), rating_lowered (it lowers the age rating players are shown, so a SLAPorSLOP staff member checks it first), question (your maker asked staff about a failed or turned-down release). Pass the problems on to your maker as they are.",
+        description: "What's holding a release (status awaiting_review), or why one failed or was turned down: each problem in plain words (`problems`: `what`, `explained`, and `you_can`), what can be done (`you_can`: rescan, write_to_staff, run_slop_check, new_release, withdraw), the conversation with SLAPorSLOP staff (`messages`, `from` you, staff or slaporslop; `unanswered` when staff haven't answered yet), and how many scan re-runs are left (`rescans_left`, `next_rescan_at`, `rescan_requested`, `rescan_running`). `kinds`: scan (SLAPorSLOP's scanner flagged a file), defender (Microsoft Defender flagged the Windows build), defender_missing (the Windows build needs Defender's check: on GitHub, run Slop Check and it goes on by itself once the result arrives; Slop Check can't run for a repository outside GitHub, so there SLAPorSLOP staff check the build by hand), rating_lowered (it lowers the age rating players are shown, so a SLAPorSLOP staff member checks it first), question (your maker asked staff about a failed, turned-down or blocked release). A ready release that has something that must be fixed before it's published has a problem of kind must_fix for each. Pass the problems on to your maker as they are.",
         method: Method::GET,
         path: "/v1/apps/{slug}/releases/{id}/hold",
         properties: || {
@@ -1415,7 +1415,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "write_to_staff_about_release",
-        description: "Tells SLAPorSLOP staff why a held release is fine (a false positive), or asks about one that failed or that staff turned down (it opens a question for staff). Plain text, up to 2,000 characters, at most 3 links, 5 a day per release. Only what your maker agrees to say; staff see an agent wrote it. On a release waiting for Microsoft Defender's check, writing makes it something staff look at. Staff answer in release_hold's `messages`, and whats_new says when they have.",
+        description: "Tells SLAPorSLOP staff why a held release is fine (a false positive), or asks about one that failed, that staff turned down, or that can't be published because something must be fixed in it and your maker thinks it's a false alarm (it opens a question for staff, who can allow publishing it anyway; you still can't publish). Plain text, up to 2,000 characters, at most 3 links, 5 a day per release. Only what your maker agrees to say; staff see an agent wrote it. On a release waiting for Microsoft Defender's check, writing makes it something staff look at. Staff answer in release_hold's `messages`, and whats_new says when they have.",
         method: Method::POST,
         path: "/v1/apps/{slug}/releases/{id}/hold/messages",
         properties: || {
@@ -1933,7 +1933,7 @@ I'd like its store address to be {address}.
 5. Run check_source on what's pushed and fix what it lists, so the first release doesn't come back for it.
 6. Set up releases with Slop Build, or submit the builds I already have. A game that plays on my own website is a browser game: give its address instead.
 7. Follow the first release until SLAPorSLOP's checks are done, and fix whatever get_fixes lists. If it's on hold, read release_hold and tell me what it says.
-8. Once it's ready, tell me to press Publish on the Releases page, then put the app in the store from its Manage page: both are mine to do, signed in.
+8. Once it's ready and nothing must be fixed in it first (list_releases says), tell me to press Publish on the Releases page, then put the app in the store from its Manage page: both are mine to do, signed in. If something must be fixed that you think is wrong, tell me: I can ask SLAPorSLOP staff.
 
 Ask me before anything that's mine to decide: the name, the age rating, the stage. Finish with whats_left, and tell me in plain words which steps are mine, with their links.",
     },
@@ -1954,7 +1954,7 @@ The app's store address is {app}.
 3. Fix the `must` problems in the repository, then the `should` ones. Tell me about any that needs my decision.
 4. Commit and push, then run check_source on the new commit to see the source problems are gone.
 5. Release again with a new version, with notes for players on what changed.
-6. Follow the new release with list_releases (limit 1) every few minutes until its checks are done. Once it's ready, I publish it.
+6. Follow the new release with list_releases (limit 1) every few minutes until its checks are done. Once it's ready and nothing must be fixed in it first, I publish it.
 
 Tell me what you changed and what's still waiting, for SLAPorSLOP staff or for me (pressing Publish is mine).",
     },

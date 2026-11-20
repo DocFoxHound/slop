@@ -432,8 +432,8 @@ struct Item {
     /// request, or pictures.
     detail: Value,
     notes: Vec<Note>,
-    /// Absent for a question about a failed or turned-down release (there's nothing to accept,
-    /// only to answer), and where the caller can't accept what holds it (an AI agent's token and
+    /// Absent for a question about a failed, turned-down or blocked release (there's nothing to
+    /// accept, only to answer; allowing a blocked one to be published is a person's), and where the caller can't accept what holds it (an AI agent's token and
     /// a lowered rating, or a missing Defender check, which a person signed in waives).
     #[serde(skip_serializing_if = "Option::is_none")]
     approve: Option<Action>,
@@ -531,7 +531,14 @@ async fn feed(
                 .flatten()
                 .filter_map(|p| p["what"].as_str())
                 .collect();
-            let question_text = if question {
+            let question_text = if question && hold["release_status"] == "ready" {
+                // A ready release its maker can't publish while something must be fixed in it.
+                format!(
+                    "Answer the maker's question about version {version} of {}: it passed its checks, but its maker can't publish it while it has what must be fixed ({}). They think one is a false alarm. Only a staff member signed in can allow publishing it anyway; answer them, or leave a note.",
+                    app.title,
+                    held_by.join(" ").trim_end_matches('.')
+                )
+            } else if question {
                 format!(
                     "Answer the maker's question about version {version} of {}: {} ({}).",
                     app.title,

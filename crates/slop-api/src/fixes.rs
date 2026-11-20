@@ -11,6 +11,15 @@
 //! games nor dedicated servers ("Browser games and dedicated servers"), so code loading is never a
 //! `must` for them (`AppType`).
 //!
+//! A `must` item blocks Publish (owner decision 2026-11-20): while a release has one, its maker
+//! can't publish it (publish.rs). `of_release` is what a release has, as Publish, the Releases
+//! page and this endpoint all judge it: the stored checks, with what depends on the store page
+//! judged again against the page as it is now (`source_scan::flagged_now`), so declaring on the
+//! page that the app goes online is enough for that one. A `must` that's a false alarm (a
+//! "possible secret" that isn't one) is for SLAPorSLOP staff: the maker asks them about the
+//! release (holds.rs), and staff can allow publishing that release anyway
+//! (`releases.must_fix_waived_at`). `should` items never stop it.
+//!
 //! `GET /v1/apps/{slug}/source-check` is the same before there's a release (2026-11-10): a dry
 //! run of the source check at a commit the maker has pushed, answering with the fixes a release
 //! there would get. It stores nothing and sends nothing for review. Each run downloads the
@@ -24,7 +33,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::PgConnection;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
@@ -46,9 +56,10 @@ pub fn routes() -> Router<AppState> {
 pub struct Fix {
     /// A short key, e.g. `licence:no_file`, `saves`, `secret`.
     pub kind: String,
-    /// `must`: SLAPorSLOP won't approve the release until it's fixed. `should`: a reviewer may still
-    /// approve, but players see it or it causes trouble. `recommended`: never holds anything up,
-    /// but the store page is better with it (e.g. an icon).
+    /// `must`: the release can't be published until it's fixed (publish.rs), unless SLAPorSLOP
+    /// staff allow it anyway. `should`: it can be published, but players see it or it causes
+    /// trouble. `recommended`: never holds anything up, but the store page is better with it
+    /// (e.g. an icon).
     pub severity: &'static str,
     pub problem: String,
     /// What to do, written for a coding agent working in the repository.
@@ -58,11 +69,103 @@ pub struct Fix {
     pub guide_section: Option<&'static str>,
 }
 
+/// A fix in brief, on a release (releases.rs `ReleaseInfo`): enough to say what stops Publish.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct FixBrief {
+    pub kind: String,
+    pub problem: String,
+}
+
+impl From<&Fix> for FixBrief {
+    fn from(f: &Fix) -> Self {
+        Self {
+            kind: f.kind.clone(),
+            problem: f.problem.clone(),
+        }
+    }
+}
+
+/// What one release's checks found, as Publish judges it.
+#[derive(Debug)]
+pub struct ReleaseFixes {
+    /// Every fix, in `from_checks` order, then the advisories.
+    pub fixes: Vec<Fix>,
+    /// When SLAPorSLOP staff allowed publishing it anyway (holds.rs), if they did.
+    pub waived_at: Option<OffsetDateTime>,
+}
+
+impl ReleaseFixes {
+    pub fn with(&self, severity: &str) -> Vec<FixBrief> {
+        self.fixes
+            .iter()
+            .filter(|f| f.severity == severity)
+            .map(FixBrief::from)
+            .collect()
+    }
+
+    /// What stops Publish: the `must` items, unless staff allowed it anyway.
+    pub fn blocking(&self) -> Vec<FixBrief> {
+        if self.waived_at.is_some() {
+            Vec::new()
+        } else {
+            self.with("must")
+        }
+    }
+}
+
+/// Release `release_id`'s fixes: from its stored checks (`repo_scan`, `source_checks`) and its
+/// packages' advisories, with what depends on the store page judged against the page as it is
+/// now. The one list Publish, the Releases page and `GET …/fixes` use.
+pub async fn of_release(conn: &mut PgConnection, release_id: Uuid) -> sqlx::Result<ReleaseFixes> {
+    let (app_id, repo_scan, source_checks, waived_at): (
+        Uuid,
+        Option<Value>,
+        Option<Value>,
+        Option<OffsetDateTime>,
+    ) = sqlx::query_as(
+        "select app_id, repo_scan, source_checks, must_fix_waived_at from releases where id = $1",
+    )
+    .bind(release_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    let app_type = AppType::of(&mut *conn, app_id).await?;
+    let scan = match &repo_scan {
+        Some(stored) => source_scan::flagged_now(conn, app_id, stored).await?,
+        None => Value::Null,
+    };
+    let advisories: Vec<(String, String, String, Option<String>, bool)> = sqlx::query_as(
+        "select package, version, vuln_id, fixed, malicious from release_advisories
+         where release_id = $1 order by malicious desc, package limit 50",
+    )
+    .bind(release_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut fixes = from_checks(
+        &scan,
+        source_checks.as_ref().unwrap_or(&Value::Null),
+        app_type,
+    );
+    fixes.extend(from_advisories(&advisories));
+    Ok(ReleaseFixes { fixes, waived_at })
+}
+
+/// "1 thing" or "3 things".
+pub fn things(n: usize) -> String {
+    if n == 1 {
+        "1 thing".to_string()
+    } else {
+        format!("{n} things")
+    }
+}
+
 #[derive(Serialize)]
 struct Fixes {
     /// The release the fixes are for (the newest), if there is one.
     release: Option<ReleaseRef>,
     fixes: Vec<Fix>,
+    /// The release's `must` items stop its maker publishing it (it's being checked, on hold or
+    /// ready, and SLAPorSLOP staff haven't allowed it anyway).
+    publish_blocked: bool,
     /// Worth doing, but never blocking a release or the store (e.g. "no icon yet"), whether or
     /// not there's a release.
     recommendations: Vec<Fix>,
@@ -77,6 +180,12 @@ struct ReleaseRef {
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     status_reason: Option<String>,
+    /// When SLAPorSLOP staff allowed publishing it with its `must` items, if they did.
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    must_fix_waived_at: Option<OffsetDateTime>,
 }
 
 /// Which of the Content Policy's rules an app's checks are read against ("Browser games and
@@ -96,7 +205,7 @@ pub enum AppType {
 }
 
 impl AppType {
-    pub async fn of(db: &PgPool, app_id: Uuid) -> sqlx::Result<Self> {
+    pub async fn of<'e>(db: impl sqlx::PgExecutor<'e>, app_id: Uuid) -> sqlx::Result<Self> {
         let (browser, server): (bool, bool) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "select 'browser' = any(a.platforms), {} from apps a where a.id = $1",
             catalog::IS_DEDICATED_SERVER
@@ -114,15 +223,6 @@ impl AppType {
     }
 }
 
-type Row = (
-    Uuid,
-    String,
-    String,
-    Option<String>,
-    Option<Value>,
-    Option<Value>,
-);
-
 async fn fixes(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -134,17 +234,18 @@ async fn fixes(
     let mut recommendations = crate::media::recommendations(&state.db, app_id).await?;
     recommendations.extend(crate::catalog::tag_recommendations(&state.db, app_id).await?);
     recommendations.extend(crate::slop_build::slop_check_recommendation(&state.db, app_id).await?);
-    let row: Option<Row> = sqlx::query_as(
-        "select id, version, status::text, status_reason, repo_scan, source_checks
+    let row: Option<(Uuid, String, String, Option<String>)> = sqlx::query_as(
+        "select id, version, status::text, status_reason
          from releases where app_id = $1 order by created_at desc limit 1",
     )
     .bind(app_id)
     .fetch_optional(&state.db)
     .await?;
-    let Some((id, version, status, status_reason, repo_scan, source_checks)) = row else {
+    let Some((id, version, status, status_reason)) = row else {
         return Ok(Json(Fixes {
             release: None,
             fixes: vec![],
+            publish_blocked: false,
             recommendations,
             next: if in_browser {
                 "Give its play address first (submit_play_address, or the Releases page)."
@@ -153,19 +254,10 @@ async fn fixes(
             },
         }));
     };
-    let advisories: Vec<(String, String, String, Option<String>, bool)> = sqlx::query_as(
-        "select package, version, vuln_id, fixed, malicious from release_advisories
-         where release_id = $1 order by malicious desc, package limit 50",
-    )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await?;
-    let mut list = from_checks(
-        repo_scan.as_ref().unwrap_or(&Value::Null),
-        source_checks.as_ref().unwrap_or(&Value::Null),
-        app_type,
-    );
-    list.extend(from_advisories(&advisories));
+    let found = of_release(&mut *state.db.acquire().await?, id).await?;
+    let publish_blocked = matches!(status.as_str(), "fetching" | "awaiting_review" | "ready")
+        && !found.blocking().is_empty();
+    let mut list = found.fixes;
     if status == "failed" || status == "rejected" {
         list.insert(
             0,
@@ -191,13 +283,21 @@ async fn fixes(
             version,
             status,
             status_reason,
+            must_fix_waived_at: found.waived_at,
         }),
         fixes: list,
+        publish_blocked,
         recommendations,
-        next: if in_browser {
-            "Fix the `must` items, then the `should` items; commit and push, and put the fixed game on your site; then give its play address again with a new version (submit_play_address). SLAPorSLOP's checks run again on it."
-        } else {
-            "Fix the `must` items, then the `should` items; commit and push; then submit a new release (Slop Build does it on push). SLAPorSLOP's checks run again on the new release."
+        next: match (publish_blocked, in_browser) {
+            (true, _) => {
+                "Your maker can't publish this release while it has `must` items. What the store page says (going online, sandbox mode) counts as soon as it's changed (update_store_page): no new release needed. The rest are fixed in the repository and released again with a new version. If one is wrong (a \"possible secret\" that isn't one), your maker can ask SLAPorSLOP staff about it (write_to_staff_about_release), who can allow publishing it anyway."
+            }
+            (false, true) => {
+                "Fix the `must` items, then the `should` items; commit and push, and put the fixed game on your site; then give its play address again with a new version (submit_play_address). SLAPorSLOP's checks run again on it."
+            }
+            (false, false) => {
+                "Fix the `must` items, then the `should` items; commit and push; then submit a new release (Slop Build does it on push). SLAPorSLOP's checks run again on the new release."
+            }
         },
     }))
 }
@@ -212,7 +312,7 @@ struct SourceCheckQuery {
 #[derive(Serialize)]
 struct SourceCheck {
     summary: String,
-    /// `must_fix` (a release at this commit wouldn't be approved as it is), `should_fix`,
+    /// `must_fix` (a release at this commit couldn't be published as it is), `should_fix`,
     /// `looks_good`, or `not_checked` (SLAPorSLOP couldn't read the source: `detail` says why).
     status: &'static str,
     commit_sha: String,
@@ -289,7 +389,7 @@ async fn source_check(
             scan
         }
     };
-    source_scan::flag_for_app(&state, app_id, &page, &mut scan).await?;
+    source_scan::flag_for_app(&mut *state.db.acquire().await?, app_id, &page, &mut scan).await?;
     let app_type = AppType::of(&state.db, app_id).await?;
     let mut fixes = from_checks(&scan, &Value::Null, app_type);
     fixes.sort_by_key(|f| match f.severity {
@@ -298,13 +398,6 @@ async fn source_check(
         _ => 2,
     });
     let count = |severity: &str| fixes.iter().filter(|f| f.severity == severity).count();
-    let things = |n: usize| {
-        if n == 1 {
-            "1 thing".to_string()
-        } else {
-            format!("{n} things")
-        }
-    };
     let short = &commit[..7];
     let checked = scan["status"] == "checked";
     let detail = (!checked).then(|| {
@@ -328,14 +421,14 @@ async fn source_check(
         (true, 0, should) => (
             "should_fix",
             format!(
-                "Nothing at commit {short} would stop a release, but {} should be fixed.",
+                "Nothing at commit {short} would stop a release being published, but {} should be fixed.",
                 things(should)
             ),
         ),
         (true, must, should) => (
             "must_fix",
             format!(
-                "A release at commit {short} wouldn't be approved as it is: {} must be fixed{}.",
+                "A release at commit {short} couldn't be published as it is: {} must be fixed first{}.",
                 things(must),
                 if should == 0 {
                     String::new()

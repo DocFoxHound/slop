@@ -107,6 +107,16 @@ describe("a browser game's releases", () => {
       "It passed the checks. Once you publish it, Play opens this address when the game is in Beta.",
     );
     expect(statusText("approved", false, true).help).toContain("Signed by SLAPorSLOP");
+    // A download's Coming soon page: nobody can download its builds until it's in Beta.
+    expect(statusText("ready", false, true).help).toBe("It passed every check. Once you publish it, players get it when the page is in Beta.");
+    expect(statusText("approved", false, true).help).toContain("Players can install it once the page is in Beta.");
+  });
+
+  it("something must be fixed first: the help says so, not 'once you publish it'", () => {
+    const t = statusText("ready", false, false, true);
+    expect(t.label).toBe("PASSED, NOT PUBLISHED");
+    expect(t.help).toBe("It passed SLAPorSLOP's checks, but something must be fixed before you can publish it. Below: what, and what you can do.");
+    expect(statusText("approved", false, false, true).help).toContain("Players can install it");
   });
 });
 

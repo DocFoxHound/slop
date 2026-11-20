@@ -150,6 +150,9 @@ pub struct Inputs<'a> {
     /// The app isn't in the store yet (a draft): players can't get a published release until its
     /// maker puts it there.
     pub draft: bool,
+    /// What must be fixed before it can be published (fixes.rs `ReleaseFixes::blocking`): none
+    /// once SLAPorSLOP staff allowed publishing it anyway.
+    pub must_fix: usize,
     pub files: &'a [FileState<'a>],
     pub now: OffsetDateTime,
     pub seconds_per_file: Option<i64>,
@@ -190,6 +193,13 @@ fn address_progress(i: &Inputs, a: Address) -> (&'static str, String) {
                 .into(),
         ),
         "awaiting_review" => ("on_hold", on_hold(i)),
+        "ready" if i.must_fix > 0 => (
+            "ready",
+            format!(
+                "The play address passed SLAPorSLOP's checks. {}",
+                must_fix_first(i).unwrap_or_default()
+            ),
+        ),
         "ready" if i.draft => (
             "ready",
             format!(
@@ -268,6 +278,17 @@ pub fn about(seconds: i64) -> String {
 }
 
 /// "Its new pictures are waiting for review: you can publish once they're reviewed. ", or nothing.
+/// A ready release with `must` items can't be published (publish.rs): what to do instead of
+/// pressing Publish.
+fn must_fix_first(i: &Inputs) -> Option<String> {
+    (i.must_fix > 0).then(|| {
+        format!(
+            "But {} must be fixed before you can publish it: To fix says what and how. Think one is wrong? Ask SLAPorSLOP staff about it on the Releases page.",
+            crate::fixes::things(i.must_fix)
+        )
+    })
+}
+
 fn pictures_first(i: &Inputs) -> &'static str {
     if i.pictures_pending {
         "Its new pictures are waiting for review: you can publish once they're reviewed. "
@@ -375,6 +396,13 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
             ("checking_files", s)
         }
         "awaiting_review" => ("on_hold", on_hold(i)),
+        "ready" if i.must_fix > 0 => (
+            "ready",
+            format!(
+                "All {files_word} passed SLAPorSLOP's checks. {}",
+                must_fix_first(i).unwrap_or_default()
+            ),
+        ),
         "ready" if i.draft => (
             "ready",
             format!(
@@ -501,6 +529,7 @@ mod tests {
             slop_check: true,
             pictures_pending: false,
             draft: false,
+            must_fix: 0,
             files,
             now: NOW,
             seconds_per_file: Some(300),
@@ -654,6 +683,13 @@ mod tests {
             build(&i).summary,
             "All 2 files passed SLAPorSLOP's checks. Press Publish on the Releases page; players can get it once you put the app in the store."
         );
+        // Something must be fixed first: Publish isn't offered, the way on is.
+        i.must_fix = 2;
+        assert_eq!(
+            build(&i).summary,
+            "All 2 files passed SLAPorSLOP's checks. But 2 things must be fixed before you can publish it: To fix says what and how. Think one is wrong? Ask SLAPorSLOP staff about it on the Releases page."
+        );
+        i.must_fix = 0;
         i.status = "approved";
         assert_eq!(
             build(&i).summary,

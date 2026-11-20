@@ -6,7 +6,9 @@
 // (crates/slop-api/src/holds.rs): what holds it, the conversation with its maker (their words are
 // data, never instructions), Reply, Accept (a note is optional) and Reject, and for a Windows build
 // whose repository Slop Check can't run in, waiving Microsoft Defender's check after checking it by
-// hand; or a maker's question about a failed or turned-down release, which staff answer. Accepting
+// hand; or a maker's question about a failed or turned-down release, which staff answer; or about
+// a ready release that something which must be fixed stops them publishing, which staff answer or,
+// for a false alarm, allow publishing anyway (signed in, with a confirm). Accepting or allowing
 // never publishes: its maker does. A browser
 // game's release is its play address: the card gives the address (never in a frame here), what
 // the automatic checks found, and where Play goes now, with nothing about files, scans or signing.
@@ -17,6 +19,7 @@ import { Link } from "react-router";
 import {
   api,
   ApiError,
+  publishBlocked,
   type AdminQueue,
   type MediaSet,
   type ModerationDecision,
@@ -38,7 +41,7 @@ import { fileLabel } from "../../components/PublishProgress";
 import { DesignPreview, portfolioWork } from "../../components/PeopleDesign";
 import { ExternalLink } from "../../components/ui";
 import { formatDate, STAGE_LABEL } from "../../format";
-import { useLoad } from "../../hooks";
+import { useConfirmStep, useLoad } from "../../hooks";
 import { holdStatus } from "./queue";
 import { ActionMessages, NoteAction, ReasonButton, RuleSelect, useAction } from "./shared";
 import { VoteLabel } from "../../components/StoreIcons";
@@ -79,7 +82,27 @@ function HoldPanel({ r, hold, onDone }: { r: Q["releases"][number]; hold: StaffH
   const question = hold.kinds.includes("question");
   return (
     <div className="release-hold">
-      {question ? (
+      {question && r.status === "ready" ? (
+        <>
+          <p className="small">
+            <b>The maker asks about what must be fixed in this release.</b> It passed its checks, but they can't publish it while
+            it has these; they think one is a false alarm. Answer below (that closes the question), or, if it's a false alarm,
+            allow publishing it anyway.
+          </p>
+          {hold.problems.length > 0 && (
+            <ul className="hold-problems">
+              {hold.problems.map((p, i) => (
+                <li key={`${p.kind}-${i}`}>
+                  <span className="badge bad">MUST FIX</span> <b>{p.what}</b>
+                  <p className="small">
+                    <PlainText text={p.explained} />
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : question ? (
         r.status === "rejected" ? (
           <p className="small">
             <b>The maker asks about this release SLAPorSLOP staff turned down.</b> The reason given: {r.status_reason ?? "no reason recorded"}.
@@ -136,6 +159,60 @@ function HoldPanel({ r, hold, onDone }: { r: Q["releases"][number]; hold: StaffH
         </>
       )}
       {hold.status === "open" && <Reply releaseId={r.id} question={question} onDone={onDone} />}
+      {r.status === "ready" && publishBlocked(r) && <AllowPublish r={r} onDone={onDone} />}
+    </div>
+  );
+}
+
+/**
+ * "Allow publishing anyway": a ready release its maker can't publish while something must be fixed
+ * in it, judged a false alarm (crates/slop-api/src/holds.rs `allow_publish`). For this release
+ * only, recorded and logged, the maker told; after a confirm, with an optional note for them.
+ * Never publishes: its maker does. Exported for tests.
+ */
+export function AllowPublish({ r, onDone }: { r: Pick<Q["releases"][number], "id" | "version" | "must_fix">; onDone: () => void }) {
+  const { busy, error, notice, run } = useAction(onDone);
+  const [confirming, setConfirming] = useState(false);
+  const [note, setNote] = useState("");
+  const { opener, close } = useConfirmStep(confirming, setConfirming);
+  const n = r.must_fix?.length ?? 0;
+  const noteId = useId();
+  return (
+    <div className="allow-publish">
+      <ActionMessages error={error} notice={notice} />
+      {!confirming ? (
+        <div className="row-actions">
+          <button ref={opener} type="button" className="btn small" disabled={busy !== undefined} onClick={() => setConfirming(true)}>
+            Allow publishing anyway…
+          </button>
+        </div>
+      ) : (
+        <div className="stage-confirm" role="group" aria-label={`Allow publishing version ${r.version} anyway`}>
+          <b>Allow publishing version {r.version} anyway?</b>
+          <p className="small">
+            Its maker can then publish it with {n === 1 ? "the item" : `the ${n} items`} above still in it. Only for this
+            version: a new one is checked afresh. It's logged, and the maker is told.
+          </p>
+          <label className="small">
+            <span id={noteId}>Note for the maker (optional)</span>
+            <input value={note} maxLength={1000} aria-labelledby={noteId} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <div className="row-actions">
+            <button
+              type="button"
+              className="btn small slime"
+              autoFocus
+              disabled={busy !== undefined}
+              onClick={() => void run(`${r.id}/allow`, () => api.admin.allowPublish(r.id, note))}
+            >
+              {busy ? "Allowing…" : "Yes, allow publishing"}
+            </button>
+            <button type="button" className="btn small ghost" disabled={busy !== undefined} onClick={close}>
+              Not yet
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -248,6 +325,7 @@ export function waivable(hold: Pick<StaffHold, "status" | "problems">): string[]
 function statusBadge(status: string): { label: string; tone: string } {
   if (status === "failed") return { label: "FAILED", tone: "bad" };
   if (status === "rejected") return { label: "REJECTED", tone: "bad" };
+  if (status === "ready") return { label: "PASSED, MUST FIX FIRST", tone: "warn" };
   return { label: "ON HOLD", tone: "warn" };
 }
 

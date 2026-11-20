@@ -25,6 +25,7 @@ import {
   type GithubRelease,
   type NewRelease,
   type Platform,
+  publishBlocked,
   type Release,
   type ReleaseRating,
   type UpdateSettings,
@@ -130,7 +131,19 @@ export function statusText(
   status: Release["status"],
   browser: boolean,
   comingSoon = false,
+  blocked = false,
 ): { label: string; badge: string; help: string } {
+  // Something must be fixed before it can be published (its Publish panel lists what).
+  if (blocked && status === "ready") {
+    return { ...STATUS.ready, help: "It passed SLAPorSLOP's checks, but something must be fixed before you can publish it. Below: what, and what you can do." };
+  }
+  // Nobody can download a Coming soon page's builds: players get them once it's in Beta.
+  if (!browser && comingSoon && status === "ready") {
+    return { ...STATUS.ready, help: "It passed every check. Once you publish it, players get it when the page is in Beta." };
+  }
+  if (!browser && comingSoon && status === "approved") {
+    return { ...STATUS.approved, help: "Signed by SLAPorSLOP when you published it. Players can install it once the page is in Beta." };
+  }
   if (browser && comingSoon && status === "approved") {
     return { ...ADDRESS_STATUS.approved, help: "Published: Play opens this address once the game is in Beta." };
   }
@@ -333,7 +346,7 @@ export function Releases() {
     // Sent now: a reload doesn't bring back the first address's problem.
     if (first) navigate(location.pathname, { replace: true, state: null });
   };
-  const status = (r: Release) => statusText(r.status, browser, app.data?.stage === "coming_soon");
+  const status = (r: Release) => statusText(r.status, browser, app.data?.stage === "coming_soon", publishBlocked(r));
   const changed = () => {
     releases.reload();
     media.reload();
@@ -501,6 +514,7 @@ export function Releases() {
                         playsNow={playsNow}
                         heldAt={heldAt}
                         picturesPending={Boolean(media.data?.pending)}
+                        scanning={server.data?.scanning}
                         onPublished={onPublished}
                         onRefused={changed}
                       />
@@ -1510,10 +1524,77 @@ export function UpdatesPanel({ slug, browser = false, onChanged }: { slug: strin
   );
 }
 
+/** "1 thing" or "3 things". */
+const things = (n: number) => (n === 1 ? "1 thing" : `${n} things`);
+
+/**
+ * What publishing does, in words that can't be mistaken (owner request 2026-11-20): `what` beside
+ * the button, `effect` in the confirm step, for every case. Publishing makes it the version players
+ * get, and nothing else: it doesn't put a draft in the store (Put it in the store on Manage does),
+ * and a Coming soon page's builds can't be downloaded at all, so Move to Beta is what lets players
+ * get it (a browser game: what makes Play open it). `effect` is undefined for a download in the
+ * store and playable, whose confirm step says how to roll back. Exported for tests.
+ */
+export function publishWords({
+  browser,
+  comingSoon,
+  draft,
+  heldAt,
+}: {
+  browser: boolean;
+  comingSoon: boolean;
+  draft: boolean;
+  heldAt?: string;
+}): { what: string; effect?: string } {
+  const notInStore = `Publishing doesn't put the ${browser ? "game" : "app"} in the store: Put it in the store, on its Manage page, does.`;
+  const toBeta = browser
+    ? "Play opens nothing on a Coming soon page: moving the game to Beta (Move to Beta, at the top of this page) is what lets players play it."
+    : "Nobody can download a Coming soon page's builds: moving the page to Beta (Move to Beta, at the top of this page) is what lets players get it.";
+  const ends = heldAt ? ` The hold at ${heldAt} ends.` : "";
+  if (browser) {
+    if (draft) {
+      return {
+        what: `Once you publish it, it's the address Play will open. ${notInStore}${comingSoon ? ` ${toBeta}` : ""}`,
+        effect: comingSoon
+          ? "Play opens it once the game is in the store and in Beta."
+          : "Players can play it once you put the game in the store.",
+      };
+    }
+    if (comingSoon) {
+      return {
+        what: `Once you publish it, it's the address Play will open. ${toBeta}`,
+        effect: `Play opens its address once the game is in Beta.${ends} To change it later, publish a newer one.`,
+      };
+    }
+    return {
+      what: "Once you publish it, Play opens its address.",
+      effect: `Play opens its address straight away.${ends} To change it later, publish a newer one.`,
+    };
+  }
+  if (draft) {
+    return {
+      what: `Once you publish it, SLAPorSLOP signs it and it's the version players will get. ${notInStore}${comingSoon ? ` ${toBeta}` : ""}`,
+      effect: comingSoon
+        ? "Players can get it once the app is in the store and in Beta."
+        : "Players can get it once you put the app in the store.",
+    };
+  }
+  if (comingSoon) {
+    return {
+      what: `Once you publish it, SLAPorSLOP signs it and it's the version players will get. ${toBeta}`,
+      effect: `Players can get it once the page is in Beta.${ends} Publishing doesn't change the page's stage.`,
+    };
+  }
+  return { what: "Once you publish it, SLAPorSLOP signs it and players get it." };
+}
+
 /**
  * Publish, on a release that passed every check (publish.rs): what to know first, as information
  * (a hold it ends, a new site, what the source check found), what it waits for, if anything, and
  * the button, with a confirm step. No checkbox and no signing in again: the maker is signed in.
+ * While something must be fixed in it (and staff haven't allowed it anyway), the button is
+ * unavailable and the panel lists what, links to the fixes and offers to ask SLAPorSLOP staff
+ * (owner decision 2026-11-20); what should be fixed is only a note.
  */
 export function PublishPanel({
   slug,
@@ -1524,6 +1605,7 @@ export function PublishPanel({
   playsNow,
   heldAt,
   picturesPending,
+  scanning,
   onPublished,
   onRefused,
 }: {
@@ -1531,6 +1613,8 @@ export function PublishPanel({
   release: Release;
   browser: boolean;
   comingSoon: boolean;
+  /** This server's scanner is on (for the conversation with staff). */
+  scanning?: boolean;
   /** The app isn't in the store yet: players get nothing until its maker puts it there. */
   draft?: boolean;
   /** The address Play opens now (a browser game). */
@@ -1547,9 +1631,14 @@ export function PublishPanel({
   const [error, setError] = useState<string>();
   const titleId = useId();
   const waitId = useId();
+  const blockId = useId();
   const { opener, close } = useConfirmStep(confirming, setConfirming);
-  const waits = publishWait(r, picturesPending);
+  const blocked = publishBlocked(r);
+  const mustFix = r.must_fix ?? [];
+  const shouldFix = r.should_fix ?? [];
+  const waits = blocked ? undefined : publishWait(r, picturesPending);
   const notes = publishNotes(r, { heldAt, playsNow });
+  const fixesLink = `/publish/${slug}/fixes`;
   // While SLAPorSLOP is in beta, going public may need the invite code first (invites.rs).
   const invite = useInviteGate();
   const publish = async () => {
@@ -1566,25 +1655,53 @@ export function PublishPanel({
       setBusy(false);
     }
   };
-  const what = draft
-    ? browser
-      ? "Once you publish it, players can play it as soon as you put the game in the store."
-      : "Once you publish it, SLAPorSLOP signs it. Players can get it once you put the app in the store."
-    : browser
-      ? `Once you publish it, Play opens its address${comingSoon ? " when the game is in Beta" : ""}.`
-      : "Once you publish it, SLAPorSLOP signs it and players get it.";
-  // What happens at once, and how to go back on it later.
-  const effect = draft
-    ? browser
-      ? "Players can play it once you put the game in the store."
-      : "Players can get it once you put the app in the store."
-    : browser
-      ? `Play opens its address${comingSoon ? " once the game is in Beta" : " straight away"}${heldAt ? `, and the hold at ${heldAt} ends` : ""}. To change it later, publish a newer one.`
-      : null;
+  // What publishing does, and (in the confirm step) what happens at once and how to go back on it.
+  const { what, effect } = publishWords({ browser, comingSoon, draft, heldAt });
+  if (blocked) {
+    return (
+      <section className="publish-panel" aria-labelledby={titleId}>
+        <h3 id={titleId}>Publish version {r.version}</h3>
+        <p className="small">
+          It passed SLAPorSLOP's checks, but {things(mustFix.length)} must be fixed before you can publish it:
+        </p>
+        <ul className="fix-list small" aria-label="Must be fixed before publishing">
+          {mustFix.map((f, i) => (
+            <li key={`${f.kind}-${i}`}>
+              <span className="badge bad">MUST FIX</span> {f.problem}
+            </li>
+          ))}
+        </ul>
+        <p className="small">
+          <Link to={fixesLink}>See how to fix {mustFix.length === 1 ? "it" : "them"}</Link> (with "Copy for your AI"). What
+          your store page says, like going online, counts as soon as you change the page; the rest needs a new version.
+        </p>
+        <div className="row-actions held-publish">
+          <button type="button" className="btn slime small" disabled aria-describedby={blockId}>
+            Publish version {r.version}…
+          </button>
+          <span id={blockId} className="small muted">
+            You can publish it once {mustFix.length === 1 ? "that's" : "they're"} fixed.
+          </span>
+        </div>
+        <AskAboutFailed slug={slug} release={r} scanning={scanning} onChanged={onRefused} />
+      </section>
+    );
+  }
   return (
     <section className="publish-panel" aria-labelledby={titleId}>
       <h3 id={titleId}>Publish version {r.version}</h3>
       <p className="small">It passed SLAPorSLOP's checks. {what}</p>
+      {r.must_fix_waived_at && mustFix.length > 0 && (
+        <p className="small">
+          SLAPorSLOP staff allowed publishing it on {formatDate(r.must_fix_waived_at)}, with what must be fixed in it:{" "}
+          {mustFix.map((f) => f.problem).join(" ")} Fix it in your next version.
+        </p>
+      )}
+      {shouldFix.length > 0 && (
+        <p className="small">
+          {things(shouldFix.length)} should be fixed: <Link to={fixesLink}>see what and how</Link>. You can publish it anyway.
+        </p>
+      )}
       {notes.length > 0 && (
         <ul className="small publish-notes" aria-label="Before you publish">
           {notes.map((n) => (

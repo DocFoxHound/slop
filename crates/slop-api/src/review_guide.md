@@ -63,7 +63,7 @@ Send your token with every request: `Authorization: Bearer slopadm_…`. Paths a
 - **The description should match the app**, with no misleading claims (for example "100% safe"
   or "no virus").
 
-### `release`: a release on hold, or a question about a failed or turned-down one
+### `release`: a release on hold, or a question about a failed, turned-down or blocked one
 
 No person reviews releases any more. Every release goes through SLAPorSLOP's automatic checks
 (files hashed and scanned, maker signatures, Microsoft Defender for Windows builds, a browser
@@ -75,7 +75,11 @@ see the releases that need staff:
 - **on hold** while Windows waits for Defender's check, once its maker wrote to staff about it, or
   from the start for a repository outside GitHub, where Slop Check (which gets Defender's check)
   can't run;
-- **failed** or **turned down**, when its maker asked staff about it (`kinds` is `question`).
+- **failed** or **turned down**, when its maker asked staff about it (`kinds` is `question`);
+- **ready but blocked**, when its maker asked staff about it (`kinds` is `question`, the release's
+  status `ready`): its checks found something that must be fixed (`problems` of kind `must_fix`,
+  the release's `must_fix`), which stops its maker publishing it, and they think it's a false
+  alarm (a "possible secret" that's a test key or a placeholder, say).
 
 `detail` is the release (its `files`, with `scan_result`, `scan_detail`, `scan_report.findings`
 and `defender`, and `repo_scan`, the source check), and `detail.hold` is the hold:
@@ -125,6 +129,17 @@ saying so. Outside GitHub, a staff member signed in checks the Windows build by 
 the check (`POST /v1/admin/releases/{id}/files/windows/waive-defender`, optional `{"reason"}`);
 an AI agent can't, so leave a note instead.
 
+#### Something that must be fixed
+
+A `must_fix` item stops its maker publishing the release. Check the maker's claim against the
+repository at the release's commit: a "possible secret" that's an example value or a public key
+is a false alarm; a real key, a payment library or code loading from the network isn't. If it's
+real, answer saying what to fix (that closes the question). If it's a false alarm, a staff member
+signed in presses **Allow publishing anyway** on the release in the admin queue
+(`POST /v1/admin/releases/{id}/allow-publish`, optional `{"reason"}`: a note for the maker): it's recorded
+on that release only, audited, and the maker is told; publishing stays theirs, and a new version
+is checked afresh. **An AI agent can't allow it**: leave a note with what you found.
+
 #### What you can do
 
 - `POST <approve.path>` accepts it, with an optional `{"reason": "…"}`: a note shown to the maker,
@@ -137,7 +152,7 @@ an AI agent can't, so leave a note instead.
   Also works on a ready release.
 - `POST <answer.path>` with `{"body": "…"}`: answers the maker in the conversation (up to 4,000
   characters; they're notified). Ask what you need to know, or explain a decision. An answer
-  closes a question about a failed or turned-down release, and takes a hold that's only waiting
+  closes a question about a failed, turned-down or blocked release, and takes a hold that's only waiting
   for the maker (a missing Defender check they can get) out of the queue until they write back.
 - `POST <note.path>`: a note for a person, as for every kind.
 

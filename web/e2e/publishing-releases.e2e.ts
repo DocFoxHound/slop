@@ -532,7 +532,7 @@ test("its maker publishes the release, then staff withdraw it; Check a file says
   const panel = row.getByRole("region", { name: "Publish version 1.0.0" });
   // A draft: players get nothing until its maker puts it in the store.
   await expect(panel).toContainText(
-    "It passed SLAPorSLOP's checks. Once you publish it, SLAPorSLOP signs it. Players can get it once you put the app in the store.",
+    "It passed SLAPorSLOP's checks. Once you publish it, SLAPorSLOP signs it and it's the version players will get. Publishing doesn't put the app in the store: Put it in the store, on its Manage page, does.",
   );
   await panel.getByRole("button", { name: "Publish version 1.0.0…" }).click();
   const confirm = panel.getByRole("group", { name: "Publish version 1.0.0" });

@@ -752,6 +752,18 @@ pub(crate) struct ReleaseInfo {
     /// SLAPorSLOP staff check that before it can be published (publish.rs).
     #[serde(skip_serializing_if = "Option::is_none")]
     rating_change: Option<RatingChange>,
+    /// For its maker and staff, before it's published: what its checks found that must be fixed
+    /// (fixes.rs `of_release`, judged against the store page as it is now). While there's any
+    /// and `must_fix_waived_at` is null, it can't be published (publish.rs). Empty otherwise.
+    must_fix: Vec<crate::fixes::FixBrief>,
+    /// What should be fixed: it can be published anyway.
+    should_fix: Vec<crate::fixes::FixBrief>,
+    /// When SLAPorSLOP staff allowed publishing it with its `must` items (holds.rs), if they did.
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    must_fix_waived_at: Option<OffsetDateTime>,
     /// For its maker, a browser game's release that passed its checks: whether it brings another
     /// address than the one Play opens now (a new site).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1241,7 +1253,8 @@ pub enum ReleaseEvent<'a> {
         source: &'a str,
     },
     /// It passed every check and waits for its maker to press Publish (publish.rs). Sent again
-    /// when its app's new pictures are decided.
+    /// when its app's new pictures are decided. What must or should be fixed in it first (fixes.rs
+    /// `of_release`) is said in the notice, which then links to the fixes.
     Ready {
         pictures_pending: bool,
         /// What the source check found that the last published release didn't have.
@@ -1261,6 +1274,8 @@ pub enum ReleaseEvent<'a> {
     },
     /// SLAPorSLOP staff answered in the release's hold conversation.
     StaffReplied,
+    /// SLAPorSLOP staff allowed publishing it with its `must` items (holds.rs).
+    PublishAllowed,
     /// Its maker published it: players get it.
     Published,
     Rejected {
@@ -1301,9 +1316,19 @@ pub async fn tell_maker(
     } else {
         "Play opens this address now."
     };
-    // Where to act on it: an unexpected release is withdrawn from the app's Manage page.
+    // What must and should be fixed before it's published: a `must` stops Publish.
+    let (must, should) = match event {
+        ReleaseEvent::Ready { .. } => {
+            let found = crate::fixes::of_release(conn, release_id).await?;
+            (found.blocking().len(), found.with("should").len())
+        }
+        _ => (0, 0),
+    };
+    // Where to act on it: an unexpected release is withdrawn from the app's Manage page; what to
+    // fix is on the To fix tab.
     let page = match event {
         ReleaseEvent::Received { .. } => "manage",
+        ReleaseEvent::Ready { .. } if must + should > 0 => "fixes",
         _ => "releases",
     };
     // Unread "passed the checks" notices for the app merge: pictures decided later say it again.
@@ -1329,14 +1354,23 @@ pub async fn tell_maker(
             concerns,
             rating,
         } => {
-            let mut body = vec![if draft {
+            let mut body = vec![if must > 0 {
+                // A `must` stops Publish (publish.rs): the way on, not the button.
+                "To fix says what and how, for you or your AI agent. Think one is wrong? Ask SLAPorSLOP staff about it on the Releases page.".to_string()
+            } else if draft {
                 // Not in the store yet: publishing alone doesn't reach players.
                 "Press Publish on the Releases page. Players can get it once you put the app in the store.".to_string()
+            } else if coming_soon && !address {
+                // Nobody downloads a Coming soon page's builds: Beta is what lets players get it.
+                "Press Publish on the Releases page. Players can get it once you move the app to Beta.".to_string()
             } else if address {
                 "Play opens it once you press Publish on the Releases page.".to_string()
             } else {
                 "Players get it once you press Publish on the Releases page.".to_string()
             }];
+            if must == 0 && should > 0 {
+                body.push("You can publish it as it is; To fix says what and how.".into());
+            }
             if pictures_pending {
                 body.push("Its new pictures are waiting for review first.".into());
             }
@@ -1347,7 +1381,17 @@ pub async fn tell_maker(
                 body.push(format!("It {}.", r.describe()));
             }
             (
-                format!("{title} {version} passed SLAPorSLOP's checks"),
+                match (must, should) {
+                    (0, 0) => format!("{title} {version} passed SLAPorSLOP's checks"),
+                    (0, should) => format!(
+                        "{title} {version} passed its checks, but {} should be fixed",
+                        crate::fixes::things(should)
+                    ),
+                    (must, _) => format!(
+                        "{title} {version} passed its checks, but {} must be fixed before you can publish it",
+                        crate::fixes::things(must)
+                    ),
+                },
                 body.join(" "),
             )
         }
@@ -1395,6 +1439,10 @@ pub async fn tell_maker(
             format!("SLAPorSLOP staff answered about {title} {version}"),
             "Read it on the Releases page.".into(),
         ),
+        ReleaseEvent::PublishAllowed => (
+            format!("{title} {version} can be published"),
+            "SLAPorSLOP staff looked at what must be fixed in it and allowed publishing it anyway. Press Publish on the Releases page when you're ready.".into(),
+        ),
         ReleaseEvent::Published => (
             format!("{title} {version} is out"),
             if draft {
@@ -1404,6 +1452,9 @@ pub async fn tell_maker(
                 )
             } else if address {
                 format!("You published it. {play_opens}")
+            } else if coming_soon {
+                // A Coming soon page's builds can't be downloaded: Beta is what lets players get it.
+                "You published it. Players can get it once you move the app to Beta.".into()
             } else {
                 "You published it. Players get it as an update.".into()
             },
@@ -1511,6 +1562,13 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
     };
     let pictures_pending =
         row.status == "ready" && crate::media::has_pending(&mut conn, row.app_id).await?;
+    // What must and should be fixed before it's published (a `must` stops Publish, publish.rs);
+    // `list_releases` keeps it from everyone but its maker.
+    let fixes = if matches!(row.status.as_str(), "awaiting_review" | "ready") {
+        Some(crate::fixes::of_release(&mut conn, id).await?)
+    } else {
+        None
+    };
     let progress = release_progress(
         state,
         (&row.status, row.status_reason.as_deref(), row.auto_approved),
@@ -1519,6 +1577,7 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
             crate::holds::slop_check_runs(&row.repo_url),
             pictures_pending,
             row.draft,
+            fixes.as_ref().map_or(0, |f| f.blocking().len()),
         ),
         &mut files,
         row.play_address
@@ -1544,6 +1603,9 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
     // What its maker sees before publishing it (publish.rs); `list_releases` keeps it from
     // everyone else.
     let (mut new_concerns, mut lowered, mut new_play_address) = (None, None, None);
+    let must_fix = fixes.as_ref().map(|f| f.with("must")).unwrap_or_default();
+    let should_fix = fixes.as_ref().map(|f| f.with("should")).unwrap_or_default();
+    let must_fix_waived_at = fixes.as_ref().and_then(|f| f.waived_at);
     if matches!(row.status.as_str(), "awaiting_review" | "ready") {
         new_concerns = crate::source_scan::new_concerns(&mut conn, id)
             .await
@@ -1570,6 +1632,9 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         published_at: row.published_at,
         new_concerns,
         rating_change: lowered,
+        must_fix,
+        should_fix,
+        must_fix_waived_at,
         new_play_address,
         hold,
         rating: row.min_age.map(|min_age| Rating {
@@ -1590,7 +1655,13 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
 async fn release_progress(
     state: &AppState,
     (status, status_reason, auto_approved): (&str, Option<&str>, bool),
-    (hold_kinds, slop_check, pictures_pending, draft): (&[String], bool, bool, bool),
+    (hold_kinds, slop_check, pictures_pending, draft, must_fix): (
+        &[String],
+        bool,
+        bool,
+        bool,
+        usize,
+    ),
     files: &mut [ReleaseFileInfo],
     address: Option<crate::release_progress::Address>,
 ) -> ApiResult<crate::release_progress::ReleaseProgress> {
@@ -1622,6 +1693,7 @@ async fn release_progress(
         slop_check,
         pictures_pending,
         draft,
+        must_fix,
         files: &states,
         now: OffsetDateTime::now_utc(),
         seconds_per_file,
@@ -1684,6 +1756,9 @@ async fn list_releases(
             release.advisories.clear();
             release.new_concerns = None;
             release.rating_change = None;
+            release.must_fix.clear();
+            release.should_fix.clear();
+            release.must_fix_waived_at = None;
             release.new_play_address = None;
             release.hold = None;
             for f in &mut release.files {

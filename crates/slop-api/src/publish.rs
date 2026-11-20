@@ -10,7 +10,9 @@
 //! - **ready**: it passed. Nothing is signed yet and players can't get it; its maker presses
 //!   Publish (`publish`), signed in themselves: never an AI agent's token or session. Publishing
 //!   signs the manifest, gives the store page the release's rating, ends a hold on an older
-//!   release and makes it what players get (`releases::SERVING`, `catalog::PLAY_RELEASE`).
+//!   release and makes it what players get (`releases::SERVING`, `catalog::PLAY_RELEASE`). It
+//!   doesn't put a draft in the store, or move a Coming soon page to Beta: players get nothing
+//!   until those happen too (manage.rs).
 //! - **on hold** (`awaiting_review`, with a `release_holds` row): a scanner or Microsoft Defender
 //!   flagged a file (SLAPorSLOP staff look, and can clear a false positive), a Windows build is
 //!   still waiting for Defender's check (it goes on by itself once Slop Check reports), or it
@@ -18,8 +20,15 @@
 //!   acceptance is recorded in `releases.rating_accepted_at`, `rating_accepted_by`).
 //! - **failed**: something the maker has to change, said plainly.
 //!
-//! What the source check found that the last published release didn't have is shown to the
-//! maker and logged, not a reason to wait.
+//! **A MUST FIX blocks Publish** (owner decision 2026-11-20): a ready release whose checks found a
+//! `must` item (fixes.rs `of_release`: a possible secret, a licence problem, purchases, code from
+//! outside SLAPorSLOP, going online without the store page saying so…) can't be published until
+//! it's fixed. What the store page decides is judged against the page as it is when Publish is
+//! pressed, so changing the page is enough for those; the rest need a new release. A false alarm
+//! is for SLAPorSLOP staff: the maker asks them about the release (holds.rs), and a staff member
+//! signed in can allow publishing that release anyway (`releases.must_fix_waived_at`). `should`
+//! items never stop it, and neither does what the source check found that the last published
+//! release didn't have (`new_concerns`): both are shown to the maker, and the latter logged.
 
 use anyhow::Context;
 use axum::{
@@ -1062,8 +1071,9 @@ async fn publish_route(
 
 /// Publishes release `release_id` for its app's maker `by`, in one transaction with the app and
 /// the release locked. Refuses (409) unless it's `ready`, the app isn't frozen, its new pictures
-/// are reviewed, its source check has a result, no newer release is out and every gate still
-/// passes, a lowered rating included (staff must have accepted it: defence in depth, since the
+/// are reviewed, its source check has a result, no newer release is out, it has no `must` fix
+/// (`must_fix_refusal`) unless staff allowed it anyway, and every gate still passes, a lowered
+/// rating included (staff must have accepted it: defence in depth, since the
 /// published release it's compared with may have changed since its checks). A gate that fails
 /// now marks it failed; a hold puts it back on hold. Then it signs
 /// the manifest (a browser game's address has none), makes it what players get, gives the store
@@ -1139,6 +1149,11 @@ pub async fn publish(
         return Err(ApiError::Conflict(format!(
             "Version {newer} is newer and already out"
         )));
+    }
+    let found = crate::fixes::of_release(&mut tx, release_id).await?;
+    let blocking = found.blocking();
+    if !blocking.is_empty() {
+        return Err(ApiError::Conflict(must_fix_refusal(&version, &blocking)));
     }
     let rating = releases::rating_change(&mut tx, release_id).await?;
     let subject = Subject {
@@ -1233,6 +1248,15 @@ pub async fn publish(
     if !replaced.is_empty() {
         detail["replaced"] = json!(replaced);
     }
+    // A question its maker asked staff about what had to be fixed ends with publishing it.
+    if close_hold(&mut tx, release_id, "passed", &actor).await? {
+        system_line(&mut tx, release_id, "Closed: its maker published it.", None).await?;
+    }
+    // Published with what must be fixed in it, as SLAPorSLOP staff allowed.
+    if let Some(at) = found.waived_at {
+        detail["must_fix_waived_at"] = json!(at.format(&Rfc3339).ok());
+        detail["must_fix"] = json!(found.with("must"));
+    }
     detail["rating"] = json!(rating);
     detail["concerns"] = json!(crate::source_scan::new_concerns(&mut tx, release_id).await?);
     admin::audit(
@@ -1246,4 +1270,15 @@ pub async fn publish(
     releases::tell_maker(&mut tx, release_id, ReleaseEvent::Published).await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// Why Publish refuses a release with `must` items: each one, and the ways on (no dead end).
+pub fn must_fix_refusal(version: &str, blocking: &[crate::fixes::FixBrief]) -> String {
+    let problems: Vec<&str> = blocking.iter().map(|f| f.problem.trim()).collect();
+    format!(
+        "Version {version} can't be published until {} {} fixed: {} To fix says how. If one is wrong, ask SLAPorSLOP staff about this release on the Releases page.",
+        crate::fixes::things(blocking.len()),
+        if blocking.len() == 1 { "is" } else { "are" },
+        problems.join(" ")
+    )
 }

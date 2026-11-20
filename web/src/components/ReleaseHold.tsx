@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// A release on hold, or one whose checks failed or SLAPorSLOP staff turned down, for its maker
+// A release on hold, or one whose checks failed or SLAPorSLOP staff turned down, or a ready one
+// its maker can't publish while something must be fixed in it, for its maker
 // (crates/slop-api/src/holds.rs): what holds it in plain words (with what the scanner found, so it
 // can be fixed), running the scans again, the conversation with SLAPorSLOP staff, withdrawing it,
 // and what else can be done. Everything it tells the maker to do can be done here or on this page
@@ -192,11 +193,13 @@ export function rescanLine(
   return left;
 }
 
-/** A hold's conversation, or a question about an ended release: how the maker's box reads. */
-type Writing = "ask" | "flagged" | "rating" | "other";
+/** A hold's conversation, a question about an ended release, or about what must be fixed in a
+ *  ready one: how the maker's box reads. */
+type Writing = "ask" | "must_fix" | "flagged" | "rating" | "other";
 
-/** Which box to show, from what holds it. Exported for tests. */
-export function writingFor(kinds: HoldKind[], asking: boolean): Writing {
+/** Which box to show, from what holds it (`mustFix`: a ready release it's blocked by). Exported for tests. */
+export function writingFor(kinds: HoldKind[], asking: boolean, mustFix = false): Writing {
+  if (mustFix) return "must_fix";
   if (asking) return "ask";
   if (kinds.includes("scan") || kinds.includes("defender")) return "flagged";
   if (kinds.includes("rating_lowered")) return "rating";
@@ -207,6 +210,10 @@ const WRITING: Record<Writing, { placeholder: string; hint: string }> = {
   ask: {
     placeholder: "What you'd like them to look at again, or what you don't understand",
     hint: "A person at SLAPorSLOP reads it and answers here. ",
+  },
+  must_fix: {
+    placeholder: "Which one you think is wrong, and why",
+    hint: "Say which item is a false alarm and why (a test key, a placeholder). A person at SLAPorSLOP reads it, answers here, and can allow publishing this version anyway. ",
   },
   flagged: {
     placeholder: "Why it's a false positive, or what you'd like to know",
@@ -272,8 +279,10 @@ export function ReleaseHold({
   }
   if (!h) return <p className="muted small">Loading what holds it…</p>;
 
-  // Failed, or turned down by staff: the maker can only ask about it.
-  const asking = h.release_status === "failed" || h.release_status === "rejected";
+  // Failed, or turned down by staff, or ready but blocked by what must be fixed (listed with its
+  // Publish button): the maker can only ask about it.
+  const blocked = h.release_status === "ready";
+  const asking = h.release_status === "failed" || h.release_status === "rejected" || blocked;
   const open = h.status === "open";
   const question = h.kinds.includes("question");
   const changed = (next: MakerHold) => {
@@ -327,7 +336,7 @@ export function ReleaseHold({
         </dl>
       )}
       {open && h.kinds.includes("scan") && <Rescan slug={slug} hold={h} scanning={scanning} onChanged={changed} />}
-      {h.you_can.includes("new_release") && (
+      {h.you_can.includes("new_release") && !blocked && (
         <p className="small">
           {next.before} <NewReleaseLink />
           {next.after}
@@ -340,7 +349,7 @@ export function ReleaseHold({
           slug={slug}
           releaseId={release.id}
           version={h.version}
-          writing={writingFor(h.kinds, asking)}
+          writing={writingFor(h.kinds, asking, blocked)}
           onSent={changed}
         />
       )}
@@ -447,7 +456,7 @@ function WriteToStaff({
       setBusy(false);
     }
   };
-  const asking = writing === "ask";
+  const asking = writing === "ask" || writing === "must_fix";
   const label = asking ? "Ask SLAPorSLOP staff" : "Write to SLAPorSLOP staff";
   const bodyError = error?.field === "body";
   return (
@@ -545,9 +554,10 @@ function Withdraw({ slug, releaseId, version, onDone }: { slug: string; releaseI
 }
 
 /**
- * A failed release, or one SLAPorSLOP staff turned down: "Ask SLAPorSLOP staff" opens the
- * conversation (a person looks at a refusal again on request). Shown open once there's a
- * conversation already.
+ * A failed release, one SLAPorSLOP staff turned down, or a ready one its maker can't publish while
+ * something must be fixed in it: "Ask SLAPorSLOP staff" opens the conversation (a person looks at
+ * a refusal again on request, and can allow publishing a blocked one anyway). Shown open once
+ * there's a question already.
  */
 export function AskAboutFailed({
   slug,
@@ -562,11 +572,23 @@ export function AskAboutFailed({
 }) {
   // Open once there's a question: a failed release's hold is one; a turned-down release's past
   // hold (what held it) folds away on its own until its maker asks.
-  const [open, setOpen] = useState(Boolean(release.hold && (release.status === "failed" || release.hold.kinds.includes("question"))));
+  const ready = release.status === "ready";
+  const [open, setOpen] = useState(
+    Boolean(
+      release.hold &&
+        (ready
+          ? release.hold.status === "open" && release.hold.kinds.includes("question")
+          : release.status === "failed" || release.hold.kinds.includes("question")),
+    ),
+  );
   if (open) return <ReleaseHold slug={slug} release={release} scanning={scanning} onChanged={onChanged} />;
   return (
     <p className="small">
-      {release.status === "rejected" ? "Want SLAPorSLOP staff to explain, or look again?" : "Think the checks got it wrong?"}{" "}
+      {release.status === "rejected"
+        ? "Want SLAPorSLOP staff to explain, or look again?"
+        : ready
+          ? "Think one is wrong?"
+          : "Think the checks got it wrong?"}{" "}
       <button type="button" className="btn small" onClick={() => setOpen(true)}>
         Ask SLAPorSLOP staff
       </button>
