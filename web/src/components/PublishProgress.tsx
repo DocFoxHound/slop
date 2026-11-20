@@ -328,13 +328,13 @@ function publishStep(app: ProgressApp, latest: Release, published: Release | und
   };
 }
 
-/** A link to the fixes SLAPorSLOP's checks found, ready to copy for an AI agent (Releases page). */
+/** A link to the fixes SLAPorSLOP's checks found, ready to copy for an AI agent (the To fix tab). */
 function FixesLink({ slug }: { slug?: string }) {
   if (!slug) return null;
   return (
     <>
       {" "}
-      <Link to={`/publish/${slug}/releases#fixes`}>See what to fix</Link> (with "Copy for your AI"), or ask your AI agent to
+      <Link to={`/publish/${slug}/fixes`}>See what to fix</Link> (with "Copy for your AI"), or ask your AI agent to
       run <code>get_fixes</code>.
     </>
   );

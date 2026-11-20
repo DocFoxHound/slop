@@ -1,20 +1,63 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The maker's workspace for one app: its name and where it stands, the stage bar (Coming soon →
-// Beta → Released, moved on from here) and tabs between Manage, Edit store page and Releases. The
-// three pages lay their panels out in two columns inside it (.maker-cols).
+// Beta → Released, moved on from here) and tabs between Manage, Edit store page, Releases, Builds
+// (Slop Build, Slop Check and signing; not for a browser game, which has nothing to build) and To
+// fix (what SLAPorSLOP's checks found). The pages lay their panels out in two columns inside it
+// (.maker-cols). The To fix tab counts what must or should be fixed, and Builds is marked while
+// it's the next step, so neither is missed (owner decision 2026-11-20).
 
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
-import { api, ApiError, type AppDetail, type AppStage, type ManageOverview } from "../api";
-import { daysUntil, formatDate, releaseDateText, STAGE_LABEL } from "../format";
+import { api, ApiError, type AppDetail, type AppFixes, type AppStage, type ManageOverview } from "../api";
+import { daysUntil, formatDate, playsInBrowser, releaseDateText, STAGE_LABEL } from "../format";
 import { useLoad } from "../hooks";
 import { AppIcon, appIconProps } from "./AppIcon";
 import { InviteNotice } from "./Invite";
 import { ListInStore } from "./PublishProgress";
 import { StoreIcon } from "./StoreIcons";
 
-export type MakerTab = "manage" | "page" | "releases";
+export type MakerTab = "manage" | "page" | "releases" | "builds" | "fixes";
+
+/**
+ * The To fix tab's count: the newest release's `must` and `should` items, red ("bad") when any
+ * must be fixed, amber ("warn") when they only should be, and none without either (suggestions
+ * such as "no icon yet" never count). `label` is the tab's name with it. Exported for tests.
+ */
+export function fixesBadge(
+  fixes: Pick<AppFixes, "fixes"> | undefined,
+): { count: number; tone: "bad" | "warn"; label: string } | null {
+  const list = fixes?.fixes ?? [];
+  const must = list.filter((f) => f.severity === "must").length;
+  const should = list.filter((f) => f.severity === "should").length;
+  if (must + should === 0) return null;
+  const said = [must > 0 && `${must} must be fixed`, should > 0 && `${should} should be fixed`].filter(Boolean);
+  return { count: must + should, tone: must > 0 ? "bad" : "warn", label: `To fix, ${said.join(", ")}` };
+}
+
+/** Apps whose Builds page found Slop Build in the repository, this visit: the tabs stop marking
+ *  Builds before its first release arrives. */
+const slopBuildFound = new Set<string>();
+
+/** What the Builds page found (Builds.tsx). */
+export function rememberSlopBuild(slug: string, found: boolean) {
+  if (found) slopBuildFound.add(slug);
+  else slopBuildFound.delete(slug);
+}
+
+/**
+ * Whether Builds is the next step, so its tab is marked: a download on GitHub (where Slop Build
+ * runs) with no release yet, and Slop Build not found in its repository. A release from anywhere
+ * ends it, so the tabs need only the To fix count's call, never GitHub. Exported for tests.
+ */
+export function buildsNext(
+  app: Pick<AppDetail, "slug" | "repo_url"> & { browser: boolean },
+  fixes: Pick<AppFixes, "release"> | undefined,
+  slopBuildSetUp?: boolean,
+): boolean {
+  if (app.browser || !app.repo_url.startsWith("https://github.com/") || !fixes) return false;
+  return fixes.release === null && !(slopBuildSetUp ?? slopBuildFound.has(app.slug));
+}
 
 const STAGES: AppStage[] = ["coming_soon", "beta", "released"];
 
@@ -87,6 +130,9 @@ export function MakerFrame({
   app,
   tab,
   overview,
+  fixes,
+  fixesKey,
+  slopBuildSetUp,
   onStageMoved,
   children,
 }: {
@@ -94,16 +140,30 @@ export function MakerFrame({
   tab: MakerTab;
   /** The Manage overview when the page has it already; loaded here otherwise. */
   overview?: ManageOverview;
+  /** The fixes when the page has them already (To fix); loaded here otherwise, once. */
+  fixes?: AppFixes;
+  /** Changes when the newest release may have new fixes: they're loaded again. */
+  fixesKey?: string;
+  /** Whether Slop Build is in the repository, when the page knows (Builds). */
+  slopBuildSetUp?: boolean;
   onStageMoved?: () => void;
   children: ReactNode;
 }) {
   const own = useLoad(() => (overview ? Promise.resolve(undefined) : api.manage(app.slug)), [app.slug, Boolean(overview)]);
+  const ownFixes = useLoad(() => (fixes ? Promise.resolve(undefined) : api.fixes(app.slug)), [app.slug, Boolean(fixes), fixesKey]);
   const can = overview?.can_advance ?? own.data?.can_advance;
+  const found = fixes ?? ownFixes.data;
+  const browser = playsInBrowser(app);
+  const badge = fixesBadge(found);
+  const next = buildsNext({ ...app, browser }, found, slopBuildSetUp);
   const base = `/publish/${app.slug}`;
-  const tabs: Array<[MakerTab, string, string]> = [
+  // [tab, its name, address, its name with its count or mark, for screen readers]
+  const tabs: Array<[MakerTab, string, string, string?]> = [
     ["manage", "Manage", `${base}/manage`],
     ["page", "Edit store page", base],
     ["releases", "Releases", `${base}/releases`],
+    ...(browser ? [] : [["builds", "Builds", `${base}/builds`, next ? "Builds, the next step" : undefined] as [MakerTab, string, string, string?]]),
+    ["fixes", "To fix", `${base}/fixes`, badge?.label],
   ];
   return (
     <div className="page maker">
@@ -167,9 +227,23 @@ export function MakerFrame({
         </section>
       )}
       <nav className="maker-tabs" aria-label={`${app.title}: maker pages`}>
-        {tabs.map(([key, label, to]) => (
-          <Link key={key} to={to} className={tab === key ? "on" : undefined} aria-current={tab === key ? "page" : undefined}>
+        {tabs.map(([key, label, to, named]) => (
+          <Link
+            key={key}
+            to={to}
+            className={tab === key ? "on" : undefined}
+            aria-current={tab === key ? "page" : undefined}
+            aria-label={named}
+          >
             {label}
+            {key === "fixes" && badge && (
+              <span className={`badge ${badge.tone} tab-count`} aria-hidden="true">
+                {/* Not colour alone: "!" where something must be fixed. */}
+                {badge.tone === "bad" && "!"}
+                {badge.count}
+              </span>
+            )}
+            {key === "builds" && next && <span className="tab-mark" aria-hidden="true" title="The next step" />}
           </Link>
         ))}
       </nav>

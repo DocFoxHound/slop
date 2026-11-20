@@ -144,7 +144,7 @@ export function HoldLog({ lines, label }: { lines: LogLine[]; label: string }) {
 /** The guide's pointer is a link here, not text. */
 const GUIDE_POINTER = / ?\(see \/publish\/guide#slop-check\)/;
 
-function Problem({ p }: { p: HoldProblem }) {
+function Problem({ p, slug }: { p: HoldProblem; slug: string }) {
   return (
     <li>
       <b>{p.what}</b>
@@ -155,20 +155,11 @@ function Problem({ p }: { p: HoldProblem }) {
       {p.kind === "defender_missing" && p.you_can.includes("run_slop_check") && (
         <p className="small">
           <Link to="/publish/guide#slop-check">How Slop Check works</Link>.{" "}
-          <a href="#slop-check" onClick={openSlopCheck}>
-            Add Slop Check to your repository
-          </a>{" "}
-          from this page.
+          <Link to={`/publish/${slug}/builds#slop-check`}>Add Slop Check to your repository</Link> on the Builds tab.
         </p>
       )}
     </li>
   );
-}
-
-/** Opens the "Building somewhere else?" part of Slop Build's panel, where Slop Check is added. */
-function openSlopCheck() {
-  const details = document.getElementById("slop-check");
-  if (details instanceof HTMLDetailsElement) details.open = true;
 }
 
 /**
@@ -317,7 +308,7 @@ export function ReleaseHold({
       {!asking && h.problems.length > 0 && (
         <ul className="hold-problems">
           {h.problems.map((p, i) => (
-            <Problem key={`${p.kind}-${p.platform ?? i}`} p={p} />
+            <Problem key={`${p.kind}-${p.platform ?? i}`} p={p} slug={slug} />
           ))}
         </ul>
       )}

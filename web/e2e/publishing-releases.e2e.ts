@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Publishing, part 2: the Releases page. Submitting by hand (field errors, the rating, runtimes,
 // notes), the history (badges, checks, notes, failures, withdrawal), picking a GitHub release, the
-// update settings, fixes and Slop Build panels. Then its maker publishes it, and "Check a file"
-// finds the builds.
+// update settings, and the To fix and Builds tabs beside it (fixes to copy for an AI agent, Slop
+// Build and Slop Check). Then its maker publishes it, and "Check a file" finds the builds.
 import { createHash } from "node:crypto";
 
 import { expect, ids, signIn, test } from "./fixtures";
@@ -46,8 +46,8 @@ test("submitting by hand: each mistake shows by its field", async ({ page }) => 
     "page",
   );
   await expect(page.getByText("No releases yet.")).toBeVisible();
-  // Nothing to fix before there's a release.
-  await expect(page.getByRole("heading", { name: /^To fix in/ })).toHaveCount(0);
+  // Nothing to fix before there's a release: To fix has no count.
+  await expect(page.getByRole("navigation", { name: /maker pages/ }).getByRole("link", { name: "To fix", exact: true })).toBeVisible();
   const form = page.locator("form").filter({ has: page.getByRole("heading", { name: "New release" }) });
   const version = form.getByRole("textbox", { name: /^Version/ });
   const commit = form.getByRole("textbox", { name: /^Commit/ });
@@ -314,11 +314,16 @@ test("update settings: pick up GitHub releases; nothing is published automatical
   await expect(panel.getByText("GITHUB APP INSTALLED")).toBeVisible();
 });
 
-test("fixes from the checks, ready to copy for an AI agent", async ({ page, context }) => {
+test("fixes from the checks, on the To fix tab, ready to copy for an AI agent", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await signIn(page, "maker");
-  // The newest release failed: that's the fix.
+  // The newest release failed: that's the fix, counted on the tab from every maker page.
   await page.goto(page_);
+  const tabs = page.getByRole("navigation", { name: /maker pages/ });
+  await expect(tabs.getByRole("link", { name: "To fix, 1 must be fixed" })).toBeVisible();
+  await tabs.getByRole("link", { name: "To fix, 1 must be fixed" }).click();
+  await expect(page).toHaveURL(new RegExp(`/publish/${slug}/fixes$`));
+  await expect(tabs.getByRole("link", { name: "To fix, 1 must be fixed" })).toHaveAttribute("aria-current", "page");
   const panel = page.getByRole("region", { name: "To fix in 1.0.1-missing" });
   await expect(panel.locator("li")).toHaveCount(1);
   await expect(panel.locator("li")).toContainText("MUST FIX");
@@ -346,10 +351,13 @@ test("fixes from the checks, ready to copy for an AI agent", async ({ page, cont
         guide_section: "Saves and sandbox mode",
       },
     ],
+    recommendations: [{ kind: "media:icon", severity: "recommended", problem: "No icon yet.", instruction: "Add slop/icon.png." }],
     next: "Then submit a new release.",
   });
   await page.reload();
   const mocked = page.getByRole("region", { name: "To fix in 1.0.2" });
+  await expect(tabs.getByRole("link", { name: "To fix, 1 must be fixed, 1 should be fixed" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Worth doing" }).getByText("No icon yet.")).toBeVisible();
   await expect(mocked.locator("li")).toHaveCount(2);
   await expect(mocked.locator("li").nth(1)).toContainText("SHOULD FIX");
   await mocked.locator("li").nth(1).getByRole("button", { name: "Copy for your AI" }).click();
@@ -357,13 +365,21 @@ test("fixes from the checks, ready to copy for an AI agent", async ({ page, cont
     "SLAPorSLOP's checks of my app found this. Saves go to Documents.\nFix it in the repository: Write saves to SLOP_SAVE_DIR.\n" +
       '(SLAPorSLOP\'s publishing guide, section "Saves and sandbox mode", has the details.)',
   );
+
+  // Older links to the Releases page's fixes land on the tab.
+  await page.goto(`${page_}#fixes`);
+  await expect(page).toHaveURL(new RegExp(`/publish/${slug}/fixes$`));
 });
 
-test("Slop Build: hidden where it isn't set up, a ready-made file where it is", async ({ page }) => {
+test("Slop Build on the Builds tab: off where it isn't set up, a ready-made file where it is", async ({ page }) => {
   await signIn(page, "maker");
   await page.goto(page_);
   await expect(page.locator("section.updates-panel")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Let Slop Build do it" })).toHaveCount(0);
+  await page.getByRole("navigation", { name: /maker pages/ }).getByRole("link", { name: /^Builds/ }).click();
+  await expect(page).toHaveURL(new RegExp(`/publish/${slug}/builds$`));
+  await expect(page.getByText("Slop Build isn't switched on on this SLAPorSLOP server")).toBeVisible();
+  await expect(page.getByText("Or build and sign it yourself")).toBeVisible();
   const setup = {
     supported: true,
     project_type: "rust",
@@ -376,6 +392,11 @@ test("Slop Build: hidden where it isn't set up, a ready-made file where it is", 
     check_workflow: "name: Slop Check",
     check_create_url: "https://github.com/e2e/tide/new/main?filename=.github/workflows/slop-check.yml",
     build_now_url: "https://github.com/e2e/tide/actions/workflows/slop-build.yml",
+    existing: null,
+    check_existing: null,
+    taken: null,
+    check_taken: null,
+    workflows_checked: true,
   };
   await answer(page, `/v1/apps/${slug}/slop-build`, setup);
   await page.reload();
@@ -385,8 +406,10 @@ test("Slop Build: hidden where it isn't set up, a ready-made file where it is", 
   await expect(section.getByText(".github/workflows/slop-build.yml")).toBeVisible();
   await expect(section.getByRole("link", { name: "Add to my repository on GitHub" })).toHaveAttribute("href", setup.create_url);
   await expect(section.getByRole("link", { name: "Build now" })).toHaveAttribute("href", setup.build_now_url);
-  await section.getByText("Building somewhere else?").click();
-  await expect(section.getByRole("link", { name: "Add Slop Check to my repository" })).toHaveAttribute("href", setup.check_create_url);
+  // Slop Check, folded away beside it.
+  const check = page.locator("details#slop-check");
+  await check.getByText("Building somewhere else?").click();
+  await expect(check.getByRole("link", { name: "Add Slop Check to my repository" })).toHaveAttribute("href", setup.check_create_url);
 
   // A project it can't tell: a note instead of the guess.
   await page.unroute(`**/v1/apps/${slug}/slop-build`);
@@ -394,6 +417,23 @@ test("Slop Build: hidden where it isn't set up, a ready-made file where it is", 
   await page.reload();
   await expect(section.getByText("SLAPorSLOP couldn't tell how to build this; fill in the build command.")).toBeVisible();
   await expect(section.getByText(/Detected a/)).toHaveCount(0);
+
+  // Already in the repository: set up, with Build now, and nothing to add again.
+  const existing = { path: ".github/workflows/slop.yml", html_url: "https://github.com/e2e/tide/blob/main/.github/workflows/slop.yml" };
+  await page.unroute(`**/v1/apps/${slug}/slop-build`);
+  await answer(page, `/v1/apps/${slug}/slop-build`, {
+    ...setup,
+    file_path: existing.path,
+    create_url: null,
+    build_now_url: "https://github.com/e2e/tide/actions/workflows/slop.yml",
+    existing,
+  });
+  await page.reload();
+  await expect(section.getByRole("heading", { name: "Slop Build", exact: true })).toBeVisible();
+  await expect(section.getByText("Slop Build is set up:")).toBeVisible();
+  await expect(section.getByRole("link", { name: existing.path })).toHaveAttribute("href", existing.html_url);
+  await expect(section.getByRole("link", { name: "Build now" })).toHaveAttribute("href", "https://github.com/e2e/tide/actions/workflows/slop.yml");
+  await expect(section.getByRole("link", { name: "Add to my repository on GitHub" })).toHaveCount(0);
 });
 
 test("an app with no platforms is asked for them first", async ({ page }) => {

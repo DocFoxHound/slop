@@ -3845,6 +3845,197 @@ async fn slop_build_setup_reads_the_repository_and_links_to_github(db: PgPool) {
     );
 }
 
+/// Slop Build or Slop Check already in the repository (the owner's report, 2026-11-20: a
+/// working slop.yml, and GitHub saying "A file with the same name already exists"): found in
+/// .github/workflows, and nothing offered that GitHub would refuse.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_build_setup_finds_the_workflows_already_there(db: PgPool) {
+    use base64::Engine;
+    let (gh_base, gh) = fake_gh().await;
+    let raw = format!("{gh_base}raw/");
+    let app = app_on(db, &gh_base, move |c| {
+        c.media.github_raw_base = raw.parse().unwrap();
+    })
+    .await;
+    let (_, maker) = github_app(&app).await;
+    gh.json(
+        "/repos/octo/game",
+        200,
+        json!({ "default_branch": "main", "id": 1001, "owner": { "id": 42 } }),
+    );
+    let setup = || async {
+        let res = app
+            .send(req(Method::GET, "/v1/apps/game/slop-build").cookie(&maker))
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        body_json(res).await
+    };
+    const DIR: &str = "/repos/octo/game/contents/.github/workflows";
+    let entry = |name: &str, size: u64| {
+        json!({
+            "name": name,
+            "path": format!(".github/workflows/{name}"),
+            "size": size,
+            "type": "file",
+            "html_url": format!("https://github.com/octo/game/blob/main/.github/workflows/{name}"),
+        })
+    };
+    let raw_file = |name: &str| format!("/raw/octo/game/HEAD/.github/workflows/{name}");
+    const BUILD: &str = "jobs:\n  build:\n    uses: slop/slop-build/.github/workflows/build.yml@v1\n    with:\n      app: game\n";
+    const CHECK: &str =
+        "jobs:\n  check:\n    uses: slop/slop-build/.github/workflows/check.yml@v1\n";
+
+    // No .github folder: no workflows, and GitHub isn't asked about them.
+    gh.json(
+        "/repos/octo/game/contents/",
+        200,
+        json!([{ "name": "Cargo.toml" }, { "name": "src" }]),
+    );
+    let s = setup().await;
+    assert_eq!(gh.hits(DIR), 0);
+    assert_eq!(s["workflows_checked"], true);
+    assert!(s["existing"].is_null() && s["check_existing"].is_null() && s["taken"].is_null());
+    assert_eq!(s["file_path"], ".github/workflows/slop.yml");
+
+    // A .github folder with no workflows in it: GitHub's 404.
+    gh.json(
+        "/repos/octo/game/contents/",
+        200,
+        json!([{ "name": ".github" }, { "name": "Cargo.toml" }]),
+    );
+    let s = setup().await;
+    assert_eq!(gh.hits(DIR), 1);
+    assert_eq!(s["workflows_checked"], true);
+    assert!(s["existing"].is_null());
+    assert!(
+        s["create_url"]
+            .as_str()
+            .unwrap()
+            .contains("filename=.github%2Fworkflows%2Fslop.yml")
+    );
+
+    // slop.yml is Slop Build: nothing to add, and Build now opens it. Read from
+    // raw.githubusercontent.com, never through the API.
+    gh.json(
+        DIR,
+        200,
+        json!([entry("ci.yml", 300), entry("slop.yml", 400)]),
+    );
+    gh.set(&raw_file("slop.yml"), 200, &[], BUILD);
+    gh.set(&raw_file("ci.yml"), 200, &[], "name: CI\n");
+    let s = setup().await;
+    assert_eq!(
+        s["existing"],
+        json!({
+            "path": ".github/workflows/slop.yml",
+            "html_url": "https://github.com/octo/game/blob/main/.github/workflows/slop.yml",
+        })
+    );
+    assert!(s["create_url"].is_null() && s["taken"].is_null());
+    assert_eq!(s["file_path"], ".github/workflows/slop.yml");
+    assert_eq!(
+        s["build_now_url"],
+        "https://github.com/octo/game/actions/workflows/slop.yml"
+    );
+    // Slop Check isn't there: still offered, at its own name.
+    assert!(s["check_existing"].is_null());
+    assert!(
+        s["check_create_url"]
+            .as_str()
+            .unwrap()
+            .contains("filename=.github%2Fworkflows%2Fslop-check.yml")
+    );
+    assert_eq!(gh.hits(&raw_file("slop.yml")), 1);
+    assert_eq!(gh.hits(&raw_file("ci.yml")), 1);
+    assert_eq!(gh.hits(&format!("{DIR}/slop.yml")), 0);
+
+    // slop.yml is something else: Slop Build is offered as slop-build.yml, which GitHub takes.
+    gh.set(&raw_file("slop.yml"), 200, &[], "name: Deploy the docs\n");
+    let s = setup().await;
+    assert!(s["existing"].is_null());
+    assert_eq!(s["taken"]["path"], ".github/workflows/slop.yml");
+    assert_eq!(s["file_path"], ".github/workflows/slop-build.yml");
+    assert!(s["create_url"].as_str().unwrap().starts_with(
+        "https://github.com/octo/game/new/main?filename=.github%2Fworkflows%2Fslop-build.yml&value="
+    ));
+    assert_eq!(
+        s["build_now_url"],
+        "https://github.com/octo/game/actions/workflows/slop-build.yml"
+    );
+
+    // Slop Build and Slop Check under names of the maker's own, beside that slop.yml; and a
+    // slop-check.yml that isn't Slop Check.
+    gh.json(
+        DIR,
+        200,
+        json!([
+            entry("slop.yml", 100),
+            entry("release.yml", 200),
+            entry("checks.yaml", 300),
+            entry("slop-check.yml", 50),
+        ]),
+    );
+    gh.set(&raw_file("release.yml"), 200, &[], BUILD);
+    gh.set(&raw_file("checks.yaml"), 200, &[], CHECK);
+    gh.set(&raw_file("slop-check.yml"), 200, &[], "name: Lint\n");
+    let s = setup().await;
+    assert_eq!(s["existing"]["path"], ".github/workflows/release.yml");
+    assert_eq!(s["check_existing"]["path"], ".github/workflows/checks.yaml");
+    assert_eq!(s["file_path"], ".github/workflows/release.yml");
+    assert_eq!(s["check_file_path"], ".github/workflows/checks.yaml");
+    assert!(s["create_url"].is_null() && s["check_create_url"].is_null());
+    // Found elsewhere, the files at the usual names don't matter.
+    assert!(s["taken"].is_null() && s["check_taken"].is_null());
+    assert_eq!(
+        s["build_now_url"],
+        "https://github.com/octo/game/actions/workflows/release.yml"
+    );
+
+    // Only that slop-check.yml: Slop Check is offered as slop-check-2.yml.
+    gh.json(DIR, 200, json!([entry("slop-check.yml", 50)]));
+    let s = setup().await;
+    assert!(s["check_existing"].is_null());
+    assert_eq!(s["check_taken"]["path"], ".github/workflows/slop-check.yml");
+    assert_eq!(s["check_file_path"], ".github/workflows/slop-check-2.yml");
+
+    // A private repository: raw.githubusercontent.com can't read it, so the API does, for two
+    // files at most (GitHub's allowance is small).
+    let encoded =
+        |t: &str| json!({ "content": base64::engine::general_purpose::STANDARD.encode(t) });
+    gh.json(
+        DIR,
+        200,
+        json!([entry("a.yml", 1), entry("b.yml", 2), entry("c.yml", 3)]),
+    );
+    gh.json(&format!("{DIR}/a.yml"), 200, encoded("name: A\n"));
+    gh.json(&format!("{DIR}/b.yml"), 200, encoded(BUILD));
+    gh.json(&format!("{DIR}/c.yml"), 200, encoded(CHECK));
+    let s = setup().await;
+    assert_eq!(s["existing"]["path"], ".github/workflows/b.yml");
+    assert!(s["check_existing"].is_null());
+    assert_eq!(gh.hits(&format!("{DIR}/a.yml")), 1);
+    assert_eq!(gh.hits(&format!("{DIR}/b.yml")), 1);
+    assert_eq!(gh.hits(&format!("{DIR}/c.yml")), 0);
+
+    // GitHub not answering for the folder: the setup still works, and says it couldn't look.
+    gh.json(DIR, 500, json!({}));
+    let s = setup().await;
+    assert_eq!(s["workflows_checked"], false);
+    assert!(s["existing"].is_null() && s["create_url"].is_string());
+
+    // The maker's agent learns the same.
+    let agent = agent_token(&app, &maker, "read", None).await;
+    gh.json(DIR, 200, json!([entry("slop.yml", 400)]));
+    gh.set(&raw_file("slop.yml"), 200, &[], BUILD);
+    let res = app
+        .send(req(Method::GET, "/v1/apps/game/slop-build").header("authorization", agent))
+        .await;
+    assert_eq!(
+        body_json(res).await["existing"]["path"],
+        ".github/workflows/slop.yml"
+    );
+}
+
 /// Repository IDs are filled in for apps linked before they were recorded, and only into an
 /// empty record.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

@@ -24,6 +24,9 @@ const pages: Array<[string, "player" | "maker" | "admin" | null]> = [
   ["/publish", "maker"],
   ["/publish/new", "maker"],
   ["/app/castle-rock/branch", "maker"],
+  // An app's To fix and Builds tabs, with their count and mark.
+  [`/publish/${ids.listedApp}/fixes`, "maker"],
+  [`/publish/${ids.listedApp}/builds`, "maker"],
   ["/publish/guide", null],
   ["/transparency", null],
   ["/verify", null],

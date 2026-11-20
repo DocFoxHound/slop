@@ -4943,7 +4943,7 @@ async fn whats_left_says_who_does_each_step_with_a_link(db: PgPool) {
         fix["link"]
             .as_str()
             .unwrap()
-            .ends_with("/publish/broken/releases#fixes")
+            .ends_with("/publish/broken/fixes")
     );
     assert!(
         all["steps"][2]["link"]

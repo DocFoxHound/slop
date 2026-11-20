@@ -333,7 +333,7 @@ test("a file on hold or a release turned down says why in plain words, and links
   await expect(review).toContainText("Turned down by SLAPorSLOP staff: The game doesn't start on Windows. Fix it and submit a new version, or ask SLAPorSLOP staff about it.");
   await expect(review).toContainText("or ask your AI agent to run get_fixes.");
   await review.getByRole("link", { name: "See what to fix" }).click();
-  await expect(page).toHaveURL(new RegExp(`/publish/${slug}/releases#fixes$`));
+  await expect(page).toHaveURL(new RegExp(`/publish/${slug}/fixes$`));
   const fixes = page.getByRole("region", { name: "To fix in 1.0.0" });
   await expect(fixes).toBeInViewport();
   await expect(fixes.getByRole("button", { name: "Copy for your AI" })).toBeVisible();

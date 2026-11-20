@@ -1914,6 +1914,10 @@ label.check.news-switch input { flex: none; width: 18px; height: 18px; margin: 0
 .maker-tabs a { padding: 10px 14px; color: var(--muted); font-weight: 700; font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
 .maker-tabs a:hover { color: var(--text); }
 .maker-tabs a.on { color: var(--text); border-bottom-color: var(--slime); }
+/* To fix's count and Builds' "next step" mark (MakerFrame.tsx). */
+.maker-tabs a { display: inline-flex; align-items: center; gap: 6px; }
+.maker-tabs .tab-count { padding: 1px 7px; gap: 1px; }
+.maker-tabs .tab-mark { width: 8px; height: 8px; border-radius: 50%; background: var(--slime); }
 .maker > section.panel, .maker > .notice { margin-bottom: 16px; }
 .maker-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 16px; align-items: start; }
 .maker-cols + .maker-cols { margin-top: 16px; }

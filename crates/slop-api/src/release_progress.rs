@@ -230,7 +230,7 @@ fn address_progress(i: &Inputs, a: Address) -> (&'static str, String) {
         "rejected" => (
             "rejected",
             format!(
-                "Not approved: {}. get_fixes (or \"To fix\" on the Releases page) says what to change; then submit the address again with a new version.",
+                "Not approved: {}. get_fixes (or the app's To fix tab) says what to change; then submit the address again with a new version.",
                 reason()
             ),
         ),
@@ -428,7 +428,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
         "rejected" => (
             "rejected",
             format!(
-                "Not approved: {}. get_fixes (or \"To fix\" on the Releases page) says what to change; then submit a new version.",
+                "Not approved: {}. get_fixes (or the app's To fix tab) says what to change; then submit a new version.",
                 i.status_reason
                     .unwrap_or("no reason given")
                     .trim_end_matches('.')

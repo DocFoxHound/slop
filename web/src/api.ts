@@ -2983,6 +2983,26 @@ export interface Fix {
   guide_section?: string;
 }
 
+/** What SLAPorSLOP's checks found in an app's newest release (GET /v1/apps/{slug}/fixes). */
+export interface AppFixes {
+  /** The newest release; null before there's one. */
+  release: { id: string; version: string; status: string; status_reason?: string; must_fix_waived_at?: string } | null;
+  /** `must` and `should` items, most important first. */
+  fixes: Fix[];
+  /** The release's `must` items stop its maker publishing it (unless staff allowed it anyway). */
+  publish_blocked: boolean;
+  /** Never blocking (e.g. no icon yet), release or not. */
+  recommendations: Fix[];
+  next: string;
+}
+
+/** A workflow file in the maker's repository (Slop Build's setup). */
+export interface WorkflowFile {
+  path: string;
+  /** Its page on GitHub. */
+  html_url: string;
+}
+
 /** One of the repository's GitHub releases, for "Pick a release". */
 export interface GithubRelease {
   tag: string;
@@ -3612,8 +3632,10 @@ export const api = {
         | "custom";
       detected: string | null;
       note: string | null;
+      /** Where to commit `workflow`: another free name when `taken`. */
       file_path: string;
       workflow: string;
+      /** Null once Slop Build is there (`existing`): GitHub would refuse the name. */
       create_url: string | null;
       check_file_path: string;
       check_workflow: string;
@@ -3622,6 +3644,14 @@ export const api = {
       host: "github" | "gitlab" | "bitbucket" | "other";
       checks_run_on: "github_actions" | "slaporslop";
       build_now_url: string | null;
+      /** The repository's workflow that already calls Slop Build (and Slop Check), if any. */
+      existing?: WorkflowFile | null;
+      check_existing?: WorkflowFile | null;
+      /** A workflow of the maker's own at the usual name, which isn't Slop Build (Slop Check). */
+      taken?: WorkflowFile | null;
+      check_taken?: WorkflowFile | null;
+      /** False when GitHub didn't list .github/workflows: Slop Build may be there already. */
+      workflows_checked?: boolean;
     }>("GET", `/v1/apps/${encodeURIComponent(slug)}/slop-build`),
   manage: (slug: string) =>
     request<ManageOverview>(
@@ -4800,14 +4830,7 @@ export const api = {
   },
   /** Fixes for the problems in an app's newest release. */
   fixes: (slug: string) =>
-    request<{
-      release: { id: string; version: string; status: string; must_fix_waived_at?: string } | null;
-      fixes: Fix[];
-      /** The release's `must` items stop its maker publishing it. */
-      publish_blocked: boolean;
-      recommendations: Fix[];
-      next: string;
-    }>(
+    request<AppFixes>(
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/fixes`,
     ),

@@ -206,7 +206,7 @@ to run Slop Pong against the real Slop Link too.
 | `GET /v1/apps/{slug}/history` (`?days=30`, `90` or `365`) | the app's maker | Players, first plays and library adds per UTC day, and each day's busiest moment |
 | `PATCH /v1/me` | signed in | Settings ("Share my playtime") |
 | `POST /v1/slop-build/releases` | Slop Build (GitHub OIDC token) | A release built by the recipe |
-| `GET /v1/apps/{slug}/slop-build` | maker | Detected project type and the workflow to add |
+| `GET /v1/apps/{slug}/slop-build` | maker | Detected project type and the workflow to add, or the Slop Build and Slop Check workflows already in the repository (`existing`, `check_existing`) |
 | `GET /v1/me/library`, `PUT`/`DELETE /v1/me/library/{slug}` | signed in | The library |
 | `POST /v1/auth/desktop/requests` | desktop app | Start desktop sign-in |
 | `GET /v1/auth/desktop/requests/{id}`, `POST …/approve` | signed in (website) | Approve a desktop device |
