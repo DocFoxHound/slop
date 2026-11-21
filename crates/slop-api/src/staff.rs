@@ -508,7 +508,7 @@ async fn remove_staff(state: &AppState, user_id: Uuid, reason: &str, actor: &str
 }
 
 /// Marks requests nobody approved in time.
-async fn expire(db: &sqlx::PgPool) -> sqlx::Result<()> {
+pub(crate) async fn expire(db: &sqlx::PgPool) -> sqlx::Result<()> {
     sqlx::query(
         "update staff_actions set status = 'expired', decided_at = now()
          where status = 'pending' and requested_at < $1",

@@ -733,6 +733,63 @@ impl TestApp {
     }
 }
 
+/// The review queue, after checking that the Admin tab's count (`/v1/admin/waiting`) says the
+/// same as the lists the review queue shows, category by category.
+async fn admin_queue(app: &TestApp, cookie: &str) -> Value {
+    let get = |path: &'static str| async move {
+        let res = app.send(req(Method::GET, path).cookie(cookie)).await;
+        (res.status(), body_json(res).await)
+    };
+    let (status, queue) = get("/v1/admin/queue").await;
+    if status != StatusCode::OK {
+        return queue;
+    }
+    let (_, waiting) = get("/v1/admin/waiting").await;
+    let len = |v: &Value| v.as_array().map_or(0, |a| a.len()) as i64;
+    let open = |v: &Value, key: &str, want: &str| {
+        v.as_array()
+            .map_or(0, |a| a.iter().filter(|x| x[key] == want).count()) as i64
+    };
+    let mut expected = json!({
+        "releases": len(&queue["releases"]),
+        "changes": len(&queue["changes"]),
+        "pictures": len(&queue["media"]),
+        "listing": len(&queue["ready_to_list"]),
+        "rescans": len(&queue["rescans"]),
+        "people": len(&queue["portfolios"]),
+        "problems": len(&queue["problems"]),
+        "disputes": len(&queue["review_disputes"]),
+        "reports": len(&queue["reports"]),
+        "appeals": len(&queue["appeals"]),
+        "abuse": len(&queue["abuse"]),
+        "approvals": open(&get("/v1/admin/actions").await.1["actions"], "status", "pending"),
+        "ai": open(&get("/v1/admin/ai-messages?status=open").await.1, "status", "open"),
+        "donations": get("/v1/admin/donation-holds?show=open").await.1.as_array().map_or(0, |a| {
+            a.iter()
+                .filter(|h| h["lifted_at"].is_null() && h["requests"].as_array().is_some_and(|r| r.iter().any(|r| r["outcome"].is_null())))
+                .count()
+        }) as i64,
+    });
+    let (legal_status, legal) = get("/v1/admin/legal-requests").await;
+    expected["legal"] = if legal_status == StatusCode::OK {
+        json!(open(&legal, "status", "open"))
+    } else {
+        Value::Null
+    };
+    let total: i64 = expected
+        .as_object()
+        .unwrap()
+        .values()
+        .filter_map(Value::as_i64)
+        .sum();
+    expected["total"] = json!(total);
+    assert_eq!(
+        waiting, expected,
+        "the Admin tab's count matches the review queue"
+    );
+    queue
+}
+
 async fn body_json(res: Response) -> Value {
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
@@ -3811,7 +3868,12 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
     flag_release(&app, &id).await;
 
     // Not an admin: the admin API doesn't exist.
-    for path in ["/v1/admin/queue", "/v1/admin/apps", "/v1/admin/audit"] {
+    for path in [
+        "/v1/admin/queue",
+        "/v1/admin/waiting",
+        "/v1/admin/apps",
+        "/v1/admin/audit",
+    ] {
         assert_eq!(
             app.send(req(Method::GET, path).cookie(&maker))
                 .await
@@ -3846,11 +3908,7 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
     );
 
     // The queue shows the held release with its files and the app it belongs to.
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     assert_eq!(queue["releases"][0]["id"], id.as_str());
     assert_eq!(queue["releases"][0]["status"], "awaiting_review");
     assert_eq!(queue["releases"][0]["app"]["slug"], "game");
@@ -3888,11 +3946,7 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     assert_eq!(release_status(&app, &id).await.0, "ready");
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     assert!(queue["releases"].as_array().unwrap().is_empty());
     assert!(queue["ready_to_list"].as_array().unwrap().is_empty());
     approve_release(&app, lax(), id.parse().unwrap())
@@ -3900,11 +3954,7 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
         .unwrap();
     // Its maker puts it in the store (staff list only a relist after an appeal, or a private app
     // going public).
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     assert!(queue["ready_to_list"].as_array().unwrap().is_empty());
     assert_eq!(
         app.send(req(Method::POST, "/v1/apps/game/list").cookie(&maker))
@@ -5508,11 +5558,7 @@ async fn pictures_come_from_the_repository_and_wait_for_review(db: PgPool) {
         .send(req(Method::POST, "/v1/admin/apps/pics/list").cookie(&admin_cookie))
         .await;
     assert_eq!(res.status(), StatusCode::CONFLICT);
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin_cookie).await;
     assert_eq!(queue["media"][0]["id"], set_id.as_str());
     // Its maker can't put it in the store either until they're reviewed.
     let res = app
@@ -5848,11 +5894,7 @@ async fn ai_reviewers_use_admin_tokens(db: PgPool) {
         )
         .await;
     assert_eq!(res.status(), StatusCode::CREATED);
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin_cookie).await;
     let note = &queue["media"][0]["notes"][0];
     assert_eq!(note["verdict"], "unsure", "{queue}");
     assert!(
@@ -6791,11 +6833,7 @@ async fn creatives_go_live_with_a_reviewed_portfolio(db: PgPool) {
     assert_eq!(body["pending"]["works"][1]["audio"]["format"], "ogg");
 
     // Reviewed like store pictures, by people or AI reviewers.
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin_cookie).await;
     assert_eq!(queue["portfolios"][0]["set"]["id"], set.as_str());
     let feed = body_json(
         app.send(req(Method::GET, "/v1/admin/review?kind=portfolio").cookie(&admin_cookie))
@@ -7305,11 +7343,7 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
     .await;
     assert_eq!(checked["unverified_messages"], 1);
     // Mediators read the record (audited) and suggest; only the two sides can agree.
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin_cookie).await;
     let problem = queue["problems"][0]["id"].as_str().unwrap().to_string();
     let res = app
         .send(req(Method::GET, format!("/v1/admin/jobs/{id}/record")).cookie(&admin_cookie))
@@ -7977,11 +8011,7 @@ async fn reports_lead_to_decisions_with_reasons_and_appeals(db: PgPool) {
     assert_eq!(body_json(res).await["error"]["field"], "copyright");
 
     // The queue: urgent first, with who it's about.
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     let reports = queue["reports"].as_array().unwrap();
     assert_eq!(reports.len(), 3);
     assert_eq!(reports[0]["reason"], "child_abuse");
@@ -8078,11 +8108,7 @@ async fn reports_lead_to_decisions_with_reasons_and_appeals(db: PgPool) {
     );
 
     // A person reverses it, and the app is back.
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     assert_eq!(
         queue["appeals"][0]["appeal"],
         "That's a pathfinding worker thread, not a miner."
@@ -8124,11 +8150,7 @@ async fn suspended_accounts_can_read_and_appeal_but_nothing_else(db: PgPool) {
             .json(report_app("scammy", "scam")),
     )
     .await;
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     let report_id = queue["reports"][0]["id"].as_str().unwrap();
     let res = app
         .send(
@@ -9328,11 +9350,7 @@ async fn reviews_go_with_votes_and_profiles_follow_the_privacy_choice(db: PgPool
         )
         .await;
     assert_eq!(res.status(), StatusCode::OK);
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     assert_eq!(
         queue["reports"][0]["link"],
         format!("/app/tower#review-{id}")
@@ -10612,11 +10630,7 @@ async fn private_slop_goes_public_after_a_fresh_review(db: PgPool) {
             .await
             .is_empty()
     );
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin_cookie).await;
     let ready = queue["ready_to_list"].as_array().unwrap();
     assert_eq!(ready.len(), 1);
     assert_eq!(ready[0]["going_public"], true);
@@ -13203,11 +13217,7 @@ async fn live_releases_are_rescanned_and_new_findings_go_to_review(db: PgPool) {
         .unwrap();
     assert_eq!(slop_api::rescan::run_once(&app.state).await.unwrap(), 1);
     let (_, admin_cookie) = make_admin(&app, "Admin").await;
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin_cookie).await;
     assert_eq!(queue["rescans"][0]["slug"], "game");
     assert_eq!(
         queue["rescans"][0]["rescan_report"]["findings"][0]["name"],
@@ -13244,11 +13254,7 @@ async fn live_releases_are_rescanned_and_new_findings_go_to_review(db: PgPool) {
         .await
         .unwrap();
     slop_api::rescan::run_once(&app.state).await.unwrap();
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin_cookie).await;
     assert_eq!(queue["rescans"], json!([]));
     let logged: i64 = sqlx::query_scalar(
         "select count(*) from audit_log where action in ('release.rescan_flagged', 'release.rescan_cleared')",
@@ -13691,11 +13697,7 @@ async fn abuse_checks_raise_vote_bursts_and_lookalike_names_once(db: PgPool) {
         "raised once"
     );
     let (_, admin) = make_admin(&app, "Admin").await;
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     let kinds: Vec<&str> = queue["abuse"]
         .as_array()
         .unwrap()
@@ -13723,11 +13725,7 @@ async fn abuse_checks_raise_vote_bursts_and_lookalike_names_once(db: PgPool) {
         )
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     assert_eq!(queue["abuse"].as_array().unwrap().len(), kinds.len() - 1);
 }
 
@@ -15492,11 +15490,7 @@ async fn makers_reply_to_reviews(db: PgPool) {
         .await;
     let status = res.status();
     assert_eq!(status, StatusCode::OK, "{}", body_json(res).await);
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     let report_id = queue["reports"][0]["id"].as_str().unwrap();
     let res = app
         .send(
@@ -15935,11 +15929,7 @@ async fn bounties_pay_whoever_delivers(db: PgPool) {
         )
         .await;
     assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &admin).await;
     assert_eq!(queue["reports"][0]["link"], format!("/bounties/{id3}"));
     let report_id = queue["reports"][0]["id"].as_str().unwrap();
     let res = app

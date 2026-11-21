@@ -52,11 +52,7 @@ async fn notices(app: &TestApp, user: Uuid) -> Vec<(String, String)> {
 }
 
 async fn queue(app: &TestApp, cookie: &str) -> Value {
-    body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(cookie))
-            .await,
-    )
-    .await
+    admin_queue(app, cookie).await
 }
 
 /// A scanner stand-in that holds every file while `mode` says "held" (with a ClamAV finding),

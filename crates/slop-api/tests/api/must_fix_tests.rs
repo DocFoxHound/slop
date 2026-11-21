@@ -291,11 +291,7 @@ async fn staff_can_allow_publishing_a_false_alarm_for_that_release_only(db: PgPo
     .await
     .unwrap();
     assert_eq!(told, 1);
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&staff))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &staff).await;
     let queued = queue["releases"]
         .as_array()
         .unwrap()

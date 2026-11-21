@@ -1653,11 +1653,7 @@ async fn a_browser_game_with_its_address_withdrawn_cant_be_listed_or_moved_on(db
     )
     .await;
     assert_eq!(overview["can_advance"], false);
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &owner).await;
     assert!(
         !queue["ready_to_list"]
             .as_array()
@@ -3013,11 +3009,7 @@ async fn staff_see_a_browser_games_play_address_to_open_and_play(db: PgPool) {
     .execute(&app.db)
     .await
     .unwrap();
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &owner).await;
     let ready = queue["ready_to_list"]
         .as_array()
         .unwrap()
@@ -3226,11 +3218,7 @@ async fn browser_games_are_reported_in_their_own_words(db: PgPool) {
             .await;
         assert_eq!(res.status(), StatusCode::OK, "{subject}");
     }
-    let queue = body_json(
-        app.send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
-            .await,
-    )
-    .await;
+    let queue = admin_queue(&app, &owner).await;
     let reported = |label: &str| {
         queue["reports"]
             .as_array()

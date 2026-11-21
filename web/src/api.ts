@@ -2089,6 +2089,29 @@ export interface PublishInvite {
   discord_url: string;
 }
 
+/**
+ * The review queue's categories, counted (crates/slop-api/src/admin_web.rs `waiting`), the same
+ * numbers as admin/queue.ts `boxCounts`. `legal` is null for staff who don't see legal requests.
+ */
+export interface AdminWaiting {
+  releases: number;
+  changes: number;
+  pictures: number;
+  listing: number;
+  rescans: number;
+  people: number;
+  problems: number;
+  disputes: number;
+  reports: number;
+  appeals: number;
+  abuse: number;
+  legal: number | null;
+  approvals: number;
+  ai: number;
+  donations: number;
+  total: number;
+}
+
 export interface AdminQueue {
   /** Patterns the abuse checks found (abuse.rs). */
   abuse: Array<{
@@ -3762,6 +3785,8 @@ export const api = {
   transparency: (year: number) => request<TransparencyReport>("GET", `/v1/transparency/${year}`),
   admin: {
     queue: () => request<AdminQueue>("GET", "/v1/admin/queue"),
+    /** How many wait in each review queue category, counted: for the Admin tab's mark. */
+    waiting: () => request<AdminWaiting>("GET", "/v1/admin/waiting"),
     /** The law-enforcement request log (legal_requests.rs); staff with sensitive rights. */
     legalRequests: () => request<LegalRequest[]>("GET", "/v1/admin/legal-requests"),
     logLegalRequest: (r: NewLegalRequest) =>

@@ -166,6 +166,9 @@ test.describe("the app shell", () => {
     await admin.click();
     await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
     await expect(admin).toHaveClass(/on/);
+    // Like the bell, it says how many things wait: the review queue's count.
+    const queued = Number(await page.getByRole("tab", { name: /Review queue/ }).locator(".admin-tab-count").textContent());
+    await expect(admin).toHaveAccessibleName(queued > 0 ? new RegExp(`^ADMIN ?, ${queued} waiting$`) : "ADMIN");
   });
 
   test("a player who types the admin address gets nothing", async ({ page }) => {

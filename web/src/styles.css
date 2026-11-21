@@ -1947,3 +1947,7 @@ label.check.news-switch input { flex: none; width: 18px; height: 18px; margin: 0
 .found-people li { align-items: center; }
 .found-person { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .profile-link { max-width: 480px; }
+
+/* The Admin tab's count of what waits in the review queue (components/Layout.tsx AdminTab). */
+.tabs a.admin-nav { gap: 6px; }
+.admin-nav-count { position: static; letter-spacing: 0; }

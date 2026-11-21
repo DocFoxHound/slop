@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 
 import { api } from "../api";
-import { useLoad } from "../hooks";
+import { useInterval, useLoad } from "../hooks";
 import { formatDate } from "../format";
 import { desktop, isDesktop } from "../platform";
 import { useAutoUpdates } from "./AppUpdates";
@@ -208,13 +208,33 @@ export function Layout() {
   );
 }
 
-/** Shown only to SLAPorSLOP staff. */
-function AdminTab() {
+/**
+ * Shown only to SLAPorSLOP staff, with how many things wait in the review queue (like the bell),
+ * looked at again as they move around and every minute.
+ */
+export function AdminTab() {
   const { me } = useSession();
-  if (!me?.is_admin) return null;
+  const location = useLocation();
+  const admin = !!me?.is_admin;
+  const waiting = useLoad(() => (admin ? api.admin.waiting() : Promise.resolve(undefined)), [admin, location.pathname, location.search]);
+  useInterval(waiting.reload, admin ? 60_000 : null);
+  if (!admin) return null;
+  const n = waiting.data?.total ?? 0;
   return (
-    <NavLink to="/admin" className={({ isActive }) => (isActive ? "on" : "")}>
+    <NavLink
+      to="/admin"
+      className={({ isActive }) => `admin-nav ${isActive ? "on" : ""}`}
+      title={n > 0 ? `${n} waiting in the review queue` : undefined}
+    >
       ADMIN
+      {n > 0 && (
+        <>
+          <span className="bell-count admin-nav-count" aria-hidden="true">
+            {n > 99 ? "99+" : n}
+          </span>
+          <span className="sr-only">, {n} waiting</span>
+        </>
+      )}
     </NavLink>
   );
 }

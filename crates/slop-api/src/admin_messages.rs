@@ -782,6 +782,17 @@ fn may_moderate(admin: &AdminUser) -> ApiResult<()> {
 /// The threads a staff member sees, for `$1` (their ID) and `$2` (whether they're an owner).
 const VISIBLE: &str = "($2 or t.to_staff_id is null or t.to_staff_id = $1)";
 
+/// Open threads the caller can see: what the admin tab's count includes (admin_web.rs `waiting`).
+pub(crate) async fn open_count(db: &sqlx::PgPool, admin: &AdminUser) -> sqlx::Result<i64> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select count(*) from admin_threads t where {VISIBLE} and t.status = 'open'"
+    )))
+    .bind(admin.user_id)
+    .bind(is_owner(admin))
+    .fetch_one(db)
+    .await
+}
+
 fn is_owner(admin: &AdminUser) -> bool {
     admin.roles.contains(&Role::Owner)
 }

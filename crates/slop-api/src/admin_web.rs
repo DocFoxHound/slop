@@ -37,6 +37,7 @@ use crate::{
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/admin/queue", get(queue))
+        .route("/admin/waiting", get(waiting))
         .route("/admin/apps", get(apps))
         .route("/admin/audit", get(audit_log))
         .route("/admin/releases/{id}/approve", post(approve))
@@ -385,6 +386,115 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
             github_token: cfg.github_token.as_deref().is_some_and(|t| !t.is_empty()),
         },
     }))
+}
+
+/// How many things wait for staff in each of the review queue's categories (web
+/// src/pages/admin/queue.ts `boxCounts`), counted rather than loaded: for the count on the Admin
+/// tab, which every page shows staff. Null: not for this person's roles.
+#[derive(Serialize, Default)]
+struct Waiting {
+    releases: i64,
+    changes: i64,
+    pictures: i64,
+    listing: i64,
+    rescans: i64,
+    people: i64,
+    problems: i64,
+    disputes: i64,
+    reports: i64,
+    appeals: i64,
+    abuse: i64,
+    legal: Option<i64>,
+    approvals: i64,
+    ai: i64,
+    donations: i64,
+    total: i64,
+}
+
+async fn waiting(State(state): State<AppState>, admin: AdminUser) -> ApiResult<Json<Waiting>> {
+    crate::staff::expire(&state.db).await?;
+    let db = &state.db;
+    let count = |sql: String| async move {
+        sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+            .fetch_one(db)
+            .await
+    };
+    let mut w = Waiting {
+        releases: count(format!(
+            "select count(*) from release_holds h join releases r on r.id = h.release_id join apps a on a.id = r.app_id
+             where {}",
+            crate::holds::NEEDS_STAFF
+        ))
+        .await?,
+        changes: count("select count(*) from app_changes where status = 'pending'".into()).await?,
+        pictures: count(
+            "select count(*) from media_sets ms join apps a on a.id = ms.app_id where ms.status = 'pending'".into(),
+        )
+        .await?,
+        listing: count(format!(
+            "select count(*) from apps a join users u on u.id = a.maker_id
+             where {} and (a.stage = 'coming_soon' or {})",
+            crate::admin::STAFF_LISTS,
+            crate::admin::playable_sql()
+        ))
+        .await?,
+        rescans: count(
+            "select count(*) from release_files f join releases r on r.id = f.release_id join apps a on a.id = r.app_id
+             where f.rescan_flagged_at is not null and r.status = 'approved'"
+                .into(),
+        )
+        .await?,
+        people: count(
+            "select count(*) from portfolio_sets ps join creatives c on c.user_id = ps.creative_id where ps.status = 'pending'"
+                .into(),
+        )
+        .await?,
+        problems: count(
+            "select count(*) from job_problems p join jobs j on j.id = p.job_id join creatives c on c.user_id = j.creative_id
+             join users u on u.id = j.client_id where p.status = 'open'"
+                .into(),
+        )
+        .await?,
+        disputes: count(
+            "select count(*) from review_disputes d join creative_reviews r on r.job_id = d.job_id
+             join creatives c on c.user_id = r.creative_id join users u on u.id = r.client_id where d.status = 'pending'"
+                .into(),
+        )
+        .await?,
+        reports: count("select count(*) from reports where status = 'open'".into()).await?,
+        appeals: count("select count(*) from moderation_decisions where appeal_status = 'pending'".into()).await?,
+        abuse: count("select count(*) from abuse_signals where status = 'open'".into()).await?,
+        // Legal requests are only for staff who may take sensitive actions (legal_requests.rs).
+        legal: match admin.need(crate::staff::Perm::Sensitive) {
+            Ok(()) => Some(count("select count(*) from legal_requests where status = 'open'".into()).await?),
+            Err(_) => None,
+        },
+        approvals: count("select count(*) from staff_actions where status = 'pending'".into()).await?,
+        ai: crate::admin_messages::open_count(db, &admin).await?,
+        donations: count(
+            "select count(*) from donation_holds h where h.lifted_at is null
+               and exists (select 1 from donation_hold_requests r where r.hold_id = h.id and r.outcome is null)"
+                .into(),
+        )
+        .await?,
+        total: 0,
+    };
+    w.total = w.releases
+        + w.changes
+        + w.pictures
+        + w.listing
+        + w.rescans
+        + w.people
+        + w.problems
+        + w.disputes
+        + w.reports
+        + w.appeals
+        + w.abuse
+        + w.legal.unwrap_or(0)
+        + w.approvals
+        + w.ai
+        + w.donations;
+    Ok(Json(w))
 }
 
 #[derive(Serialize, Deserialize, sqlx::FromRow)]

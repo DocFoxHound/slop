@@ -528,11 +528,7 @@ async fn the_owner_can_take_back_a_request_to_go_public(db: PgPool) {
         StatusCode::NO_CONTENT
     );
     let going_public = || async {
-        let queue = body_json(
-            app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
-                .await,
-        )
-        .await;
+        let queue = admin_queue(&app, &admin_cookie).await;
         queue["ready_to_list"]
             .as_array()
             .unwrap()
