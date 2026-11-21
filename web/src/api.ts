@@ -526,6 +526,16 @@ export interface Friends {
   outgoing: FriendPerson[];
 }
 
+/** Someone found by name to add as a friend (crates/slop-api/src/friends.rs `search`). */
+export interface FoundPerson {
+  id: string;
+  name: string;
+  /** When they joined SLAPorSLOP, to tell people with the same name apart. */
+  joined: string;
+  avatar_url: string | null;
+  friend: Connection["friend"];
+}
+
 /** The friend and message buttons on a profile. */
 export interface Connection {
   friend: "friends" | "requested" | "incoming" | "none";
@@ -4423,6 +4433,9 @@ export const api = {
   },
   friends: {
     list: () => request<Friends>("GET", "/v1/me/friends"),
+    /** People by name (at least 2 letters), best match first; never the under-18 view. */
+    search: (q: string) =>
+      request<FoundPerson[]>("GET", `/v1/me/friends/search?q=${encodeURIComponent(q)}`),
     /** A profile link or user ID; "friends" when they had already asked you. */
     request: (user: string) =>
       request<{ status: "requested" | "friends" }>("POST", "/v1/me/friends", {

@@ -33,6 +33,7 @@ mod awards_tests;
 mod browser_games_tests;
 mod checks_tests;
 mod discover_tests;
+mod friends_search_tests;
 mod github_scans_tests;
 mod history_tests;
 mod holds_tests;

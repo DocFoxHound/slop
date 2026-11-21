@@ -1942,3 +1942,8 @@ label.check.news-switch input { flex: none; width: 18px; height: 18px; margin: 0
   .maker-head { flex-wrap: wrap; }
   .maker-name { flex-basis: calc(100% - 72px); }
 }
+
+/* Friends: people found by name (pages/Friends.tsx), and a profile link to copy. */
+.found-people li { align-items: center; }
+.found-person { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.profile-link { max-width: 480px; }

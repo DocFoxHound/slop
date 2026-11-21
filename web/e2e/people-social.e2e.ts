@@ -19,14 +19,11 @@ test("friends: a request by link, cancelled, sent again and accepted; removed; d
   const mia = await as(browser, "maker", "/friends");
   await expect(mia.getByRole("heading", { name: /Friends/, level: 1 })).toBeVisible();
   await expect(mia.getByRole("heading", { name: "Your friends (0)" })).toBeVisible();
-  const add = mia.getByRole("textbox", { name: /Add a friend: paste their profile link/ });
+  const add = mia.getByRole("textbox", { name: /Add a friend: their name, or their profile link/ });
   const sendReq = mia.getByRole("button", { name: "Send request" });
-  await expect(sendReq).toBeDisabled();
+  await expect(mia.getByRole("button", { name: "Search" })).toBeDisabled();
 
-  // Not a profile link, and yourself: refused.
-  await add.fill("not a link at all");
-  await sendReq.click();
-  await expect(mia.getByRole("alert")).toBeVisible();
+  // Yourself: refused.
   await add.fill(link("maker"));
   await sendReq.click();
   await expect(mia.getByRole("alert")).toContainText("that's you");

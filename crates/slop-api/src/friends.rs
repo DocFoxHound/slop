@@ -8,10 +8,12 @@
 //! - **The UK under-18 view:** only connections, and "anyone" is locked off (PRIV-6).
 //! - **Blocking** someone ends the friendship, refuses their messages and friend requests, and
 //!   hides them from the blocker's chats.
+//! - **Finding someone:** by name, from the Friends page. People in the under-18 view aren't
+//!   found, nor blocked, closed or suspended accounts; they can still share their profile link.
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post, put},
 };
@@ -30,6 +32,7 @@ use crate::{
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/me/friends", get(list).post(request))
+        .route("/me/friends/search", get(search))
         .route("/me/friends/{id}", delete(remove))
         .route("/me/friends/{id}/accept", post(accept))
         .route("/me/blocks", get(blocks))
@@ -206,6 +209,70 @@ async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Jso
         incoming: with_avatars(&state, incoming),
         outgoing: with_avatars(&state, outgoing),
     }))
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: String,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct Found {
+    id: Uuid,
+    name: String,
+    #[serde(with = "time::serde::rfc3339")]
+    joined: OffsetDateTime,
+    avatar_url: Option<String>,
+    /// friends, requested (you asked), incoming (they asked), or none.
+    friend: String,
+}
+
+/// The most people one search shows.
+const SEARCH_RESULTS: i64 = 10;
+
+/// People to add, by name: exact matches first, then names that start with it, then the rest.
+async fn search(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Query(q): Query<SearchQuery>,
+) -> ApiResult<Json<Vec<Found>>> {
+    let q = q.q.trim();
+    if q.chars().count() < 2 {
+        return Ok(Json(Vec::new()));
+    }
+    if q.chars().count() > 60 {
+        return Err(ApiError::invalid("q", "that's longer than any name"));
+    }
+    crate::limits::check(&state, user.id, crate::limits::Action::PlayerSearch)?;
+    let pattern = crate::admin_web::contains_pattern(q);
+    let mut found: Vec<Found> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select u.id, u.display_name as name, u.created_at as joined, {avatar},
+                case when exists (select 1 from friends where user_a = least($1, u.id) and user_b = greatest($1, u.id)) then 'friends'
+                     when exists (select 1 from friend_requests where from_id = $1 and to_id = u.id) then 'requested'
+                     when exists (select 1 from friend_requests where from_id = u.id and to_id = $1) then 'incoming'
+                     else 'none' end as friend
+         from users u
+         where u.display_name ilike $2 and u.id <> $1
+           and u.closed_at is null and u.suspended_at is null and u.merged_into is null
+           and not exists (select 1 from user_blocks where (user_id = $1 and blocked_id = u.id)
+                                                     or (user_id = u.id and blocked_id = $1))
+           and not {minor}
+         order by lower(u.display_name) = lower($3) desc, u.display_name ilike $4 desc,
+                  lower(u.display_name), u.created_at
+         limit {SEARCH_RESULTS}",
+        avatar = avatar_column(),
+        minor = under18("u.id"),
+    )))
+    .bind(user.id)
+    .bind(&pattern)
+    .bind(q)
+    .bind(format!("{}%", &pattern[1..pattern.len() - 1]))
+    .fetch_all(&state.db)
+    .await?;
+    for p in &mut found {
+        p.avatar_url = crate::avatars::absolute(&state.config, p.avatar_url.take());
+    }
+    Ok(Json(found))
 }
 
 #[derive(Deserialize)]

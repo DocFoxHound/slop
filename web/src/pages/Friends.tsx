@@ -2,10 +2,12 @@
 // Friends (crates/slop-api/src/friends.rs): requests, the friends list, blocked people, and who may
 // message you. Works on the website too; chatting itself is in the app (pages/Chat.tsx).
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 
-import { api, ApiError, type Friends } from "../api";
+import { api, ApiError, type FoundPerson, type Friends } from "../api";
+import { Avatar } from "../components/Avatar";
+import { ProfileLink } from "../components/ProfileLink";
 import { ErrorState, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -24,6 +26,7 @@ export function FriendsPage() {
   const [link, setLink] = useState("");
   const [note, setNote] = useState<string>();
   const [error, setError] = useState<string>();
+  const found = usePlayerSearch(isProfileLink(link) ? "" : link, setError);
 
   if (me === undefined) return <Loading />;
   if (me === null) {
@@ -45,12 +48,17 @@ export function FriendsPage() {
       if (done) setNote(done);
       friends.reload();
       blocks.reload();
+      found.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     }
   };
   const add = (e: FormEvent) => {
     e.preventDefault();
+    if (!isProfileLink(link)) {
+      found.now();
+      return;
+    }
     void run(async () => {
       const res = await api.friends.request(link.trim());
       setLink("");
@@ -76,11 +84,11 @@ export function FriendsPage() {
       </p>
       <form className="panel panel-pad form inline-form wide" onSubmit={add}>
         <label>
-          Add a friend: paste their profile link
-          <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://…/u/…" />
+          Add a friend: their name, or their profile link
+          <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="A name, or https://…/u/…" />
         </label>
-        <button className="btn slime" disabled={!link.trim()}>
-          Send request
+        <button className="btn slime" disabled={link.trim().length < (isProfileLink(link) ? 1 : 2)}>
+          {isProfileLink(link) ? "Send request" : "Search"}
         </button>
         {note && <p className="muted small">{note}</p>}
         {error && (
@@ -89,6 +97,19 @@ export function FriendsPage() {
           </p>
         )}
       </form>
+      {found.people && (
+        <FoundList
+          people={found.people}
+          onAdd={(p) => void run(() => api.friends.request(p.id), `Request sent to ${p.name}. They'll see it in their notifications.`)}
+          onAccept={(p) => void run(() => api.friends.accept(p.id), `You and ${p.name} are friends.`)}
+        />
+      )}
+      <div className="panel panel-pad">
+        <p className="small">
+          <b>Your profile link.</b> Send it to friends so they can add you, or to a team owner to be invited.
+        </p>
+        <ProfileLink id={me.id} label="Your profile link" />
+      </div>
       <FriendsList friends={f} run={run} onMessage={isDesktop ? (id) => void message(id) : undefined} />
       <h2 className="section-title" id="settings">
         Who can message you
@@ -127,6 +148,106 @@ export function FriendsPage() {
         </>
       )}
     </div>
+  );
+}
+
+/** A pasted profile link (…/u/{id}) or ID rather than a name to look for. */
+export function isProfileLink(value: string): boolean {
+  const v = value.trim();
+  return /\/u\/[^/\s]+\/?$/.test(v) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
+
+/**
+ * People whose names hold `q` (2 letters or more), looked up a moment after typing stops;
+ * `now()` looks without waiting (Enter), `refresh()` again after adding someone.
+ */
+function usePlayerSearch(q: string, onError: (message: string | undefined) => void) {
+  const [people, setPeople] = useState<FoundPerson[]>();
+  const [tick, setTick] = useState(0);
+  const soon = useRef(false);
+  const term = q.trim();
+  useEffect(() => {
+    if (term.length < 2) {
+      setPeople(undefined);
+      return;
+    }
+    let live = true;
+    const wait = soon.current ? 0 : 300;
+    soon.current = false;
+    const timer = setTimeout(() => {
+      api.friends.search(term).then(
+        (found) => {
+          if (live) setPeople(found);
+        },
+        (err: unknown) => {
+          if (live) onError(err instanceof ApiError ? err.message : String(err));
+        },
+      );
+    }, wait);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [term, tick]);
+  return {
+    people,
+    now: () => {
+      soon.current = true;
+      setTick((t) => t + 1);
+    },
+    refresh: () => setTick((t) => t + 1),
+  };
+}
+
+/** The people a search found, each with what you can do: ask, accept, or nothing (yet). */
+function FoundList({
+  people,
+  onAdd,
+  onAccept,
+}: {
+  people: FoundPerson[];
+  onAdd: (p: FoundPerson) => void;
+  onAccept: (p: FoundPerson) => void;
+}) {
+  if (people.length === 0) {
+    return (
+      <div className="empty-state">
+        Nobody by that name. Someone in the under-18 view can't be found by name: ask them for their profile link.
+      </div>
+    );
+  }
+  return (
+    <ul className="panel report-list found-people" aria-label="Players found">
+      {people.map((p) => (
+        <li key={p.id}>
+          <span className="found-person">
+            <Avatar name={p.name} url={p.avatar_url} />
+            <span>
+              <Link to={`/u/${p.id}`}>
+                <b>{p.name}</b>
+              </Link>{" "}
+              <span className="muted small">
+                joined {new Date(p.joined).toLocaleDateString(undefined, { month: "long", year: "numeric" })}
+              </span>
+            </span>
+          </span>
+          <span className="row-actions">
+            {p.friend === "none" && (
+              <button className="btn small slime" onClick={() => onAdd(p)} aria-label={`Add ${p.name} as a friend`}>
+                ＋ Add friend
+              </button>
+            )}
+            {p.friend === "requested" && <span className="muted small">Request sent</span>}
+            {p.friend === "incoming" && (
+              <button className="btn small slime" onClick={() => onAccept(p)} aria-label={`Accept ${p.name}'s friend request`}>
+                Accept
+              </button>
+            )}
+            {p.friend === "friends" && <span className="muted small">✓ Friends</span>}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -182,7 +303,7 @@ export function FriendsList({
       )}
       <Heading className="section-title">Your friends ({f.friends.length})</Heading>
       {f.friends.length === 0 ? (
-        <div className="empty-state">No friends yet. Add someone with their profile link, or from their profile.</div>
+        <div className="empty-state">No friends yet. Add someone by their name or profile link, or from their profile.</div>
       ) : (
         <ul className="panel report-list">
           {f.friends.map((p) => (

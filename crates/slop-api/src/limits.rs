@@ -59,6 +59,8 @@ pub enum Action {
     HoldMessage,
     /// Entering the beta's invite code (invites.rs): enough for typos, too few to guess it.
     InviteCode,
+    /// Finding people by name on the Friends page: enough for typing, too few to list everyone.
+    PlayerSearch,
 }
 
 impl Action {
@@ -99,6 +101,7 @@ impl Action {
             Self::Rescan => (10, DAY),
             Self::HoldMessage => (20, DAY),
             Self::InviteCode => (10, HOUR),
+            Self::PlayerSearch => (200, HOUR),
         };
         (n, Duration::from_secs(secs))
     }
@@ -133,6 +136,7 @@ impl Action {
             Self::Rescan => "scan re-runs",
             Self::HoldMessage => "messages to SLAPorSLOP staff about releases",
             Self::InviteCode => "invite code tries",
+            Self::PlayerSearch => "player searches",
         }
     }
 }

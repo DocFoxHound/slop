@@ -9,6 +9,7 @@ import { api } from "../api";
 import { Avatar } from "../components/Avatar";
 import { awardAmount, MakerAwardBadge, monthLabel } from "../components/Awards";
 import { AppTile, ErrorState, Loading, Shelf } from "../components/ui";
+import { ProfileLink } from "../components/ProfileLink";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { ConnectionButtons } from "./Friends";
@@ -62,6 +63,14 @@ export function Profile() {
             : "Your votes and reviews are private: others see only your name and apps."}{" "}
           <Link to="/account#privacy">Change it</Link>
         </p>
+      )}
+      {p.is_me && (
+        <div className="panel panel-pad">
+          <p className="small">
+            <b>Your profile link.</b> Send it to friends so they can add you.
+          </p>
+          <ProfileLink id={id} label="Your profile link" />
+        </div>
       )}
       {p.apps.length > 0 && (
         <>

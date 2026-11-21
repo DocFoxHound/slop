@@ -127,12 +127,17 @@ test.describe("the friends page", () => {
       await sue.goto("/friends");
       await expect(sue.getByText("No friends yet.")).toBeVisible();
       await expect(sue.getByRole("link", { name: "About chat" })).toHaveAttribute("href", "/chat");
-      const link = sue.getByRole("textbox", { name: "Add a friend: paste their profile link" });
+      const link = sue.getByRole("textbox", { name: "Add a friend: their name, or their profile link" });
       const ask = sue.getByRole("button", { name: "Send request" });
-      await expect(ask).toBeDisabled();
-      await link.fill("not a link");
-      await ask.click();
-      await expect(sue.getByRole("alert")).toHaveText("paste their profile link");
+      await expect(sue.getByRole("button", { name: "Search" })).toBeDisabled();
+      // A name finds people (never yourself); the profile link is there to send.
+      await link.fill("sec secu");
+      const found = sue.getByRole("list", { name: "Players found" });
+      await expect(found.getByRole("listitem")).toHaveText([/Sec Security joined/]);
+      await expect(found.getByRole("button", { name: "Add Sec Security as a friend" })).toBeVisible();
+      await link.fill("Sue Support");
+      await expect(sue.getByText(/^Nobody by that name\./)).toBeVisible();
+      await expect(sue.getByRole("textbox", { name: "Your profile link" })).toHaveValue(new RegExp(`/u/${ids.support}$`));
       await link.fill(profile(ids.support));
       await ask.click();
       await expect(sue.getByRole("alert")).toHaveText("that's you");
