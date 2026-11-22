@@ -61,6 +61,8 @@ pub enum Action {
     InviteCode,
     /// Finding people by name on the Friends page: enough for typing, too few to list everyone.
     PlayerSearch,
+    /// Changing your own name: enough to fix a typo or two, too few to keep passing for others.
+    NameChange,
 }
 
 impl Action {
@@ -102,6 +104,7 @@ impl Action {
             Self::HoldMessage => (20, DAY),
             Self::InviteCode => (10, HOUR),
             Self::PlayerSearch => (200, HOUR),
+            Self::NameChange => (5, DAY),
         };
         (n, Duration::from_secs(secs))
     }
@@ -137,6 +140,7 @@ impl Action {
             Self::HoldMessage => "messages to SLAPorSLOP staff about releases",
             Self::InviteCode => "invite code tries",
             Self::PlayerSearch => "player searches",
+            Self::NameChange => "name changes",
         }
     }
 }

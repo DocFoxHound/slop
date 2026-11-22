@@ -3,7 +3,7 @@
 // sections on the left (a row along the top on phones) and one section at a time, each at its own
 // address (accountNav.ts). Old /account#<part> links go to the part in its section.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router";
 
 import { api, ApiError } from "../api";
@@ -214,6 +214,67 @@ function SectionView({ section, children }: { section: AccountSection; children:
   );
 }
 
+/** Your name with Change: edited in place, saved for everyone (your profile, reviews, friends, chat). */
+export function NameField({ name, onSaved }: { name: string; onSaved: () => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  if (!editing) {
+    return (
+      <span className="name-field">
+        {name}{" "}
+        <button
+          type="button"
+          className="btn small ghost"
+          onClick={() => {
+            setValue(name);
+            setError(undefined);
+            setSaved(false);
+            setEditing(true);
+          }}
+        >
+          Change
+        </button>
+        {saved && <span className="muted small"> Saved. Everyone sees the new name now.</span>}
+      </span>
+    );
+  }
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.updateMe({ display_name: value });
+      await onSaved();
+      setEditing(false);
+      setSaved(value.trim() !== name);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="name-field form inline-form" onSubmit={(e) => void save(e)}>
+      <input aria-label="Your name" value={value} maxLength={40} autoFocus onChange={(e) => setValue(e.target.value)} />
+      <button className="btn small slime" disabled={busy || !value.trim()}>
+        Save
+      </button>
+      <button type="button" className="btn small ghost" onClick={() => setEditing(false)}>
+        Cancel
+      </button>
+      <span className="muted small">Shown on your profile, reviews, friends lists and chat. 1 to 40 characters.</span>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
 /** Profile: name, email and country, the picture, and what others see. */
 function ProfileSection() {
   const { me, refresh } = useSession();
@@ -238,7 +299,9 @@ function ProfileSection() {
         <div className="panel panel-pad">
           <dl className="kv">
             <dt>Name</dt>
-            <dd>{me.display_name}</dd>
+            <dd>
+              <NameField name={me.display_name} onSaved={refresh} />
+            </dd>
             <dt>Email</dt>
             <dd>{me.email ?? <span className="muted">None shared by GitHub</span>}</dd>
             <dt>Country</dt>

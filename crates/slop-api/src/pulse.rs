@@ -396,6 +396,8 @@ pub(crate) struct Settings {
     personalize: Option<bool>,
     /// "Show my votes and reviews on my profile" (reviews.rs).
     profile_public: Option<bool>,
+    /// The name everyone sees (1 to 40 characters, as at sign-up).
+    display_name: Option<String>,
 }
 
 /// `PATCH /v1/me`: the user's own settings.
@@ -404,6 +406,17 @@ pub(crate) async fn update_settings(
     user: CurrentUser,
     Json(body): Json<Settings>,
 ) -> ApiResult<StatusCode> {
+    if let Some(name) = &body.display_name {
+        let name = crate::auth::validate_display_name(name)?;
+        if name != user.display_name {
+            crate::limits::check(&state, user.id, crate::limits::Action::NameChange)?;
+            sqlx::query("update users set display_name = $2 where id = $1")
+                .bind(user.id)
+                .bind(&name)
+                .execute(&state.db)
+                .await?;
+        }
+    }
     if let Some(share) = body.share_playtime {
         sqlx::query("update users set share_playtime = $2 where id = $1")
             .bind(user.id)

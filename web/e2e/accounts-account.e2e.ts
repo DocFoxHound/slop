@@ -47,6 +47,29 @@ test.describe("privacy", () => {
     }
   });
 
+  test("your name: changed in place, and everyone sees it", async ({ page }) => {
+    await signIn(page, "support");
+    try {
+      await page.goto("/account");
+      const kv = page.locator("dl.kv").first();
+      await kv.getByRole("button", { name: "Change" }).click();
+      const box = kv.getByRole("textbox", { name: "Your name" });
+      await expect(box).toHaveValue("Sue Support");
+      await box.fill("x".repeat(40) + "y");
+      await expect(box).toHaveValue("x".repeat(40));
+      await box.fill("Sue Sunrise");
+      await kv.getByRole("button", { name: "Save" }).click();
+      await expect(kv).toContainText("Sue Sunrise");
+      await expect(kv.getByText("Saved. Everyone sees the new name now.")).toBeVisible();
+      // The header and the profile say it too.
+      await expect(page.locator(".account-head-name")).toHaveText("Sue Sunrise");
+      await page.getByRole("link", { name: "Your public profile" }).click();
+      await expect(page.getByRole("heading", { name: "Sue Sunrise", level: 1 })).toBeVisible();
+    } finally {
+      await call("support", "PATCH", "/v1/me", { display_name: "Sue Support" });
+    }
+  });
+
   test("a switch that doesn't save says so and stays as it was", async ({ page }) => {
     await fake(page, "PATCH", "/v1/me", { status: 503, body: apiError("unavailable", "SLAPorSLOP is busy: try again in a minute") });
     await signIn(page, "support");

@@ -1951,3 +1951,8 @@ label.check.news-switch input { flex: none; width: 18px; height: 18px; margin: 0
 /* The Admin tab's count of what waits in the review queue (components/Layout.tsx AdminTab). */
 .tabs a.admin-nav { gap: 6px; }
 .admin-nav-count { position: static; letter-spacing: 0; }
+
+/* Your name on the account page, with Change (pages/Account.tsx NameField). */
+.name-field { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.name-field input { max-width: 260px; }
+.name-field .form-error { flex-basis: 100%; margin: 0; }

@@ -4370,6 +4370,8 @@ export const api = {
     share_playtime?: boolean;
     personalize?: boolean;
     profile_public?: boolean;
+    /** Your name, as everyone sees it: 1 to 40 characters, 5 changes a day. */
+    display_name?: string;
   }) => request<void>("PATCH", "/v1/me", changes),
   players: (slug: string) =>
     request<{

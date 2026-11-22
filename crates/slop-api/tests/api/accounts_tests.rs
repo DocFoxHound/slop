@@ -5097,3 +5097,56 @@ async fn agent_tokens_are_revoked_only_by_their_maker_and_only_as_tokens(db: PgP
     assert_eq!(works().await, StatusCode::UNAUTHORIZED);
     assert_eq!(status(&app, revoke(&mia, &id)).await, StatusCode::NOT_FOUND);
 }
+
+/// People change their own name (the owner's ask, 2026-11-22): the same rules as at sign-up, a
+/// few times a day, and everyone sees the new one.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn changing_your_own_name(db: PgPool) {
+    let app = test_app(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (_, bob) = app.user("Bob", "US").await;
+    let rename = |name: &str| {
+        req(Method::PATCH, "/v1/me")
+            .cookie(&ann)
+            .json(json!({ "display_name": name }))
+    };
+
+    let res = app.send(rename("  Ann Archer  ")).await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&ann)).await).await;
+    assert_eq!(me["display_name"], "Ann Archer", "trimmed");
+    let profile = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{ann_id}")).cookie(&bob))
+            .await,
+    )
+    .await;
+    assert_eq!(profile["name"], "Ann Archer", "others see it");
+
+    for bad in ["", "   ", &"x".repeat(41), "Ann\u{7}"] {
+        let res = app.send(rename(bad)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{bad:?}");
+        assert_eq!(body_json(res).await["error"]["field"], "display_name");
+    }
+    // The same name again isn't a change; a sixth change in a day is too many.
+    assert_eq!(
+        app.send(rename("Ann Archer")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    for n in 2..=5 {
+        assert_eq!(
+            app.send(rename(&format!("Ann {n}"))).await.status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    let res = app.send(rename("Ann 6")).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        body_json(res).await["error"]["message"],
+        "too many name changes for now: try again in a while"
+    );
+    // Signed out: no.
+    let res = app
+        .send(req(Method::PATCH, "/v1/me").json(json!({ "display_name": "Zed" })))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
