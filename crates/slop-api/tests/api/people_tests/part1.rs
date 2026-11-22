@@ -2266,7 +2266,7 @@ async fn stripe_stand_in() -> (String, FakeStripe) {
         }
     };
     let app = Router::new()
-        .route("/v1/accounts", axum::routing::post(create_account))
+        .route("/v2/core/accounts", axum::routing::post(create_account))
         .route("/v1/accounts/{id}", axum::routing::get(get_account))
         .route(
             "/v1/account_links",

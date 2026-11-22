@@ -321,8 +321,9 @@ async fn api(
             .into_response()
     };
     let reply = match (method.as_str(), parts.as_slice()) {
-        // New accounts are still signing up until their owner finishes Stripe's pages.
-        ("POST", ["v1", "accounts"]) => {
+        // New accounts are still signing up until their owner finishes Stripe's pages. Made with
+        // Accounts v2, as Stripe has refused POST /v1/accounts from new platforms since 2026.
+        ("POST", ["v2", "core", "accounts"]) => {
             let id = format!("acct_e2e_{n}");
             s.accounts.insert(id.clone(), stripe_account(&id, false));
             json!({ "id": id })

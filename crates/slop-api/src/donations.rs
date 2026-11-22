@@ -2094,29 +2094,11 @@ async fn request_change(
             ));
         }
         (_, Mode::Simulated) => Some(format!("acct_sim_{}", Uuid::new_v4().simple())),
-        (_, Mode::Stripe(stripe)) => {
-            let created = call(
-                &state,
-                stripe,
-                reqwest::Method::POST,
-                "v1/accounts",
-                None,
-                &[
-                    ("controller[stripe_dashboard][type]", "full".into()),
-                    ("controller[fees][payer]", "account".into()),
-                    ("controller[losses][payments]", "stripe".into()),
-                    ("controller[requirement_collection]", "stripe".into()),
-                    ("metadata[slop_user]", user.id.to_string()),
-                ],
-            )
-            .await?;
-            Some(
-                created["id"]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("Stripe gave no account ID"))?
-                    .to_string(),
-            )
-        }
+        (_, Mode::Stripe(stripe)) => Some(
+            stripe::create_account(&state, stripe, user.id)
+                .await
+                .map_err(stripe::refused_by_stripe)?,
+        ),
     };
     let mut tx = state.db.begin().await?;
     let inserted = sqlx::query(
@@ -2454,27 +2436,9 @@ async fn onboard(
         Mode::Stripe(stripe) => {
             let acct = match existing {
                 Some(a) => a,
-                None => {
-                    let created = call(
-                        &state,
-                        stripe,
-                        reqwest::Method::POST,
-                        "v1/accounts",
-                        None,
-                        &[
-                            ("controller[stripe_dashboard][type]", "full".into()),
-                            ("controller[fees][payer]", "account".into()),
-                            ("controller[losses][payments]", "stripe".into()),
-                            ("controller[requirement_collection]", "stripe".into()),
-                            ("metadata[slop_user]", user.id.to_string()),
-                        ],
-                    )
-                    .await?;
-                    created["id"]
-                        .as_str()
-                        .ok_or_else(|| anyhow::anyhow!("Stripe gave no account ID"))?
-                        .to_string()
-                }
+                None => stripe::create_account(&state, stripe, user.id)
+                    .await
+                    .map_err(stripe::refused_by_stripe)?,
             };
             save(acct.clone(), "pending").await?;
             let status = stripe::sync_account(&state, stripe, &acct).await?;

@@ -128,6 +128,81 @@ pub(crate) async fn call_once(
     Ok(body)
 }
 
+/// The Stripe API version v2 requests name (every `/v2` request must say one).
+pub const V2_VERSION: &str = "2025-12-15.clover";
+
+/// A `/v2` request: JSON both ways, with `Stripe-Version`.
+pub(crate) async fn call_v2(
+    state: &AppState,
+    stripe: &StripeConfig,
+    path: &str,
+    body: &Value,
+) -> anyhow::Result<Value> {
+    let res = state
+        .http
+        .post(stripe.api_base.join(path)?)
+        .bearer_auth(&stripe.secret_key)
+        .header("stripe-version", V2_VERSION)
+        .json(body)
+        .send()
+        .await?;
+    let status = res.status();
+    let body: Value = res.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        let message = body["error"]["message"].as_str().unwrap_or("no message");
+        return Err(StripeError {
+            status,
+            message: message.to_string(),
+        }
+        .into());
+    }
+    Ok(body)
+}
+
+/// A new connected account for `user` (a maker taking donations, or a creative taking People
+/// payments), as every one is: the full Stripe Dashboard, Stripe's own fees and losses, Stripe
+/// collects what it needs to know. Accounts v2: Stripe refuses `POST /v1/accounts` from platforms
+/// set up since it moved to v2 (seen 2026-11-22). Everything else stays on v1, which takes a
+/// v2 account's ID and answers as for any account.
+pub(crate) async fn create_account(
+    state: &AppState,
+    stripe: &StripeConfig,
+    user: Uuid,
+) -> anyhow::Result<String> {
+    let country: Option<String> =
+        sqlx::query_scalar("select country_code from users where id = $1")
+            .bind(user)
+            .fetch_one(&state.db)
+            .await?;
+    let mut body = json!({
+        "dashboard": "full",
+        "configuration": { "merchant": { "capabilities": { "card_payments": { "requested": true } } } },
+        "defaults": { "responsibilities": { "fees_collector": "stripe", "losses_collector": "stripe" } },
+        "metadata": { "slop_user": user.to_string() },
+    });
+    // Where they are, as they told SLAPorSLOP: Stripe asks for it otherwise.
+    if let Some(c) = country.filter(|c| c.len() == 2) {
+        body["identity"] = json!({ "country": c.to_lowercase() });
+    }
+    let created = call_v2(state, stripe, "v2/core/accounts", &body).await?;
+    Ok(created["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Stripe gave no account ID"))?
+        .to_string())
+}
+
+/// Stripe refused to start a sign-up: logged in full, and said to the person in words (not
+/// "something went wrong"). Network trouble and the like stay internal errors.
+pub(crate) fn refused_by_stripe(err: anyhow::Error) -> ApiError {
+    if let Some(e) = err.downcast_ref::<StripeError>() {
+        tracing::error!(status = %e.status, message = %e.message, "Stripe refused to create a connected account");
+        return ApiError::Unavailable(
+            "Stripe couldn't start your sign-up just now. The problem is on SLAPorSLOP's side and staff can see it; try again later.",
+        );
+    }
+    ApiError::Internal(err)
+}
+
 /// Stripe answered with an error status: the request reached Stripe (unlike a network error).
 #[derive(Debug)]
 pub struct StripeError {
@@ -201,25 +276,9 @@ pub async fn onboard(
             let account = match existing {
                 Some(a) => a,
                 None => {
-                    let created = call(
-                        &state,
-                        stripe,
-                        reqwest::Method::POST,
-                        "v1/accounts",
-                        None,
-                        &[
-                            ("controller[stripe_dashboard][type]", "full".into()),
-                            ("controller[fees][payer]", "account".into()),
-                            ("controller[losses][payments]", "stripe".into()),
-                            ("controller[requirement_collection]", "stripe".into()),
-                            ("metadata[slop_user]", me.to_string()),
-                        ],
-                    )
-                    .await?;
-                    let id = created["id"]
-                        .as_str()
-                        .ok_or_else(|| anyhow::anyhow!("Stripe gave no account ID"))?
-                        .to_string();
+                    let id = create_account(&state, stripe, me)
+                        .await
+                        .map_err(refused_by_stripe)?;
                     sqlx::query(
                         "update creatives set stripe_account_id = $2, stripe_status = 'pending', updated_at = now()
                          where user_id = $1",

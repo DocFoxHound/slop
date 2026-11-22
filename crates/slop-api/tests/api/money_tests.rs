@@ -29,6 +29,8 @@ struct Call {
     /// The `Stripe-Account` header: the connected account it was made on.
     account: Option<String>,
     form: HashMap<String, String>,
+    /// A `/v2` request's JSON body (Null for v1's forms).
+    json: Value,
     idempotency_key: Option<String>,
 }
 
@@ -187,10 +189,24 @@ fn stripe_answer(
 ) -> Response {
     assert_eq!(headers["authorization"], "Bearer sk_test_slop");
     let path = uri.path().trim_start_matches('/').to_string();
+    let v2 = path.starts_with("v2/");
+    if v2 {
+        assert_eq!(
+            headers["stripe-version"],
+            slop_api::people::stripe::V2_VERSION
+        );
+    }
     let form = if method == Method::GET {
         form_of(uri.query().unwrap_or(""))
+    } else if v2 {
+        HashMap::new()
     } else {
         form_of(&body)
+    };
+    let json_body: Value = if v2 {
+        serde_json::from_str(&body).unwrap()
+    } else {
+        Value::Null
     };
     let account = headers
         .get("stripe-account")
@@ -201,6 +217,7 @@ fn stripe_answer(
         path: path.clone(),
         account: account.clone(),
         form: form.clone(),
+        json: json_body.clone(),
         idempotency_key: headers
             .get("idempotency-key")
             .map(|v| v.to_str().unwrap().to_string()),
@@ -227,7 +244,15 @@ fn stripe_answer(
             .into_response()
     };
     let reply = match (method.as_str(), parts.as_slice()) {
+        // As Stripe answers platforms set up since Accounts v2 (2026-11-22).
         ("POST", ["v1", "accounts"]) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({ "error": { "message": "Stripe no longer recommends Accounts v1 for new Connect integrations. Create connected accounts with POST /v2/core/accounts instead." } })),
+            )
+                .into_response();
+        }
+        ("POST", ["v2", "core", "accounts"]) => {
             let id = format!("acct_{n}");
             let status = s.new_account_status.unwrap_or("active");
             s.accounts.insert(id.clone(), stripe_account(&id, status));

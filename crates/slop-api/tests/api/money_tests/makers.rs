@@ -468,10 +468,18 @@ async fn connecting_a_stripe_account_for_donations_needs_an_adult_but_no_fresh_s
     let res = app.send(connect(ok)).await;
     let on = body_json(res).await;
     assert_eq!(on["status"], "pending", "{on}");
-    let created = fake.calls("POST", "v1/accounts");
+    let created = fake.calls("POST", "v2/core/accounts");
     assert_eq!(created.len(), 1);
-    assert_eq!(created[0].form["controller[losses][payments]"], "stripe");
-    assert_eq!(created[0].form["metadata[slop_user]"], maker_id.to_string());
+    assert_eq!(
+        created[0].json,
+        json!({
+            "dashboard": "full",
+            "configuration": { "merchant": { "capabilities": { "card_payments": { "requested": true } } } },
+            "defaults": { "responsibilities": { "fees_collector": "stripe", "losses_collector": "stripe" } },
+            "metadata": { "slop_user": maker_id.to_string() },
+            "identity": { "country": "us" },
+        })
+    );
     let acct: String = sqlx::query_scalar("select stripe_account_id from donation_accounts")
         .fetch_one(&app.db)
         .await
@@ -500,7 +508,7 @@ async fn connecting_a_stripe_account_for_donations_needs_an_adult_but_no_fresh_s
         let link = fake.calls("POST", "v1/account_links");
         assert_eq!(link.last().unwrap().form["return_url"], want);
     }
-    assert_eq!(fake.calls("POST", "v1/accounts").len(), 1);
+    assert_eq!(fake.calls("POST", "v2/core/accounts").len(), 1);
     assert_eq!(
         count(
             &app,
@@ -544,7 +552,11 @@ async fn a_creatives_stripe_account_is_reused_for_donations(db: PgPool) {
             .await
             .unwrap();
     assert_eq!(donations, people);
-    assert_eq!(fake.calls("POST", "v1/accounts").len(), 1, "one account");
+    assert_eq!(
+        fake.calls("POST", "v2/core/accounts").len(),
+        1,
+        "one account"
+    );
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -642,7 +654,7 @@ async fn creatives_connect_stripe_for_people_payments(db: PgPool) {
     // Pressed again: the same account, a new sign-up link.
     let again = body_json(app.send(connect()).await).await;
     assert_eq!(again["url"], on["url"]);
-    assert_eq!(fake.calls("POST", "v1/accounts").len(), 1);
+    assert_eq!(fake.calls("POST", "v2/core/accounts").len(), 1);
     for status in ["restricted", "pending", "active"] {
         fake.set_account(&acct, status);
         assert_eq!(body_json(app.send(refresh()).await).await["status"], status);
@@ -716,7 +728,7 @@ async fn asking_to_change_where_donations_go_is_checked_announced_and_audited(db
         answer["url"],
         format!("https://connect.stripe.example/setup/{new_account}")
     );
-    assert_eq!(fake.calls("POST", "v1/accounts").len(), 2);
+    assert_eq!(fake.calls("POST", "v2/core/accounts").len(), 2);
     let link = fake.calls("POST", "v1/account_links");
     assert_eq!(
         link.last().unwrap().form["return_url"],
@@ -1263,4 +1275,45 @@ async fn reconciliation_pages_through_stripes_fees_and_records_mismatches(db: Pg
 async fn without_stripe_there_is_nothing_to_reconcile(db: PgPool) {
     let app = test_app_with(db, simulated).await;
     assert_eq!(slop_api::donations::reconcile(&app.state).await.unwrap(), 0);
+}
+
+/// Stripe refusing to make the account (as it refused `POST /v1/accounts` on 2026-11-22) says so
+/// in words, and nothing is saved; once Stripe takes it, it works.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn stripe_refusing_a_new_account_says_so_in_words(db: PgPool) {
+    let fake = FakeStripe::start().await;
+    let app = stripe_app(db, &fake).await;
+    let (_, maker) = app.user("Mia Maker", "GB").await;
+    let connect = || {
+        req(Method::POST, "/v1/me/donation-account")
+            .cookie(&maker)
+            .json(json!({ "tax_notice_ack": true, "confirm_adult": true }))
+    };
+    fake.fail("POST", "v2/core/accounts", 400);
+    let res = app.send(connect()).await;
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let message = body_json(res).await["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.starts_with("Stripe couldn't start your sign-up just now."),
+        "{message}"
+    );
+    let saved: i64 = sqlx::query_scalar("select count(*) from donation_accounts")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(saved, 0);
+
+    fake.heal();
+    let res = app.send(connect()).await;
+    assert_eq!(body_json(res).await["status"], "active");
+    // Their country, as SLAPorSLOP knows it.
+    assert_eq!(
+        fake.calls("POST", "v2/core/accounts")[1].json["identity"],
+        json!({ "country": "gb" })
+    );
+    // Never the old way.
+    assert!(fake.calls("POST", "v1/accounts").is_empty());
 }

@@ -7712,7 +7712,7 @@ async fn fake_stripe() -> String {
         }
     };
     let app = Router::new()
-        .route("/v1/accounts", post(|| async { axum::Json(json!({ "id": "acct_vera" })) }))
+        .route("/v2/core/accounts", post(|| async { axum::Json(json!({ "id": "acct_vera" })) }))
         .route(
             "/v1/accounts/{id}",
             get(|| async { axum::Json(json!({ "id": "acct_vera", "charges_enabled": true, "details_submitted": true })) }),
