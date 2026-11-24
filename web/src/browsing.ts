@@ -33,6 +33,31 @@ export function siteOrigin(location: Pick<Location, "origin" | "protocol" | "hos
   return location.origin;
 }
 
+/**
+ * Whether `origin` is a test site (the test server, or a developer's own machine): the same rule
+ * as crates/slop-desktop/build.rs and the desktop build scripts in deploy/, which build its "Slop Dev" app.
+ */
+export function isTestSite(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname;
+    return host === "localhost" || host === "127.0.0.1" || host.endsWith(".sslip.io");
+  } catch {
+    return false;
+  }
+}
+
+declare const __SLOP_SITE_URL__: string;
+
+/** Whether this page belongs to a test site, in a browser or in the desktop app built for one. */
+export function onTestSite(): boolean {
+  return isTestSite(siteOrigin(window.location, typeof __SLOP_SITE_URL__ === "string" ? __SLOP_SITE_URL__ : ""));
+}
+
+/** The name in window and tab titles: "SLAPorSLOP Dev" on a test site, so nobody takes it for the real one. */
+export function siteName(): string {
+  return onTestSite() ? "SLAPorSLOP Dev" : "SLAPorSLOP";
+}
+
 /** "slaporslop.games/app/lantern-keep": the address as people read it, without https://. */
 export function displayAddress(origin: string, path: string): string {
   let shown = path;

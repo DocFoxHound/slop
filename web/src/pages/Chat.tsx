@@ -27,6 +27,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { api, ApiError, type FriendPerson, type ReportReason, type TeamCard } from "../api";
 import { Avatar } from "../components/Avatar";
 import { Loading } from "../components/ui";
+import { siteName } from "../browsing";
 import { useDocumentTitle } from "../hooks";
 import { renderChat } from "../markdown";
 import {
@@ -520,7 +521,7 @@ function Chats({
   // The panel leaves the page's title alone: the page behind it is what's open.
   const title = current ? `${current.title} · Chat` : "Chat";
   useEffect(() => {
-    if (!compact) document.title = `${title} · SLAPorSLOP`;
+    if (!compact) document.title = `${title} · ${siteName()}`;
   }, [compact, title]);
 
   // In the panel, one thing at a time: the list, or the open chat.

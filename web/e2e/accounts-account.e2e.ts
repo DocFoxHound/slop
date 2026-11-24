@@ -586,7 +586,8 @@ test.describe("sections", () => {
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(`${server.url}/account/data`);
     await expect(page.getByRole("heading", { name: "Your data", level: 2 })).toBeFocused();
-    await expect(page).toHaveTitle("Your data · Your account · SLAPorSLOP");
+    // "SLAPorSLOP Dev": the tests run on localhost, a test site (browsing.ts, siteName).
+    await expect(page).toHaveTitle("Your data · Your account · SLAPorSLOP Dev");
     await expect(page.getByRole("button", { name: "Download my data" })).toBeVisible();
 
     await page.goBack();

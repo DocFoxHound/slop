@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "./api";
+import { siteName } from "./browsing";
 
 export interface Loaded<T> {
   data: T | undefined;
@@ -41,7 +42,7 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[]): Loaded<T> {
 
 export function useDocumentTitle(title: string | undefined) {
   useEffect(() => {
-    document.title = title ? `${title} · SLAPorSLOP` : "SLAPorSLOP";
+    document.title = title ? `${title} · ${siteName()}` : siteName();
   }, [title]);
 }
 

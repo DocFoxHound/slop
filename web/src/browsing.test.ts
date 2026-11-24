@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 
-import { browsingKey, displayAddress, fragmentId, furthest, isTyping, siteOrigin } from "./browsing";
+import { browsingKey, displayAddress, fragmentId, furthest, isTestSite, isTyping, siteOrigin } from "./browsing";
 
 describe("furthest", () => {
   it("drops what was ahead on a new page, keeps it going back and forth", () => {
@@ -96,5 +96,16 @@ describe("fragmentId", () => {
   it("is empty for a handoff link's fill, or a fragment that can't be decoded", () => {
     expect(fragmentId("#fill=%7B%22title%22%3A%22Ferry%22%7D")).toBe("");
     expect(fragmentId("#%E0%A4%A")).toBe("");
+  });
+});
+
+describe("isTestSite", () => {
+  it("is the test server and a developer's machine, not slaporslop.games", () => {
+    expect(isTestSite("https://slop.188-68-41-241.sslip.io")).toBe(true);
+    expect(isTestSite("http://localhost:5173")).toBe(true);
+    expect(isTestSite("http://127.0.0.1:8090")).toBe(true);
+    expect(isTestSite("https://slaporslop.games")).toBe(false);
+    expect(isTestSite("https://sslip.io.example.com")).toBe(false);
+    expect(isTestSite("not an address")).toBe(false);
   });
 });
