@@ -139,7 +139,7 @@ test.describe("the app shell", () => {
     await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
     await page.locator("main").evaluate((m) => m.scrollTo({ top: 3000 }));
     expect(await page.locator("main").evaluate((m) => m.scrollTop)).toBeGreaterThan(0);
-    await page.getByRole("link", { name: "SLAPorSLOP home" }).click();
+    await page.getByRole("link", { name: /^SLAPorSLOP( Dev)? home$/ }).click();
     await expect(page).toHaveURL(`${server.url}/`);
     await expect.poll(() => page.locator("main").evaluate((m) => m.scrollTop)).toBe(0);
   });

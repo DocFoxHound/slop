@@ -17,7 +17,7 @@ import { SaveSyncEvents } from "./Sandbox";
 import { UpdateNotice } from "./UpdateNotice";
 import { WindowControls } from "./WindowControls";
 import { useSession } from "../session";
-import { fragmentId, onTestSite } from "../browsing";
+import { fragmentId, onTestSite, siteName } from "../browsing";
 import { StoreIcon } from "./StoreIcons";
 import type { StoreIconName } from "../storeIcons";
 
@@ -139,16 +139,19 @@ export function Layout() {
       </a>
       {/* In the desktop app the window has no system title bar: drag it by the bar's empty space. */}
       <nav className={`nav ${isDesktop ? "titlebar" : ""}`} aria-label="Main" data-tauri-drag-region>
-        <Link className="logo" to="/" aria-label="SLAPorSLOP home">
+        <Link className="logo" to="/" aria-label={`${siteName()} home`}>
           <img src="/logo.svg" alt="" width={28} height={28} />
           <span>
             SLAP<span className="wm-or">or</span><b>SLOP</b>
           </span>
           {/* The test server's site and its "Slop Dev" app, so nobody takes it for slaporslop.games. */}
           {onTestSite() && (
-            <em className="dev-badge" title="The test server, not slaporslop.games: accounts and apps here aren't the real ones">
-              DEV
-            </em>
+            <>
+              {" "}
+              <em className="dev-badge" title="The test server, not slaporslop.games: accounts and apps here aren't the real ones">
+                DEV
+              </em>
+            </>
           )}
         </Link>
         {/* The website offers the desktop app; the app itself doesn't need to. */}
