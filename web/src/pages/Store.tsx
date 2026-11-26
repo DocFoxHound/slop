@@ -47,7 +47,14 @@ function UpcomingShelf() {
       {shelf.error ? (
         <ErrorState error={shelf.error} onRetry={shelf.reload} />
       ) : (
-        <Shelf apps={shelf.data} empty="Nothing upcoming right now." />
+        <Shelf
+          apps={shelf.data}
+          empty={
+            view === "for_you" && me
+              ? "Nothing new to suggest here yet — check Most anticipated for all upcoming apps."
+              : "Nothing upcoming right now."
+          }
+        />
       )}
     </>
   );

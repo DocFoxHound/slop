@@ -1084,7 +1084,13 @@ export function OpsAlerts() {
       <ul className="small">
         {alerts.data.map((a) => (
           <li key={a.key}>
-            <b>{a.title}</b>{" "}
+            <b>
+              {a.link && a.link !== "/admin" && a.link !== "/admin?tab=queue" ? (
+                <Link to={a.link}>{a.title}</Link>
+              ) : (
+                a.title
+              )}
+            </b>{" "}
             <span className="muted">since {formatDate(a.first_seen)}</span>.{" "}
             {a.detail}
           </li>

@@ -20,7 +20,7 @@
 use std::path::Path;
 
 use axum::{Json, Router, extract::State, routing::get};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -33,9 +33,13 @@ const REVIEW_WAIT: time::Duration = time::Duration::hours(24);
 /// Under this much free space (bytes) or this share, the disk is nearly full.
 const MIN_FREE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 const MIN_FREE_SHARE: f64 = 0.10;
+/// Where clicking the known-vulnerable dependencies alert takes an admin.
+pub const VULNERABILITIES_LINK: &str = "/admin?tab=queue&alert=dependencies-vulnerable";
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/admin/ops", get(current))
+    Router::new()
+        .route("/admin/ops", get(current))
+        .route("/admin/ops/audit", get(audit_report))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,34 +133,53 @@ fn deploy_alerts(dir: &Path) -> Vec<Alert> {
         .collect()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditVulnerability {
+    pub package: String,
+    pub version: String,
+    #[serde(default)]
+    pub ecosystem: String,
+    pub id: String,
+    #[serde(default)]
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AuditReport {
+    pub checked_at: Option<String>,
+    pub commit: Option<String>,
+    #[serde(default)]
+    pub vulnerabilities: Vec<AuditVulnerability>,
+    #[serde(default)]
+    pub accepted: usize,
+}
+
+/// Reads and deduplicates `audit.json` written by `deploy/update.sh`.
+pub fn read_audit(dir: &Path) -> Option<AuditReport> {
+    let text = std::fs::read_to_string(dir.join("audit.json")).ok()?;
+    let mut report = serde_json::from_str::<AuditReport>(&text).ok()?;
+    report
+        .vulnerabilities
+        .sort_by(|a, b| (&a.package, &a.version, &a.id).cmp(&(&b.package, &b.version, &b.id)));
+    report
+        .vulnerabilities
+        .dedup_by(|a, b| a.package == b.package && a.version == b.version && a.id == b.id);
+    Some(report)
+}
+
 /// Known-vulnerable dependencies in the running build (update.sh writes `audit.json`).
 pub fn audit_alerts(dir: &Path) -> Vec<Alert> {
-    let Ok(text) = std::fs::read_to_string(dir.join("audit.json")) else {
+    let Some(report) = read_audit(dir) else {
         return Vec::new();
     };
-    let Ok(audit) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Vec::new();
-    };
-    let vulns = audit["vulnerabilities"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    if vulns.is_empty() {
+    if report.vulnerabilities.is_empty() {
         return Vec::new();
     }
-    let mut names: Vec<String> = vulns
+    let names: Vec<String> = report
+        .vulnerabilities
         .iter()
-        .filter_map(|v| {
-            Some(format!(
-                "{} {} ({})",
-                v["package"].as_str()?,
-                v["version"].as_str()?,
-                v["id"].as_str()?
-            ))
-        })
+        .map(|v| format!("{} {} ({})", v.package, v.version, v.id))
         .collect();
-    names.sort();
-    names.dedup();
     let shown = names.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
     vec![alert(
         "dependencies-vulnerable",
@@ -169,7 +192,7 @@ pub fn audit_alerts(dir: &Path) -> Vec<Alert> {
             "{shown}{}. Update them (cargo update, npm update) and deploy. Full list: ~/slop-deploy/audit.json.",
             if names.len() > 5 { " and more" } else { "" }
         ),
-        "/admin",
+        VULNERABILITIES_LINK,
         false,
     )]
 }
@@ -640,6 +663,39 @@ async fn current(
     ))
 }
 
+#[derive(Serialize)]
+struct AuditResponse {
+    available: bool,
+    checked_at: Option<String>,
+    commit: Option<String>,
+    vulnerabilities: Vec<AuditVulnerability>,
+    accepted: usize,
+}
+
+/// The running build's dependency audit (`audit.json`), for the admin vulnerabilities view.
+async fn audit_report(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> ApiResult<Json<AuditResponse>> {
+    let report = state.config.ops.deploy_dir.as_deref().and_then(read_audit);
+    Ok(Json(match report {
+        Some(r) => AuditResponse {
+            available: true,
+            checked_at: r.checked_at,
+            commit: r.commit,
+            vulnerabilities: r.vulnerabilities,
+            accepted: r.accepted,
+        },
+        None => AuditResponse {
+            available: false,
+            checked_at: None,
+            commit: None,
+            vulnerabilities: Vec::new(),
+            accepted: 0,
+        },
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,6 +715,7 @@ mod tests {
         let a = audit_alerts(&dir);
         assert_eq!(a[0].title, "1 known-vulnerable dependency");
         assert!(a[0].detail.starts_with("zip 4.6.1 (RUSTSEC-1)"));
+        assert_eq!(a[0].link, VULNERABILITIES_LINK);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -492,19 +492,36 @@ async fn releasing_soon_is_the_next_14_days_soonest_first(db: PgPool) {
     };
     // On the 1st, this-month and today share a first day: the month comes first.
     // In the first half of a month, day 14 is still this month: the two month cases share a first
-    // day and go by title.
-    let same_month: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "select date_trunc('month', {today} + 14) = date_trunc('month', {today})"
+    // day and go by title. Near month-end, the 1st of next month can fall on or before day 4/5:
+    // month precision sorts before day precision on the same date.
+    let month_14_offset: i32 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select (date_trunc('month', {today} + 14)::date - {today})::int4"
     )))
     .fetch_one(&app.db)
     .await
     .unwrap();
     let in_order = |slugs: &[&'static str]| -> Vec<&'static str> {
-        let mut v = slugs.to_vec();
-        if same_month {
-            v.retain(|s| *s != "month-of-day-14");
-            v.insert(0, "month-of-day-14");
-        }
+        let mut v: Vec<&'static str> = slugs
+            .iter()
+            .copied()
+            .filter(|s| *s != "month-of-day-14")
+            .collect();
+        let pos = if month_14_offset <= 0 {
+            0
+        } else {
+            let day_of = |s: &str| match s {
+                "this-month" => i32::MIN,
+                "today" => 0,
+                "adult" => 4,
+                "in-5-days" => 5,
+                "in-14-days" => 14,
+                _ => i32::MAX,
+            };
+            v.iter()
+                .position(|s| day_of(s) >= month_14_offset)
+                .unwrap_or(v.len())
+        };
+        v.insert(pos, "month-of-day-14");
         v
     };
     assert_eq!(

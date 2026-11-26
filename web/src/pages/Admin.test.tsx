@@ -339,4 +339,77 @@ describe("the admin panel", () => {
     expect((screen.getByRole("combobox", { name: "Sort" }) as HTMLSelectElement).value).toBe("urgent");
     // (Fifty lines in jsdom take a few seconds on a busy machine.)
   }, 30_000);
+
+  it("opens known-vulnerable dependencies straight from the alert link with OSV links", async () => {
+    vi.spyOn(api.admin, "queue").mockResolvedValue(empty);
+    vi.spyOn(api.admin, "ops").mockResolvedValue([
+      {
+        key: "dependencies-vulnerable",
+        title: "2 known-vulnerable dependencies",
+        detail: "cookie 0.18.2 (RUSTSEC-2026-0594), url 2.5.8 (RUSTSEC-2026-0592).",
+        link: "/admin?tab=queue&alert=dependencies-vulnerable",
+        first_seen: "2026-11-24T03:33:55Z",
+      },
+    ]);
+    vi.spyOn(api.admin, "opsAudit").mockResolvedValue({
+      available: true,
+      checked_at: "2026-11-24T03:33:55Z",
+      commit: "3b9e33a3eaef946f72dc3ca3e7873cf50d6e4650",
+      accepted: 7,
+      vulnerabilities: [
+        {
+          package: "cookie",
+          version: "0.18.2",
+          ecosystem: "crates.io",
+          id: "RUSTSEC-2026-0594",
+          summary: "Private cookie nonces can repeat in processes that fork",
+        },
+        {
+          package: "url",
+          version: "2.5.8",
+          ecosystem: "crates.io",
+          id: "RUSTSEC-2026-0592",
+          summary: "Stack overflow in Url::origin()",
+        },
+      ],
+    });
+
+    // From the review queue alert banner, clicking the title opens the vulnerabilities view.
+    show("/admin?tab=queue");
+    const alertLink = await screen.findByRole("link", { name: "2 known-vulnerable dependencies" });
+    expect(alertLink.getAttribute("href")).toBe("/admin?tab=queue&alert=dependencies-vulnerable");
+    fireEvent.click(alertLink);
+
+    expect(await screen.findByRole("heading", { name: /Known-vulnerable dependencies/ })).toBeTruthy();
+    const advisory = screen.getByRole("link", { name: "RUSTSEC-2026-0594" });
+    expect(advisory.getAttribute("href")).toBe("https://osv.dev/vulnerability/RUSTSEC-2026-0594");
+    expect(screen.getByText(/Private cookie nonces can repeat/)).toBeTruthy();
+    expect(screen.getByText(/commit 3b9e33a/)).toBeTruthy();
+    expect(screen.getByText(/7 accepted in deploy\/audit-accepted\.json/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "← Review queue" }).getAttribute("href")).toBe("/admin?tab=queue");
+  });
+
+  it("handles clean and missing dependency audits cleanly", async () => {
+    vi.spyOn(api.admin, "queue").mockResolvedValue(empty);
+    vi.spyOn(api.admin, "opsAudit").mockResolvedValueOnce({
+      available: true,
+      checked_at: "2026-11-24T03:33:55Z",
+      commit: "3b9e33a",
+      accepted: 0,
+      vulnerabilities: [],
+    });
+    show("/admin?tab=queue&alert=dependencies-vulnerable");
+    expect(await screen.findByText("No known-vulnerable dependencies in the current build.")).toBeTruthy();
+    cleanup();
+
+    vi.spyOn(api.admin, "opsAudit").mockResolvedValueOnce({
+      available: false,
+      checked_at: null,
+      commit: null,
+      accepted: 0,
+      vulnerabilities: [],
+    });
+    show("/admin?tab=queue&alert=dependencies-vulnerable");
+    expect(await screen.findByText("No dependency audit has run on this server yet.")).toBeTruthy();
+  });
 });

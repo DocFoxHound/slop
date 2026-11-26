@@ -5427,3 +5427,58 @@ async fn browse_shows_the_top_of_each_category_and_each_tag(db: PgPool) {
         .await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn store_search_matches_partial_titles_tags_and_ranks_title_matches_first(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Maker", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "littlebrain",
+        "coming_soon",
+        "title = 'LittleBrain', kind = 'app', summary = 'Watch a simulated brain make choices.'",
+    )
+    .await;
+    tag_app(&app, "littlebrain", &["ai-assistant", "science"]).await;
+    listed_with(
+        &app,
+        maker,
+        "other-tool",
+        "released",
+        "title = 'Other Tool', kind = 'app', summary = 'A little helper for notes.'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker,
+        "percent-app",
+        "released",
+        "title = '100% Pure', kind = 'app', summary = 'Clean utility.'",
+    )
+    .await;
+
+    let search = |q: &str| {
+        let app = &app;
+        let uri = format!("/v1/apps?q={q}");
+        async move {
+            let body = body_json(app.send(req(Method::GET, uri)).await).await;
+            body["apps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a["slug"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+
+    // Prefix on a compound title matches and ranks ahead of a summary-only match.
+    assert_eq!(search("little").await, ["littlebrain", "other-tool"]);
+    // Mid-word substring and split words both find LittleBrain.
+    assert_eq!(search("brain").await, ["littlebrain"]);
+    assert_eq!(search("little%20brain").await, ["littlebrain"]);
+    // Tag names are searchable too.
+    assert_eq!(search("ai%20assistant").await, ["littlebrain"]);
+    // LIKE wildcards are treated literally, not as match-everything patterns.
+    assert_eq!(search("%25").await, ["percent-app"]);
+}

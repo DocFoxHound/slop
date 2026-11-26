@@ -87,6 +87,12 @@ export function Fixes() {
               Fix them in your repository and push, then send a new {browser ? "play address" : "release"} with a new
               version{browser ? "" : " (Slop Build sends one on every push)"}: the checks run again on it.
             </p>
+            <p className="small">
+              Automated checks aren't perfect and some findings can be false positives. If a <b>must fix</b> item is a
+              false alarm, tell SLAPorSLOP staff on the{" "}
+              <Link to={`/publish/${slug}/releases`}>Releases page</Link> so a person can review it and allow publishing
+              anyway.
+            </p>
             <p className="small muted">
               Copy them to your AI coding agent, or <Link to="/account/agents">connect it to SLAPorSLOP</Link> and ask it to
               run <code>get_fixes</code>.
@@ -121,6 +127,11 @@ function FixesPanel({ slug, fixes, browser }: { slug: string; fixes: AppFixes; b
         )
       ) : (
         <>
+          <p className="notice small" role="note">
+            <b>Automated checks can have false positives.</b> Review each item before changing your code. If a{" "}
+            <b>MUST FIX</b> finding is a false alarm, ask SLAPorSLOP staff on the{" "}
+            <Link to={`/publish/${slug}/releases`}>Releases page</Link> to review it and allow publishing anyway.
+          </p>
           <p className="muted small">
             Copy these to your AI coding agent, or connect it to SLAPorSLOP (Account → AI agents) and ask it to run get_fixes.
           </p>

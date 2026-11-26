@@ -26,6 +26,7 @@ import { MoneyTab } from "./admin/Money";
 import { ReasonButton, useAction } from "./admin/shared";
 import { TokensTab } from "./admin/Tokens";
 import { UsersTab } from "./admin/Users";
+import { VulnerabilitiesView } from "./admin/Vulnerabilities";
 
 type Tab =
   | "home"
@@ -102,7 +103,8 @@ function AdminPanel() {
         ))}
       </div>
       {tab === "home" && <AdminHome waiting={waiting} />}
-      {tab === "queue" && <QueueTab waiting={waiting} />}
+      {tab === "queue" &&
+        (params.get("alert") === "dependencies-vulnerable" ? <VulnerabilitiesView /> : <QueueTab waiting={waiting} />)}
       {tab === "apps" && (params.get("app") ? <AppRecord slug={params.get("app")!} /> : <AppsTab />)}
       {tab === "users" && <UsersTab />}
       {tab === "store" && <StoreTab />}

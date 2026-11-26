@@ -100,6 +100,12 @@ describe("To fix", () => {
     // The tab's count comes from the same answer: one call.
     expect(screen.getByRole("link", { name: "To fix, 1 must be fixed, 1 should be fixed" }).getAttribute("aria-current")).toBe("page");
     expect(load).toHaveBeenCalledTimes(1);
+
+    // False-positive disclaimer is shown right beside the findings and in How it works.
+    const note = within(panel).getByRole("note");
+    expect(note.textContent).toContain("false positives");
+    expect(within(note).getByRole("link", { name: "Releases page" }).getAttribute("href")).toBe("/publish/harbour/releases");
+    expect(screen.getByRole("region", { name: "How it works" }).textContent).toContain("false positives");
   });
 
   it("says when there's nothing to fix, while a release is being checked, and before the first", async () => {

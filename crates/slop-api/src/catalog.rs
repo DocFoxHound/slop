@@ -477,9 +477,35 @@ async fn list_apps(
         " and a.parent_app_id is null"
     });
     if let Some(q) = search {
-        qb.push(" and a.search @@ websearch_to_tsquery('english', ")
+        let words: Vec<&str> = q.split_whitespace().take(10).collect();
+        qb.push(" and (a.search @@ websearch_to_tsquery('english', ")
             .push_bind(q)
             .push(")");
+        if !words.is_empty() {
+            qb.push(" or (");
+            for (i, word) in words.iter().enumerate() {
+                if i > 0 {
+                    qb.push(" and ");
+                }
+                let pat = crate::admin_web::contains_pattern(word);
+                qb.push("(a.title ilike ")
+                    .push_bind(pat.clone())
+                    .push(" or a.slug ilike ")
+                    .push_bind(pat.clone())
+                    .push(" or a.summary ilike ")
+                    .push_bind(pat.clone())
+                    .push(
+                        " or exists (select 1 from app_tags at join tags t on t.id = at.tag_id
+                                     where at.app_id = a.id and (t.name ilike ",
+                    )
+                    .push_bind(pat.clone())
+                    .push(" or t.slug ilike ")
+                    .push_bind(pat)
+                    .push(")))");
+            }
+            qb.push(")");
+        }
+        qb.push(")");
     }
     if let Some(tag) = &query.tag {
         qb.push(" and (exists (select 1 from app_tags at join tags t on t.id = at.tag_id where at.app_id = a.id and t.slug = ")
@@ -573,9 +599,27 @@ async fn list_apps(
         search,
     ) {
         (Sort::Relevance, Some(q)) => {
-            qb.push(" order by ts_rank(a.search, websearch_to_tsquery('english', ")
+            let contains = crate::admin_web::contains_pattern(q);
+            let prefix = format!("{}%", &contains[1..contains.len() - 1]);
+            qb.push(" order by (case when lower(a.title) = lower(")
                 .push_bind(q)
-                .push(")) desc, a.updated_at desc");
+                .push(") or a.slug = lower(")
+                .push_bind(q)
+                .push(") then 4 when a.title ilike ")
+                .push_bind(prefix.clone())
+                .push(" or a.slug ilike ")
+                .push_bind(prefix)
+                .push(" then 3 when a.title ilike ")
+                .push_bind(contains.clone())
+                .push(" or a.slug ilike ")
+                .push_bind(contains.clone())
+                .push(" then 2 when a.summary ilike ")
+                .push_bind(contains)
+                .push(
+                    " then 1 else 0 end) desc, ts_rank(a.search, websearch_to_tsquery('english', ",
+                )
+                .push_bind(q)
+                .push(")) desc, a.updated_at desc, a.slug");
         }
         (Sort::Title, _) => {
             qb.push(" order by lower(a.title), a.slug");

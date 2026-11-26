@@ -770,6 +770,22 @@ export interface Notification {
   read: boolean;
 }
 
+export interface OpsAuditVulnerability {
+  package: string;
+  version: string;
+  ecosystem: string;
+  id: string;
+  summary: string;
+}
+
+export interface OpsAudit {
+  available: boolean;
+  checked_at: string | null;
+  commit: string | null;
+  vulnerabilities: OpsAuditVulnerability[];
+  accepted: number;
+}
+
 /** A page of the bell's notifications (crates/slop-api/src/notify.rs `list`). */
 export interface NotificationInbox {
   /** Unread, of every kind. */
@@ -3813,6 +3829,8 @@ export const api = {
           first_seen: string;
         }>
       >("GET", "/v1/admin/ops"),
+    /** The running build's dependency audit (audit.json, ops.rs). */
+    opsAudit: () => request<OpsAudit>("GET", "/v1/admin/ops/audit"),
     /** Sensitive actions waiting for (or done after) enough staff approvals (staff.rs). */
     actions: (all = false) =>
       request<StaffActions>(

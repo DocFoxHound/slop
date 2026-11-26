@@ -6191,6 +6191,21 @@ async fn conditions_needing_a_person_are_alerted_daily_while_they_last(db: PgPoo
         ],
         "conditions are listed while they last; events (the deploy, the scanner) are sent and done"
     );
+    let vuln_alert = alerts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["key"] == "dependencies-vulnerable")
+        .expect("dependencies-vulnerable alert");
+    assert_eq!(vuln_alert["link"], slop_api::ops::VULNERABILITIES_LINK);
+    let notif_link: String = sqlx::query_scalar(
+        "select link from notifications where user_id = $1 and collapse_key = 'ops:dependencies-vulnerable'",
+    )
+    .bind(admin_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(notif_link, slop_api::ops::VULNERABILITIES_LINK);
     for title in [
         "Commit 0123456 didn't deploy",
         "The scanner failed on game 1.1.0",
@@ -6335,6 +6350,66 @@ async fn the_ops_page_shows_the_newest_fifty_unresolved_alerts(db: PgPool) {
     assert_eq!(keys.len(), 50);
     assert_eq!(keys[0], "k4", "resolved ones are gone; newest first");
     assert_eq!(keys[49], "k53");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn ops_audit_endpoint_lists_vulnerabilities_for_admins_only(db: PgPool) {
+    let deploy = std::env::temp_dir().join(format!("slop-audit-api-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&deploy).unwrap();
+    let dir = deploy.clone();
+    let app = test_app_with(db, move |c| c.ops.deploy_dir = Some(dir)).await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    let (_, player) = app.user("Pat Player", "US").await;
+
+    // Non-admins get 404.
+    let res = app
+        .send(req(Method::GET, "/v1/admin/ops/audit").cookie(&player))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Before an audit file exists: available = false.
+    let empty = body_json(
+        app.send(req(Method::GET, "/v1/admin/ops/audit").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert_eq!(empty["available"], false);
+    assert_eq!(empty["vulnerabilities"].as_array().unwrap().len(), 0);
+
+    // With an audit file: sorted, deduplicated, accessible to admins and read tokens.
+    std::fs::write(
+        deploy.join("audit.json"),
+        r#"{
+            "checked_at": "2026-11-24T03:33:55Z",
+            "commit": "3b9e33a3eaef946f72dc3ca3e7873cf50d6e4650",
+            "accepted": 7,
+            "vulnerabilities": [
+                {"package": "url", "version": "2.5.8", "ecosystem": "crates.io", "id": "RUSTSEC-2026-0592", "summary": "Stack overflow"},
+                {"package": "cookie", "version": "0.18.2", "ecosystem": "crates.io", "id": "RUSTSEC-2026-0594", "summary": "Nonce reuse"},
+                {"package": "cookie", "version": "0.18.2", "ecosystem": "crates.io", "id": "RUSTSEC-2026-0594", "summary": "Nonce reuse"}
+            ]
+        }"#,
+    )
+    .unwrap();
+    let read = token(&app, &admin, "read").await;
+    let report = body_json(
+        app.send(as_who(Method::GET, "/v1/admin/ops/audit".into(), &read))
+            .await,
+    )
+    .await;
+    assert_eq!(report["available"], true);
+    assert_eq!(report["checked_at"], "2026-11-24T03:33:55Z");
+    assert_eq!(report["commit"], "3b9e33a3eaef946f72dc3ca3e7873cf50d6e4650");
+    assert_eq!(report["accepted"], 7);
+    let vulns = report["vulnerabilities"].as_array().unwrap();
+    assert_eq!(vulns.len(), 2);
+    assert_eq!(vulns[0]["package"], "cookie");
+    assert_eq!(vulns[0]["id"], "RUSTSEC-2026-0594");
+    assert_eq!(vulns[0]["summary"], "Nonce reuse");
+    assert_eq!(vulns[1]["package"], "url");
+    assert_eq!(vulns[1]["id"], "RUSTSEC-2026-0592");
+
+    std::fs::remove_dir_all(&deploy).unwrap();
 }
 
 // ---------------------------------------------------------------------------------------------
